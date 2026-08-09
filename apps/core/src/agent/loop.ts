@@ -178,6 +178,7 @@ import { extractMemories } from "../memory/extract.js";
 import { trackMemoryJob } from "../memory/background-jobs.js";
 import type { MemoryAuxiliaryCall } from "../memory/auxiliary.js";
 import { loadMemorySettings, shouldExtract } from "../memory/extract-policy.js";
+import { loadHarnessPromptBlock } from "../harness/inject.js";
 import { createLlmSummarizer } from "../compaction/llm-summarizer.js";
 import type { CompactOptions } from "../compaction/service.js";
 import {
@@ -2222,6 +2223,11 @@ export class AgentLoop {
       // placement so `eval ab` can price the two side by side. Re-read every
       // turn — the ab runner flips it per side after boot.
       const tailEnabled = process.env.FREECODE_EPHEMERAL_TAIL !== "0";
+      // Continual harness (docs/specs/2026-08-08-continual-harness-design.md).
+      // Off by default; loadHarnessPromptBlock checks settings before touching
+      // disk. Entries change when distillation runs, so the block rides the
+      // ephemeral tail like memory — never the system param (RC8).
+      const harnessBlock = loadHarnessPromptBlock(context.projectPath);
       const sessionBlocks = [
         ...(compactionSummary
           ? [
@@ -2234,6 +2240,9 @@ export class AgentLoop {
         ...(!tailEnabled && memoryBlock
           ? [{ text: memoryBlock, cache: false }]
           : []),
+        ...(!tailEnabled && harnessBlock
+          ? [{ text: harnessBlock, cache: false }]
+          : []),
         ...(!tailEnabled && todoBlock
           ? [{ text: todoBlock, cache: false }]
           : []),
@@ -2242,7 +2251,7 @@ export class AgentLoop {
           : []),
       ];
       const ephemeralTail = tailEnabled
-        ? [memoryBlock, todoBlock, reminderText]
+        ? [memoryBlock, harnessBlock, todoBlock, reminderText]
             .filter((s) => s && s.length > 0)
             .join("\n\n")
         : "";
