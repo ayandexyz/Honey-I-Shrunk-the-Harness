@@ -19,6 +19,7 @@ import { LsTool } from "./ls.js";
 import { OutputTool } from "./output.js";
 import { MemoryTool } from "./memory.js";
 import { FinishIterationTool } from "./finish-iteration.js";
+import { DistillTool } from "./distill.js";
 import {
   createToolOrchestrator,
   type ToolOrchestrator,
@@ -38,11 +39,7 @@ import type {
   ValidationResult,
   PermissionCheckResult,
 } from "./tool.types.js";
-import {
-  buildTool,
-  defaultBehavior,
-  executeTool,
-} from "./factory.js";
+import { buildTool, defaultBehavior, executeTool } from "./factory.js";
 
 export type {
   ToolContext,
@@ -88,6 +85,7 @@ export const tools = {
   // Unattended runs only. Deliberately absent from the provider-facing tool
   // list unless the loop has an unattended context — see defs-cache.ts.
   finish_iteration: FinishIterationTool,
+  distill: DistillTool,
 } as const;
 
 export type ToolId = keyof typeof tools;

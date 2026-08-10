@@ -1,6 +1,7 @@
 import type { CommandInfo } from "@thisisayande/freecode-shared";
 import type { PromptCommand, UserCommand } from "./types.js";
 import { initTemplate } from "./templates/init.js";
+import { distillTemplate } from "./templates/distill.js";
 import { loadCommands, resolveUserCommand } from "./loader.js";
 
 // Built-in prompt commands. Add new entries here — every frontend picks them up
@@ -27,6 +28,14 @@ registerBuiltin({
   template: initTemplate,
 });
 
+registerBuiltin({
+  name: "distill",
+  description:
+    "Review this session for the continual harness (durable notes for future sessions)",
+  argHint: "[focus]",
+  template: distillTemplate,
+});
+
 // In-memory cache of loaded user commands (refreshed on demand)
 let userCommandsCache: UserCommand[] | null = null;
 let lastLoadedProjectPath: string | null = null;
@@ -47,7 +56,9 @@ export function clearCommandsCache(): void {
 }
 
 /** Metadata for every prompt command (for autocomplete / menus). */
-export async function listCommandInfos(projectPath: string): Promise<CommandInfo[]> {
+export async function listCommandInfos(
+  projectPath: string,
+): Promise<CommandInfo[]> {
   await ensureUserCommandsLoaded(projectPath);
   // Use a Map to handle precedence correctly: later inserts overwrite earlier ones
   // Order: builtin → user → project (project wins on name collision)
@@ -75,7 +86,9 @@ export async function listCommandInfos(projectPath: string): Promise<CommandInfo
 
   // Project commands (highest precedence - overwrite user/builtin)
   if (userCommandsCache) {
-    for (const c of userCommandsCache.filter((cmd) => cmd.scope === "project")) {
+    for (const c of userCommandsCache.filter(
+      (cmd) => cmd.scope === "project",
+    )) {
       commandMap.set(c.name, {
         name: c.name,
         description: c.description,

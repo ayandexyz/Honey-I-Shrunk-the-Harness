@@ -26,6 +26,7 @@ const DISPLAY_NAMES: Record<string, string> = {
   output: "Output",
   memory: "Memory",
   finish_iteration: "FinishIteration",
+  distill: "Distill",
   mcp: "MCP",
 };
 
@@ -64,7 +65,8 @@ export function suggestRule(
   if (["read", "write", "edit", "glob", "grep"].includes(tool) && target) {
     const abs = path.resolve(projectRoot, target);
     const rel = path.relative(projectRoot, abs);
-    if (!rel.startsWith("..") && !path.isAbsolute(rel)) return `${name}(./${rel})`;
+    if (!rel.startsWith("..") && !path.isAbsolute(rel))
+      return `${name}(./${rel})`;
     return `${name}(/${abs})`; // "//abs/path" absolute-anchor form
   }
   return name; // name-level rule (agent, mcp tools, etc.)
