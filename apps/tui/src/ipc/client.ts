@@ -726,6 +726,55 @@ export async function graphExplore(): Promise<
     | { error: "not-installed" };
 }
 
+export interface HarnessEntryInfo {
+  id: string;
+  kind: string;
+  title: string;
+  content: string;
+  scope: string;
+  path: string;
+  updatedAt: string;
+  version: number;
+}
+
+export interface DistillResultInfo {
+  id: string;
+  summary: string;
+  scope: string;
+  createdAt: string;
+  rollbackOf?: string;
+  appliedEdits: Array<{
+    action: string;
+    kind: string;
+    id: string;
+    applied: boolean;
+    error?: string;
+  }>;
+}
+
+/**
+ * The continual harness as the model sees it: global entries merged with the
+ * current session's local ones. Omit `sessionId` for global-only.
+ */
+export async function harnessList(
+  sessionId?: string,
+): Promise<HarnessEntryInfo[]> {
+  return (await sendRequest("harness.list", {
+    projectPath: process.cwd(),
+    sessionId,
+  })) as HarnessEntryInfo[];
+}
+
+/** The audit log: every distillation and rollback that produced those entries. */
+export async function harnessHistory(
+  sessionId?: string,
+): Promise<DistillResultInfo[]> {
+  return (await sendRequest("harness.history", {
+    projectPath: process.cwd(),
+    sessionId,
+  })) as DistillResultInfo[];
+}
+
 /** Redacted: `config.get` reports whether a key is set, never the key. */
 export interface ConfigInfo {
   providers?: Record<string, { hasApiKey: boolean; model?: string }>;
