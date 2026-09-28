@@ -115,7 +115,7 @@ export interface OrchestratorDeps {
   stopRequested(): boolean;
   /** True after a HARD stop: the tree is left as it is, never reset. */
   hardStopped(): boolean;
-  /** One status line per transition. Terminal output in Phase 1. */
+  /** One status line per transition, streamed to the operator's terminal. */
   report(line: string): void;
 }
 

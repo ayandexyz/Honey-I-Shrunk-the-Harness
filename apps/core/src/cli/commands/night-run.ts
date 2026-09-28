@@ -607,7 +607,7 @@ export async function runNightCli(argv: NightCliArgs): Promise<void> {
     // A notification nobody receives is not worth failing a night over.
   }
 
-  // ---- Exit summary (§4.10 v0: terminal only; report.md is Phase 3).
+  // ---- Exit summary (§4.10 v0: terminal only — `freecode night report` rebuilds the file).
   const needsHuman = decisions.filter((d) => d.kind === "needs_human");
   const denied = decisions.filter((d) => d.kind === "denied");
   const asked = decisions.filter((d) => d.kind === "asked");
