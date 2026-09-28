@@ -139,7 +139,7 @@ export interface RunManifest {
   verifyCommand: string;
   lastGateFailure?: GateResult;
 
-  /** PID of the detached child, once §4.4a exists. Absent in Phase 0. */
+  /** PID of the detached worker. Written by `supervisor.ts` after spawn. */
   pid?: number;
   /**
    * Checked at turn boundaries rather than signalled: a process killed

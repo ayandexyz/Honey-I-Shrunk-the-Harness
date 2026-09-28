@@ -6,10 +6,10 @@
 // unit-testable with fakes and a fake clock. Nothing here touches a provider,
 // a filesystem or a real clock directly.
 //
-// Phase 2 adds surviving the night: a spent quota window is waited out and the
-// SAME iteration number is retried (a wait is not a failure), `--verify` gates
-// every commit, and `--stop-when` gives the run a finish line. Not built:
-// report.md, resume, --worktree, --push, detach (Phases 3–5).
+// Phases 2–5 built: a spent quota window is waited out and the SAME iteration
+// number is retried (a wait is not a failure); `--verify` gates every commit;
+// `--stop-when` gives the run a finish line; the morning report, resume,
+// `--worktree`, `--push`, and `--detach`/scheduling are all wired.
 // Spec: docs/specs/2026-09-28-overnight-runs.md §4.2, §4.7
 // =============================================================================
 
