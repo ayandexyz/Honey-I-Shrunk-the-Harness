@@ -78,6 +78,28 @@ button { font: inherit; }
 	letter-spacing: -0.035em;
 }
 
+.header-brand {
+	gap: 0.55rem;
+	height: 4.5rem;
+	align-self: end;
+	padding-bottom: 0.35rem;
+}
+
+.brand-logo {
+	display: block;
+	width: auto;
+	height: 100%;
+	object-fit: contain;
+	object-position: left center;
+}
+
+.brand-wordmark {
+	font-family: var(--sans);
+	font-size: 1.05rem;
+	font-weight: 750;
+	letter-spacing: -0.045em;
+}
+
 .brand-mark {
 	display: grid;
 	width: 2.15rem;
@@ -581,7 +603,11 @@ footer { padding-block: 4rem 1.5rem; background: #0c1512; color: #e9efea; }
 	align-items: start;
 }
 
-.footer-brand { font-size: 1.25rem; }
+.footer-brand {
+	gap: 0.5rem;
+	height: 3.25rem;
+	font-size: 1.25rem;
+}
 .footer-grid p { margin: 1rem 0 0; color: #7f8d87; font-size: 0.85rem; }
 
 .footer-links {

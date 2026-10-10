@@ -402,6 +402,7 @@
 
 .benchmark-footer { background: var(--surface-dark); color: rgb(255 255 255 / 64%); }
 .benchmark-footer .shell { display: flex; justify-content: space-between; gap: 2rem; padding-block: 2rem; font-family: var(--mono); font-size: 0.64rem; }
+.benchmark-footer-brand { color: white; }
 
 @media (max-width: 900px) {
 	.benchmark-hero,

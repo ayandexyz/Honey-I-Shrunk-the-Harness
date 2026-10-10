@@ -30,8 +30,8 @@ const date = (value: string) => new Intl.DateTimeFormat("en", {
 <html lang="en">
 	<head>
 		<meta charset="utf-8" />
-		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-		<link rel="icon" href="/favicon.ico" />
+		<link rel="icon" type="image/png" href="/logo.png" />
+		<link rel="apple-touch-icon" href="/logo.png" />
 		<meta name="viewport" content="width=device-width" />
 		<meta name="generator" content={Astro.generator} />
 		<meta
@@ -45,9 +45,9 @@ const date = (value: string) => new Intl.DateTimeFormat("en", {
 		<a class="skip-link" href="#benchmark-main">Skip to benchmark</a>
 
 		<header class="benchmark-header shell">
-			<a class="brand" href="/" aria-label="FreeCode home">
-				<span class="brand-mark" aria-hidden="true">F/</span>
-				<span>FreeCode</span>
+			<a class="brand header-brand" href="/" aria-label="FreeCode home">
+				<img class="brand-logo" src="/logo.png" alt="" width="395" height="632" />
+				<span class="brand-wordmark">Histh!</span>
 			</a>
 			<nav aria-label="Benchmark navigation">
 				<a href="/">Overview</a>
@@ -293,7 +293,10 @@ const date = (value: string) => new Intl.DateTimeFormat("en", {
 
 		<footer class="benchmark-footer">
 			<div class="shell">
-				<span>FreeCode / Agent benchmark</span>
+				<a class="brand footer-brand benchmark-footer-brand" href="/" aria-label="HistH home">
+					<img class="brand-logo" src="/logo.png" alt="" width="395" height="632" />
+					<span class="brand-wordmark">HistH!</span>
+				</a>
 				<a href="/">Back to overview ↑</a>
 			</div>
 		</footer>
