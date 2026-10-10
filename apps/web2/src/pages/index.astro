@@ -1,6 +1,19 @@
 ---
+import BenchmarkCard from "../components/BenchmarkCard.astro";
+import {
+	evidenceSections,
+	installCommands,
+	principles,
+	resourceBenchmarks,
+	summaryStats,
+	tokenBenchmarks,
+} from "../data/site";
+import "../styles/global.css";
+
+const githubUrl = "https://github.com/ayandexyz/omacode";
 ---
 
+<!doctype html>
 <html lang="en">
 	<head>
 		<meta charset="utf-8" />
@@ -10,49 +23,277 @@
 		<meta name="generator" content={Astro.generator} />
 		<meta
 			name="description"
-			content="A smaller, sharper home for the FreeCode harness."
+			content="FreeCode is an open-source coding harness built to get more useful work from every model."
 		/>
-		<title>Honey I Shrunk the Harness!</title>
+		<meta name="theme-color" content="#091412" />
+		<title>FreeCode — Honey I Shrunk the Harness!</title>
 	</head>
 	<body>
-		<main>
-			<h1>Honey I Shrunk the Harness!</h1>
+		<a class="skip-link" href="#main">Skip to content</a>
+
+		<header class="site-header">
+			<a class="brand" href="#top" aria-label="FreeCode home">
+				<span class="brand-mark" aria-hidden="true">F/</span>
+				<span>FreeCode</span>
+			</a>
+
+			<nav aria-label="Primary navigation">
+				<a href="#mission">Mission</a>
+				<a href="/benchmark">Benchmark</a>
+				<a href="#install">Install</a>
+			</nav>
+
+			<a class="github-link" href={githubUrl} target="_blank" rel="noreferrer">
+				<svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18">
+					<path fill="currentColor" d="M12 .7a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2.24c-3.23.7-3.91-1.37-3.91-1.37-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.7.08-.7 1.17.08 1.78 1.19 1.78 1.19 1.04 1.77 2.72 1.26 3.39.96.1-.75.4-1.26.74-1.55-2.58-.29-5.29-1.28-5.29-5.68 0-1.26.45-2.28 1.19-3.08-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.16 1.18A10.98 10.98 0 0 1 12 6.13c.98 0 1.95.13 2.87.39 2.2-1.49 3.16-1.18 3.16-1.18.63 1.58.23 2.75.11 3.04.74.8 1.19 1.82 1.19 3.08 0 4.41-2.72 5.38-5.31 5.67.42.36.79 1.07.79 2.16v3.26c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .7Z" />
+				</svg>
+				<span>GitHub</span>
+			</a>
+		</header>
+
+		<main id="main">
+			<section class="hero" id="top">
+				<div class="hero-media" aria-hidden="true">
+					<img src="/images.jpeg" alt="" width="599" height="333" fetchpriority="high" />
+				</div>
+				<div class="hero-shade" aria-hidden="true"></div>
+
+				<div class="hero-content shell">
+					<p class="eyebrow hero-eyebrow">Open-source agent harness · v0.43</p>
+					<h1>Honey I Shrunk<br />the Harness!</h1>
+					<p class="hero-copy">
+						A compact coding harness built to extract more useful work from every model—through
+						parallel agents, durable memory, real tools, and evidence you can inspect.
+					</p>
+					<div class="hero-actions">
+						<a class="button button-light" href="#install">Install FreeCode</a>
+						<a class="button button-glass" href="/benchmark">
+							View benchmark <span aria-hidden="true">↗</span>
+						</a>
+					</div>
+				</div>
+
+				<div class="hero-stats shell" aria-label="FreeCode at a glance">
+					{summaryStats.map((stat) => (
+						<div>
+							<strong>{stat.value}</strong>
+							<span>{stat.label}</span>
+						</div>
+					))}
+				</div>
+			</section>
+
+			<section class="section mission" id="mission">
+				<div class="shell">
+					<div class="section-intro" data-reveal>
+						<p class="eyebrow">01 / Mission</p>
+						<h2>The model is the intuitive core.<br />The harness makes it useful.</h2>
+						<p class="lede">
+							FreeCode is trying to push the frontier of intelligence from the harness level.
+							The next leaps come from scaling test-time compute with agent swarms, increasing
+							speed through parallelism, and solving continual learning through memory.
+						</p>
+					</div>
+
+					<div class="principle-grid">
+						{principles.map((principle) => (
+							<article class="principle" data-reveal>
+								<span>{principle.number}</span>
+								<h3>{principle.title}</h3>
+								<p>{principle.copy}</p>
+							</article>
+						))}
+					</div>
+
+					<p class="open-note" data-reveal>
+						Everything is published in the open—research, tradeoffs, and the tooling for
+						reproducing the numbers. The same system is designed to remain a practical daily
+						coding tool.
+					</p>
+				</div>
+			</section>
+
+			<section class="section benchmark-section" id="benchmarks">
+				<div class="shell">
+					<div class="section-heading" data-reveal>
+						<div>
+							<p class="eyebrow">02 / Resource efficiency</p>
+							<h2>Small enough to multiply.</h2>
+						</div>
+						<p>
+							Swarms only scale when each worker is cheap. These measurements use the entire
+							process tree, not a hand-picked child process.
+						</p>
+					</div>
+
+					<div class="benchmark-grid">
+						{resourceBenchmarks.map((benchmark) => (
+							<BenchmarkCard title={benchmark.title} detail={benchmark.detail} rows={benchmark.rows} />
+						))}
+					</div>
+
+					<p class="source-note" data-reveal>
+						Source: the published one-session memory run in the legacy benchmark dataset.
+						Lower is better. Missing readiness values are omitted.
+					</p>
+				</div>
+			</section>
+
+			<section class="section token-section">
+				<div class="shell token-layout">
+					<div class="token-copy" data-reveal>
+						<p class="eyebrow">03 / Tool output</p>
+						<h2>Keep the tail.<br />Lose the noise.</h2>
+						<p class="lede-small">
+							Large tool output is capped before it reaches the model, while the full result stays
+							retrievable. The model gets the useful edge of the output without paying for the
+							same wall of text twice.
+						</p>
+						<div class="callout">
+							<strong>35% fewer modeled tokens</strong>
+							<span>than the 45k-token comparison rows across three large-output fixtures.</span>
+						</div>
+					</div>
+
+					<BenchmarkCard title="Model-facing tool output" detail="Three deterministic fixtures · lower is better" rows={tokenBenchmarks} />
+				</div>
+
+				<div class="shell">
+					<p class="source-note" data-reveal>
+						Modeled from source, not a live API measurement. FreeCode’s lead comes largely from
+						a tighter first-turn cap; that is a deliberate frugality tradeoff, not a claim of
+						strictly greater capability.
+					</p>
+				</div>
+			</section>
+
+			<section class="section evidence-section" id="evidence">
+				<div class="shell">
+					<div class="section-heading" data-reveal>
+						<div>
+							<p class="eyebrow">04 / Harness bench</p>
+							<h2>Six ways to be wrong in public.</h2>
+						</div>
+						<p>
+							Each instrument has its own runner, data artifact, and command. A loss belongs in
+							the headline just as much as a win.
+						</p>
+					</div>
+
+					<a class="benchmark-page-link" href="/benchmark" data-reveal>
+						<span>Open the agent benchmark</span>
+						<strong>Outcomes, token cost, and every graded bug <span aria-hidden="true">↗</span></strong>
+					</a>
+
+					<div class="evidence-grid">
+						{evidenceSections.map((item) => (
+							<article class="evidence-card" data-reveal>
+								<div class="evidence-topline">
+									<span>{item.number}</span>
+									<code>{item.command}</code>
+								</div>
+								<h3>{item.title}</h3>
+								<div class="evidence-metric">
+									<strong>{item.metric}</strong>
+									<span>{item.label}</span>
+								</div>
+								<p>{item.copy}</p>
+							</article>
+						))}
+					</div>
+				</div>
+			</section>
+
+			<section class="section install-section" id="install">
+				<div class="shell install-layout">
+					<div data-reveal>
+						<p class="eyebrow">05 / Install</p>
+						<h2>Start with one command.</h2>
+						<p class="lede-small">
+							Bring your provider, open a project, and let the harness handle the loop.
+						</p>
+						<a class="text-link" href="https://docs.freecode.website/" target="_blank" rel="noreferrer">
+							Read the documentation <span aria-hidden="true">↗</span>
+						</a>
+					</div>
+
+					<div class="terminal" data-install-panel data-reveal>
+						<div class="terminal-tabs" role="tablist" aria-label="Installation method">
+							{installCommands.map((installer, index) => (
+								<button type="button" role="tab" aria-selected={index === 0 ? "true" : "false"} data-install-tab data-command={installer.command}>
+									{installer.label}
+								</button>
+							))}
+						</div>
+						<div class="terminal-command">
+							<code><span aria-hidden="true">$ </span><span data-install-command>{installCommands[0].command}</span></code>
+							<button type="button" data-copy-command>Copy</button>
+						</div>
+					</div>
+				</div>
+			</section>
 		</main>
+
+		<footer>
+			<div class="shell footer-grid">
+				<div>
+					<a class="brand footer-brand" href="#top">
+						<span class="brand-mark" aria-hidden="true">F/</span>
+						<span>FreeCode</span>
+					</a>
+					<p>Open source. Open research. Built for useful work.</p>
+				</div>
+				<div class="footer-links">
+					<a href="#mission">Mission</a>
+					<a href="/benchmark">Benchmark</a>
+					<a href="#install">Install</a>
+					<a href={githubUrl} target="_blank" rel="noreferrer">GitHub ↗</a>
+				</div>
+			</div>
+			<div class="shell footer-bottom">
+				<span>FreeCode / 2026</span>
+				<span>Numbers are published artifacts, not promises.</span>
+			</div>
+		</footer>
+
+		<script>
+			const panel = document.querySelector<HTMLElement>("[data-install-panel]");
+			if (panel) {
+				const command = panel.querySelector<HTMLElement>("[data-install-command]");
+				const copy = panel.querySelector<HTMLButtonElement>("[data-copy-command]");
+				const tabs = panel.querySelectorAll<HTMLButtonElement>("[data-install-tab]");
+
+				for (const tab of tabs) {
+					tab.addEventListener("click", () => {
+						for (const candidate of tabs) candidate.setAttribute("aria-selected", "false");
+						tab.setAttribute("aria-selected", "true");
+						if (command) command.textContent = tab.dataset.command ?? "";
+						if (copy) copy.textContent = "Copy";
+					});
+				}
+
+				copy?.addEventListener("click", async () => {
+					if (!command?.textContent) return;
+					await navigator.clipboard.writeText(command.textContent);
+					copy.textContent = "Copied";
+					window.setTimeout(() => (copy.textContent = "Copy"), 1600);
+				});
+			}
+
+			if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+				document.body.classList.add("reveal-ready");
+				const observer = new IntersectionObserver(
+					(entries) => {
+						for (const entry of entries) {
+							if (!entry.isIntersecting) continue;
+							entry.target.classList.add("is-visible");
+							observer.unobserve(entry.target);
+						}
+					},
+					{ rootMargin: "0px 0px -8%", threshold: 0.08 },
+				);
+				document.querySelectorAll("[data-reveal]").forEach((element) => observer.observe(element));
+			}
+		</script>
 	</body>
 </html>
-
-<style>
-	:global(*) {
-		box-sizing: border-box;
-	}
-
-	:global(html) {
-		font-family:
-			Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-			sans-serif;
-		background: #f5f1e8;
-		color: #171714;
-	}
-
-	:global(body) {
-		margin: 0;
-	}
-
-	main {
-		display: grid;
-		min-height: 100svh;
-		place-items: center;
-		padding: 2rem;
-	}
-
-	h1 {
-		max-width: 12ch;
-		margin: 0;
-		font-size: clamp(3rem, 10vw, 8rem);
-		font-weight: 800;
-		letter-spacing: -0.065em;
-		line-height: 0.88;
-		text-align: center;
-		text-wrap: balance;
-	}
-</style>

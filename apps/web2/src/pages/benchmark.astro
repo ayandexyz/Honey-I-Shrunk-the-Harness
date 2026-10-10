@@ -1,0 +1,335 @@
+---
+import { benchmarkRuns, caveats, taskTitles } from "../data/benchmarks";
+import "../styles/global.css";
+import "../styles/benchmark.css";
+
+const githubUrl = "https://github.com/ayandexyz/omacode";
+const firstRun = benchmarkRuns[0];
+
+const agentName = (id: string) => ({
+	freecode: "FreeCode",
+	"claude-code": "Claude Code",
+	opencode: "OpenCode",
+})[id] ?? id;
+
+const percent = (value: number) => `${Math.round(value * 100)}%`;
+const compact = (value: number) => new Intl.NumberFormat("en-US", {
+	notation: "compact",
+	maximumFractionDigits: 1,
+}).format(value);
+const dollars = (value: number) => `$${value.toFixed(value >= 1 ? 2 : 3)}`;
+const seconds = (value: number) => `${(value / 1000).toFixed(value < 100000 ? 1 : 0)}s`;
+const date = (value: string) => new Intl.DateTimeFormat("en", {
+	month: "short",
+	day: "numeric",
+	year: "numeric",
+}).format(new Date(value));
+---
+
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+		<link rel="icon" href="/favicon.ico" />
+		<meta name="viewport" content="width=device-width" />
+		<meta name="generator" content={Astro.generator} />
+		<meta
+			name="description"
+			content="FreeCode agent benchmark results on SWE-bench Lite, with outcomes, cost, tokens, and per-instance evidence."
+		/>
+		<meta name="theme-color" content="#f2f1ec" />
+		<title>Agent benchmark — FreeCode</title>
+	</head>
+	<body class="benchmark-page">
+		<a class="skip-link" href="#benchmark-main">Skip to benchmark</a>
+
+		<header class="benchmark-header shell">
+			<a class="brand" href="/" aria-label="FreeCode home">
+				<span class="brand-mark" aria-hidden="true">F/</span>
+				<span>FreeCode</span>
+			</a>
+			<nav aria-label="Benchmark navigation">
+				<a href="/">Overview</a>
+				<a href="/benchmark" aria-current="page">Benchmark</a>
+				<a href="/#install">Install</a>
+			</nav>
+			<a class="github-link" href={githubUrl} target="_blank" rel="noreferrer">GitHub ↗</a>
+		</header>
+
+		<main id="benchmark-main">
+			<section class="benchmark-hero shell">
+				<div class="benchmark-hero-copy">
+					<p class="eyebrow">Agent benchmark / SWE-bench Lite</p>
+					<h1>Same bugs.<br />Same model.<br /><em>One meter.</em></h1>
+				</div>
+				<div class="benchmark-hero-note">
+					<p>
+						A harness-to-harness comparison using the official grader, shared models,
+						published artifacts, and the whole token bill.
+					</p>
+					<div class="hero-facts">
+						<span><strong>3</strong> matchups</span>
+						<span><strong>66</strong> paired trials</span>
+						<span><strong>2</strong> model families</span>
+					</div>
+				</div>
+			</section>
+
+			<section class="run-picker-wrap">
+				<div class="shell run-picker" aria-label="Choose a benchmark run">
+					<span>Compare</span>
+					<div class="run-picker-options" role="tablist" aria-label="Benchmark runs">
+						{benchmarkRuns.map((run, index) => (
+							<button
+								type="button"
+								role="tab"
+								aria-selected={index === 0 ? "true" : "false"}
+								aria-controls={`report-${run.key}`}
+								data-run-button={run.key}
+							>
+								<small>{run.model}</small>
+								{run.label.replace("FreeCode vs ", "vs ")}
+							</button>
+						))}
+					</div>
+				</div>
+			</section>
+
+			<div class="benchmark-reports">
+				{benchmarkRuns.map((run, runIndex) => {
+					const freecode = run.agents[0];
+					const rival = run.agents[1];
+					const outcomeDelta = rival.rate - freecode.rate;
+					return (
+						<article
+							class="benchmark-report shell"
+							id={`report-${run.key}`}
+							data-run-report={run.key}
+							hidden={runIndex !== 0}
+						>
+							<header class="report-header">
+								<div>
+									<p class="eyebrow">{run.model} · {run.instances.length} Django issues</p>
+									<h2>{run.label}</h2>
+								</div>
+								<div class="report-status">
+									<span class="status-dot status-good">Officially graded</span>
+									<span class:list={["status-dot", run.isolation === "none" && "status-warn"]}>
+										{run.isolation === "container" ? "Container isolated" : "No isolation · provisional"}
+									</span>
+									<span>Published {date(run.generatedAt)}</span>
+								</div>
+							</header>
+
+							{run.isolation === "none" && (
+								<div class="provisional-note">
+									<strong>Provisional run.</strong> Network and home-directory isolation were not enabled,
+									so this matchup is useful context—not headline evidence.
+								</div>
+							)}
+
+							<section class="score-grid" aria-label="Headline results">
+								<div class="score-card score-primary">
+									<span>Official outcome</span>
+									<strong>
+										{Math.abs(outcomeDelta) < 0.001
+											? "Tie"
+											: `${agentName(outcomeDelta > 0 ? rival.id : freecode.id)} +${Math.abs(outcomeDelta * 100).toFixed(1)} pts`}
+									</strong>
+									<p>{freecode.successes}/{freecode.trials} vs {rival.successes}/{rival.trials} resolved</p>
+								</div>
+								<div class="score-card">
+									<span>FreeCode token edge</span>
+									<strong>{run.tokenEdge}% fewer</strong>
+									<p>{compact(freecode.meanTokens)} vs {compact(rival.meanTokens)} mean tokens</p>
+								</div>
+								<div class="score-card">
+									<span>Comparable solved cost</span>
+									<strong>{dollars(run.cost[0].meanUsd)}</strong>
+									<p>FreeCode mean · rival {dollars(run.cost[1].meanUsd)}</p>
+								</div>
+							</section>
+
+							<section class="report-section">
+								<div class="report-section-heading">
+									<div>
+										<p class="eyebrow">01 / Outcome + efficiency</p>
+										<h3>The result, with the bill attached.</h3>
+									</div>
+									<p>Every number below includes all trials, not only successful runs.</p>
+								</div>
+
+								<div class="agent-panels">
+									{run.agents.map((agent) => (
+										<section class:list={["agent-panel", agent.id === "freecode" && "agent-panel-freecode"]}>
+											<div class="agent-title">
+												<div>
+													<span>{agent.id === "freecode" ? "This harness" : "Comparison harness"}</span>
+													<h4>{agentName(agent.id)}</h4>
+												</div>
+												<code>v{agent.version}</code>
+											</div>
+											<div class="outcome-bar" aria-label={`${percent(agent.rate)} resolved`}>
+												<span style={`width: ${agent.rate * 100}%`}></span>
+											</div>
+											<div class="agent-rate"><strong>{percent(agent.rate)}</strong><span>officially resolved</span></div>
+											<dl class="metric-list">
+												<div><dt>Median wall time</dt><dd>{seconds(agent.medianMs)}</dd></div>
+												<div><dt>Mean tokens</dt><dd>{compact(agent.meanTokens)}</dd></div>
+												<div><dt>Mean cost</dt><dd>{dollars(agent.meanUsd)}</dd></div>
+												<div><dt>Mean turns</dt><dd>{agent.meanTurns}</dd></div>
+												<div><dt>Median patch</dt><dd>{compact(agent.medianPatchBytes)}B</dd></div>
+												<div><dt>Cache hit</dt><dd>{percent(agent.cacheHitRate)}</dd></div>
+											</dl>
+											<p class="autonomy"><span>Autonomy</span><code>{agent.autonomy}</code></p>
+										</section>
+									))}
+								</div>
+							</section>
+
+							<section class="report-section">
+								<div class="report-section-heading">
+									<div>
+										<p class="eyebrow">02 / Instance matrix</p>
+										<h3>Every bug stays visible.</h3>
+									</div>
+									<p>Dots are graded trials. Filled means resolved; outlined means unresolved.</p>
+								</div>
+
+								<div class="matrix-wrap">
+									<table class="instance-table">
+										<thead>
+											<tr>
+												<th scope="col">SWE-bench issue</th>
+												{run.agents.map((agent) => <th scope="col">{agentName(agent.id)}</th>)}
+											</tr>
+										</thead>
+										<tbody>
+											{run.instances.map((instance) => (
+												<tr>
+													<th scope="row">
+														<strong>{instance.id.replace("django__django-", "#")}</strong>
+														<span>{taskTitles[instance.id]}</span>
+													</th>
+													{instance.cells.map((cell) => (
+														<td>
+															<div class="trial-dots" aria-label={`${cell.wins} of ${cell.trials} resolved`}>
+																{Array.from({ length: cell.trials }, (_, index) => (
+																	<span class:list={[index < cell.wins && "trial-win"]}></span>
+																))}
+															</div>
+															<small>{compact(cell.meanTokens)} tok · {dollars(cell.meanUsd)}</small>
+														</td>
+													))}
+												</tr>
+											))}
+										</tbody>
+									</table>
+								</div>
+							</section>
+
+							<section class="report-section evidence-callout">
+								<p class="eyebrow">03 / Cost evidence</p>
+								<div class="cost-copy">
+									<h3>Compare cost only where both harnesses solved the bug.</h3>
+									<p>
+										Across the mutually solved instances, FreeCode averaged
+										<strong>{dollars(run.cost[0].meanUsd)}</strong> and <strong>{compact(run.cost[0].meanTokens)}</strong>
+										tokens. {agentName(run.cost[1].id)} averaged <strong>{dollars(run.cost[1].meanUsd)}</strong>
+										and <strong>{compact(run.cost[1].meanTokens)}</strong> tokens.
+									</p>
+								</div>
+								<div class="cost-bars">
+									{run.cost.map((item) => (
+										<div>
+											<span>{agentName(item.id)}</span>
+											<div><i style={`width: ${(item.meanUsd / Math.max(...run.cost.map((entry) => entry.meanUsd))) * 100}%`}></i></div>
+											<strong>{dollars(item.meanUsd)}</strong>
+										</div>
+									))}
+								</div>
+							</section>
+
+							<footer class="run-meta">
+								<span>Run {run.runId}</span>
+								<span>SWE-bench Lite · django/django</span>
+								<span>{run.isolation === "container" ? "Network closed · fresh HOME" : "Open network · shared HOME"}</span>
+							</footer>
+						</article>
+					);
+				})}
+			</div>
+
+			<section class="method-section">
+				<div class="shell">
+					<div class="report-section-heading method-heading">
+						<div>
+							<p class="eyebrow">04 / Read before quoting</p>
+							<h2>What these numbers do not prove.</h2>
+						</div>
+						<p>The benchmark is evidence with boundaries, not a universal agent ranking.</p>
+					</div>
+					<div class="caveat-grid">
+						{caveats.map((caveat, index) => (
+							<article>
+								<span>0{index + 1}</span>
+								<h3>{caveat.title}</h3>
+								<p>{caveat.body}</p>
+							</article>
+						))}
+					</div>
+					<div class="method-note">
+						<p>
+							<strong>Method:</strong> each harness receives the same checked-out repository, issue text,
+							model, key, time budget, and official SWE-bench grader. Container runs close the network
+							and use a fresh home directory. Token totals include cached input.
+						</p>
+						<a class="button button-dark" href={githubUrl} target="_blank" rel="noreferrer">Inspect the repository ↗</a>
+					</div>
+				</div>
+			</section>
+		</main>
+
+		<footer class="benchmark-footer">
+			<div class="shell">
+				<span>FreeCode / Agent benchmark</span>
+				<a href="/">Back to overview ↑</a>
+			</div>
+		</footer>
+
+		<script define:vars={{ initialRun: firstRun.key }}>
+			const buttons = document.querySelectorAll("[data-run-button]");
+			const reports = document.querySelectorAll("[data-run-report]");
+
+			function selectRun(key, updateHash = true) {
+				let matched = false;
+				for (const report of reports) {
+					const selected = report.getAttribute("data-run-report") === key;
+					report.toggleAttribute("hidden", !selected);
+					if (selected) matched = true;
+				}
+				if (!matched) return selectRun(initialRun, false);
+				for (const button of buttons) {
+					button.setAttribute("aria-selected", String(button.getAttribute("data-run-button") === key));
+				}
+				if (updateHash) {
+					history.replaceState(null, "", `#${key}`);
+					const picker = document.querySelector(".run-picker-wrap");
+					if (picker) {
+						window.scrollTo({
+							top: picker.getBoundingClientRect().top + window.scrollY - 12,
+							behavior: "smooth",
+						});
+					}
+				}
+			}
+
+			for (const button of buttons) {
+				button.addEventListener("click", () => selectRun(button.getAttribute("data-run-button") ?? initialRun));
+			}
+
+			selectRun(location.hash.slice(1) || initialRun, false);
+		</script>
+	</body>
+</html>

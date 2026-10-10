@@ -1,0 +1,127 @@
+---
+interface Row {
+	label: string;
+	value: number;
+	display: string;
+	featured?: boolean;
+	note?: string;
+}
+
+interface Props {
+	title: string;
+	detail: string;
+	rows: readonly Row[];
+}
+
+const { title, detail, rows } = Astro.props;
+const max = Math.max(...rows.map((row) => row.value));
+---
+
+<article class="benchmark-card" data-reveal>
+	<header>
+		<h3>{title}</h3>
+		<p>{detail}</p>
+	</header>
+
+	<div class="bar-list">
+		{rows.map((row) => (
+			<div class:list={["bar-row", { featured: row.featured }]}>
+				<div class="bar-meta">
+					<span>{row.label}</span>
+					<span class="bar-value">{row.display}</span>
+				</div>
+				<div class="bar-track" aria-hidden="true">
+					<span style={`--bar-size: ${Math.max((row.value / max) * 100, 3)}%`} />
+				</div>
+				{row.note && <span class="bar-note">{row.note}</span>}
+			</div>
+		))}
+	</div>
+</article>
+
+<style>
+	.benchmark-card {
+		padding: clamp(1.35rem, 3vw, 2rem);
+		border: 1px solid var(--line);
+		border-radius: var(--radius-lg);
+		background: var(--surface);
+	}
+
+	header {
+		margin-bottom: 2rem;
+	}
+
+	h3 {
+		margin: 0;
+		font-size: 1.125rem;
+		font-weight: 650;
+		letter-spacing: -0.025em;
+	}
+
+	header p {
+		margin: 0.45rem 0 0;
+		color: var(--muted);
+		font-size: 0.82rem;
+	}
+
+	.bar-list {
+		display: grid;
+		gap: 1.1rem;
+	}
+
+	.bar-row {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
+		gap: 0.5rem 1rem;
+	}
+
+	.bar-meta {
+		display: contents;
+		font-family: var(--mono);
+		font-size: 0.78rem;
+	}
+
+	.bar-meta > span:first-child {
+		color: var(--muted-strong);
+	}
+
+	.bar-value {
+		color: var(--muted);
+		font-variant-numeric: tabular-nums;
+	}
+
+	.bar-track {
+		grid-column: 1 / -1;
+		height: 0.32rem;
+		overflow: hidden;
+		border-radius: 999px;
+		background: var(--line);
+	}
+
+	.bar-track span {
+		display: block;
+		width: var(--bar-size);
+		height: 100%;
+		border-radius: inherit;
+		background: #a8aaa5;
+		transform-origin: left;
+		transition: width 700ms var(--ease);
+	}
+
+	.featured .bar-meta > span:first-child,
+	.featured .bar-value {
+		color: var(--accent-strong);
+		font-weight: 700;
+	}
+
+	.featured .bar-track span {
+		background: var(--accent);
+	}
+
+	.bar-note {
+		grid-column: 1 / -1;
+		color: var(--muted);
+		font-family: var(--mono);
+		font-size: 0.68rem;
+	}
+</style>
