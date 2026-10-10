@@ -400,9 +400,14 @@
 .button-dark { background: var(--surface-dark); color: white; }
 .button-dark:hover { background: var(--accent-strong); }
 
-.benchmark-footer { background: var(--surface-dark); color: rgb(255 255 255 / 64%); }
-.benchmark-footer .shell { display: flex; justify-content: space-between; gap: 2rem; padding-block: 2rem; font-family: var(--mono); font-size: 0.64rem; }
-.benchmark-footer-brand { color: white; }
+.benchmark-footer {
+	overflow: hidden;
+	padding-block: clamp(2rem, 5vw, 4rem) 2rem;
+	background: #e7e8e4;
+	color: var(--muted-strong);
+}
+.benchmark-footer-content { display: flex; justify-content: space-between; gap: 2rem; font-family: var(--mono); font-size: 0.64rem; }
+.benchmark-footer-brand { color: var(--ink); }
 
 @media (max-width: 900px) {
 	.benchmark-hero,
@@ -444,7 +449,7 @@
 	.run-picker button { font-size: 0.66rem; }
 	.run-picker button small { font-size: 0.5rem; }
 	.cost-bars > div { grid-template-columns: 5.2rem 1fr 3rem; }
-	.benchmark-footer .shell { flex-direction: column; }
+	.benchmark-footer-content { flex-direction: column; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -594,7 +594,31 @@ h2 {
 
 .terminal-command button:hover { border-color: var(--accent); color: var(--accent); }
 
-footer { padding-block: 4rem 1.5rem; background: #0c1512; color: #e9efea; }
+.site-footer {
+	overflow: hidden;
+	padding-block: clamp(2rem, 5vw, 4rem) 1.5rem;
+	background: #e7e8e4;
+	color: var(--ink);
+}
+
+.footer-display {
+	width: 100%;
+	margin-bottom: clamp(3rem, 7vw, 6rem);
+	/* background-clip: text paints only the box; line-height < 1 leaves the
+	   glyph tops above it (and above the footer's overflow clip), so pad. */
+	padding-top: 0.25em;
+	background: linear-gradient(to bottom, rgb(0 0 0 / 9%), transparent 85%);
+	-webkit-background-clip: text;
+	background-clip: text;
+	color: transparent;
+	font-size: clamp(8rem, 28vw, 32rem);
+	font-weight: 700;
+	letter-spacing: -0.1em;
+	line-height: 0.68;
+	text-align: center;
+	white-space: nowrap;
+	user-select: none;
+}
 
 .footer-grid {
 	display: grid;
@@ -608,17 +632,17 @@ footer { padding-block: 4rem 1.5rem; background: #0c1512; color: #e9efea; }
 	height: 3.25rem;
 	font-size: 1.25rem;
 }
-.footer-grid p { margin: 1rem 0 0; color: #7f8d87; font-size: 0.85rem; }
+.footer-grid p { margin: 1rem 0 0; color: var(--muted-strong); font-size: 0.85rem; }
 
 .footer-links {
 	display: grid;
 	grid-template-columns: repeat(2, minmax(6rem, 1fr));
 	gap: 0.6rem 2rem;
-	color: #a7b3ae;
+	color: var(--muted-strong);
 	font-size: 0.8rem;
 }
 
-.footer-links a:hover { color: white; }
+.footer-links a:hover { color: var(--ink); }
 
 .footer-bottom {
 	display: flex;
@@ -626,8 +650,8 @@ footer { padding-block: 4rem 1.5rem; background: #0c1512; color: #e9efea; }
 	gap: 2rem;
 	margin-top: 4rem;
 	padding-top: 1.25rem;
-	border-top: 1px solid #293530;
-	color: #66736e;
+	border-top: 1px solid #c8cbc4;
+	color: var(--muted);
 	font-family: var(--mono);
 	font-size: 0.6rem;
 	text-transform: uppercase;
