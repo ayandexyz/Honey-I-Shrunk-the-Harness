@@ -9,7 +9,6 @@ import { spawn, spawnSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import {
-  BENCH_MOUNT,
   dockerArgv,
   removeContainer,
   type Containerize,
@@ -63,7 +62,7 @@ export function agentVersion(spec: AgentSpec, image?: string): string {
 
 /**
  * `{benchDir}` in argv resolves like it does in `env`: this directory on the
- * host, the ro mount in a container. It is how an adapter can point at a
+ * host (host-only; runAgent refuses it under --isolate). It is how an adapter can point at a
  * checkout's own build (bench/jcode-bench/agents/freecode-dev.json).
  */
 function render(spec: AgentSpec, prompt: string, benchDir: string): string[] {
@@ -95,7 +94,6 @@ function render(spec: AgentSpec, prompt: string, benchDir: string): string[] {
  */
 export function resolveEnv(
   spec: AgentSpec,
-  benchDir?: string,
   configDir?: string,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
@@ -110,8 +108,7 @@ export function resolveEnv(
       );
     }
     env[key] = raw
-      // In a container, {benchDir} is the ro mount, not the host path.
-      .replaceAll("{benchDir}", benchDir ?? path.join(AGENT_DIR, ".."))
+      .replaceAll("{benchDir}", path.join(AGENT_DIR, ".."))
       .replaceAll("{configDir}", configDir ?? "")
       .replace(/\$\{(\w+)\}/g, (_, name: string) => {
       const value = process.env[name];
@@ -152,23 +149,23 @@ export function runAgent(
   containerize?: Containerize,
   configDir?: string,
 ): Promise<AgentRun> {
-  // In a container, {benchDir} and {configDir} in the adapter env must resolve
-  // to the ro mounts, not the host paths. The env still carries real values
-  // (docker copies them from the spawn env for each bare `-e NAME`); only argv
-  // stays value-free.
+  // The agent container does not mount bench/agent-bench (see Containerize.wsDir),
+  // so {benchDir} has nothing to resolve to there. Refuse rather than hand the
+  // agent a path that does not exist.
+  if (containerize && JSON.stringify([spec.run, spec.env ?? {}]).includes("{benchDir}")) {
+    throw new Error(`${spec.id}: {benchDir} is host-only; it cannot be used under --isolate`);
+  }
+  // In a container, {configDir} in the adapter env must resolve to the mount,
+  // not the host path. The env still carries real values (docker copies them
+  // from the spawn env for each bare `-e NAME`); only argv stays value-free.
   const env = {
     ...resolveEnv(
       spec,
-      containerize ? BENCH_MOUNT : undefined,
       configDir ? (containerize ? CONFIG_MOUNT : configDir) : undefined,
     ),
     ...extraEnv,
   };
-  const agentArgv = render(
-    spec,
-    prompt,
-    containerize ? BENCH_MOUNT : path.join(AGENT_DIR, ".."),
-  );
+  const agentArgv = render(spec, prompt, path.join(AGENT_DIR, ".."));
   const argv = containerize ? dockerArgv(containerize, agentArgv) : agentArgv;
   const [cmd, ...args] = argv;
   const out = fs.createWriteStream(path.join(artifactDir, "stdout.log"));

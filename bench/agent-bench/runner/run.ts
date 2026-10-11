@@ -200,7 +200,6 @@ async function main() {
                 network: INTERNAL_NETWORK,
                 name: `bench-${safe}`.slice(0, 63),
                 wsDir: ws.dir,
-                benchDir: ROOT,
                 envNames: forwardedEnvNames(spec.env, extraEnv),
                 configDir,
                 uid: process.getuid?.() ?? 1000,
