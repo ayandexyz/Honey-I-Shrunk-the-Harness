@@ -14,6 +14,8 @@ import {
 import {
   createMessageComponent,
   createQueuedUserMessageComponent,
+  createUserMessageComponent,
+  type UserImage,
 } from "./message-row.js";
 import type { MessageType, MessageInstance } from "./message-types.js";
 import { Transcript } from "./transcript.js";
@@ -22,9 +24,14 @@ import type { ToolProgressMessage } from "./tool-progress-message.js";
 /**
  * Add a user message to the store and return the message instance
  */
-export function createUserMessage(content: string): MessageInstance {
+export function createUserMessage(
+  content: string,
+  images?: UserImage[],
+): MessageInstance {
   sealToolGroups();
-  const component = createMessageComponent("user", content);
+  const component = images?.length
+    ? createUserMessageComponent(content, images)
+    : createMessageComponent("user", content);
   return addMessage("user", content, component);
 }
 

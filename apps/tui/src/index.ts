@@ -2261,6 +2261,7 @@ async function submitPrompt(
   // below) so the user sees one row, not two.
   const userMsg = createUserMessage(
     `**${palette.red("You")}:** ${displayText ?? promptText}`,
+    images,
   );
   // Seed ↓ with a live input estimate so it isn't 0 while streaming: prior
   // accumulated context plus this prompt (~4 chars/token). Input is fixed at
