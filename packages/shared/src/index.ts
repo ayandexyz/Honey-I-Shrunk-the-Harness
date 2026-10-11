@@ -48,6 +48,7 @@ export type {
   AgentSummary,
   NightRunSummary,
   AgentOutputResult,
+  SettingView,
 } from "./types.js";
 
 // IPC Protocol

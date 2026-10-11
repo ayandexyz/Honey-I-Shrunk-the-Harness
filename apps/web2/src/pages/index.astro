@@ -1,16 +1,102 @@
 ---
 import BenchmarkCard from "../components/BenchmarkCard.astro";
+import ConfidenceChart from "../components/ConfidenceChart.astro";
+import HillClimbChart from "../components/HillClimbChart.astro";
+import OptimizationTask from "../components/OptimizationTask.astro";
+import StatTiles from "../components/StatTiles.astro";
+import type { StatTile } from "../components/types";
+import { agentColor } from "../data/agent-bench";
 import {
-	evidenceSections,
-	installCommands,
-	principles,
-	resourceBenchmarks,
+	displayName,
+	evidence,
+	matchups,
+	memoryOne,
+	memoryTen,
+	neverReady,
+	opt,
+	signals,
 	summaryStats,
-	tokenBenchmarks,
-} from "../data/site";
+	timeToReady,
+	tokenFixtures,
+	tokenRows,
+	tokenSaving,
+	US,
+} from "../data/home";
+import { docsUrl, evidenceCopy, githubUrl, installCommands, principles } from "../data/site";
 import "../styles/global.css";
+import "../styles/charts.css";
 
-const githubUrl = "https://github.com/ayandexyz/omacode";
+const tok = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : `${Math.round(n / 1000)}k`);
+const pct = (n: number | null) => (n === null ? null : `${Math.round(n * 100)}%`);
+const date = (iso: string | null) => (iso ? iso.slice(0, 10) : null);
+
+const commands: Record<string, string> = {
+	"resource-efficiency": "pnpm bench:memory",
+	"agent-comparison": "pnpm bench:agents --isolate",
+	"optimization-task": "pnpm bench:jcode",
+	"confidence-stepping": "pnpm bench:signals",
+	"hill-climbable-goals": "pnpm bench:signals",
+	"auto-poke": "pnpm bench:signals",
+};
+
+const optTiles: StatTile[] = opt.aggregate.slice(0, 4).map((a) => ({
+	value: `+${a.geomean.toFixed(2)}`,
+	label: `${displayName(a.agent)} · geomean`,
+	note: `${a.model}, ${a.tasks} task${a.tasks === 1 ? "" : "s"} — typical ${(2 ** a.geomean).toFixed(1)}× speedup`,
+	tone: a.isFreeCode ? "good" : undefined,
+}));
+
+const poke = signals.autoPoke;
+const openRate = (x: { n: number; open: number }) => (x.n ? x.open / x.n : null);
+const pokeTiles: StatTile[] = [
+	{
+		value: pct(poke.endedOpenRate),
+		label: "ended with open todos",
+		note: `${poke.sessionsEndedOpen} of ${poke.sessionsWithTodos} sessions with a list`,
+		tone: (poke.endedOpenRate ?? 0) > 0.3 ? "bad" : undefined,
+	},
+	{
+		value: String(poke.pokes),
+		label: "pokes fired",
+		note: poke.gatedSessions > 0 ? `across ${poke.gatedSessions} sessions with the gate on` : "gate off in every session so far",
+	},
+	{
+		value: pct(poke.productiveRate),
+		label: "pokes followed by work",
+		note: poke.pokes ? `${poke.productive} of ${poke.pokes} led to at least one tool call` : "no pokes yet",
+		tone: (poke.productiveRate ?? 0) >= 0.5 ? "good" : undefined,
+	},
+	{ value: poke.pokes ? String(poke.itemsCompletedAfterPoke) : null, label: "items closed after a poke", note: "completed on a later call" },
+];
+const pokeCompare = [
+	{ label: "gate off", value: openRate(poke.endedOpenByGate.off) ?? 0, display: pct(openRate(poke.endedOpenByGate.off)) ?? "—", note: `${poke.endedOpenByGate.off.open}/${poke.endedOpenByGate.off.n} ended open` },
+	{
+		label: "gate on",
+		value: openRate(poke.endedOpenByGate.on) ?? 0,
+		display: poke.endedOpenByGate.on.n ? (pct(openRate(poke.endedOpenByGate.on)) ?? "—") : "no data",
+		note: poke.endedOpenByGate.on.n ? `${poke.endedOpenByGate.on.open}/${poke.endedOpenByGate.on.n} ended open` : "FREECODE_AUTO_POKE=1",
+		featured: true,
+	},
+];
+const skipNotes: Record<string, string> = {
+	disabled: "gate was off",
+	nothing_open: "list already complete",
+	no_progress: "unchanged since last poke",
+	cap_reached: "per-run cap hit",
+	no_budget: "turn limit reached first",
+	all_blocked: "every open item blocked",
+	read_only_mode: "read-only mode",
+};
+const pokeSkips = Object.entries(poke.skipped)
+	.sort((a, b) => b[1] - a[1])
+	.map(([reason, n]) => ({ label: reason.replaceAll("_", " "), value: n, display: String(n), note: skipNotes[reason] ?? "" }));
+
+const footerTiles: StatTile[] = [
+	{ value: signals.sessionsScanned.toLocaleString("en-US"), label: "sessions scanned", note: "rollout logs folded for the signal sections" },
+	{ value: String(opt.runCount), label: "optimisation runs", note: opt.latest ? `latest ${date(opt.latest)}` : "none yet" },
+	{ value: String(matchups.length), label: "agent matchups", note: "full matrix on /benchmark" },
+	{ value: date(signals.window.to), label: "signals as of", note: signals.window.from ? `since ${date(signals.window.from)}` : undefined },
+];
 ---
 
 <!doctype html>
@@ -23,28 +109,29 @@ const githubUrl = "https://github.com/ayandexyz/omacode";
 		<meta name="generator" content={Astro.generator} />
 		<meta
 			name="description"
-			content="FreeCode is an open-source coding harness built to get more useful work from every model."
+			content="Histh (Honey, I Shrunk the Harness) is an open-source coding harness built to get more useful work from every model."
 		/>
-		<meta name="theme-color" content="#091412" />
-		<title>HistH — Most efficient coding agent</title>
+		<meta name="theme-color" content="#0b1411" />
+		<title>Histh — Honey, I Shrunk the Harness</title>
 	</head>
 	<body>
 		<a class="skip-link" href="#main">Skip to content</a>
 
 		<header class="site-header">
-			<a class="brand header-brand" href="#top" aria-label="FreeCode home">
+			<a class="brand header-brand" href="#top" aria-label="Histh home">
 				<img class="brand-logo" src="/logo.png" alt="" width="395" height="632" />
 				<span class="brand-wordmark">Histh!</span>
 			</a>
 
 			<nav aria-label="Primary navigation">
 				<a href="#mission">Mission</a>
-				<a href="/benchmark">Benchmark</a>
+				<a href="#benchmarks">Benchmarks</a>
+				<a href="/benchmark">Agent bench</a>
 				<a href="#install">Install</a>
 			</nav>
 
-			<a class="github-link" href={githubUrl} target="_blank" rel="noreferrer">
-				<svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18">
+			<a class="button button-sm button-glass github-link" href={githubUrl} target="_blank" rel="noreferrer">
+				<svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16">
 					<path fill="currentColor" d="M12 .7a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2.24c-3.23.7-3.91-1.37-3.91-1.37-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.7.08-.7 1.17.08 1.78 1.19 1.78 1.19 1.04 1.77 2.72 1.26 3.39.96.1-.75.4-1.26.74-1.55-2.58-.29-5.29-1.28-5.29-5.68 0-1.26.45-2.28 1.19-3.08-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.16 1.18A10.98 10.98 0 0 1 12 6.13c.98 0 1.95.13 2.87.39 2.2-1.49 3.16-1.18 3.16-1.18.63 1.58.23 2.75.11 3.04.74.8 1.19 1.82 1.19 3.08 0 4.41-2.72 5.38-5.31 5.67.42.36.79 1.07.79 2.16v3.26c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .7Z" />
 				</svg>
 				<span>GitHub</span>
@@ -59,21 +146,36 @@ const githubUrl = "https://github.com/ayandexyz/omacode";
 				<div class="hero-shade" aria-hidden="true"></div>
 
 				<div class="hero-content shell">
-					<p class="eyebrow hero-eyebrow">Open-source agent harness · v0.43</p>
-					<h1>Honey I Shrunk<br />the Harness!</h1>
+					<p class="eyebrow hero-eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>Open-source agent harness · v0.43</p>
+					<h1 class="poster-title" aria-label="Honey, I Shrunk the Harness!">
+						<span class="poster-title-art" aria-hidden="true">
+							<span class="poster-rule poster-rule-top"></span>
+							<span class="poster-title-line poster-title-lead">
+								<span>Honey,</span>
+								<span>I</span>
+							</span>
+							<span class="poster-title-bridge">
+								<span class="poster-rule"></span>
+								<span class="poster-title-line">Shrunk the</span>
+								<span class="poster-rule"></span>
+							</span>
+							<span class="poster-title-line poster-title-base">Harness</span>
+							<span class="poster-rule poster-rule-bottom"></span>
+						</span>
+					</h1>
 					<p class="hero-copy">
 						A compact coding harness built to extract more useful work from every model—through
 						parallel agents, durable memory, real tools, and evidence you can inspect.
 					</p>
 					<div class="hero-actions">
-						<a class="button button-light" href="#install">Install FreeCode</a>
-						<a class="button button-glass" href="/benchmark">
-							View benchmark <span aria-hidden="true">↗</span>
+						<a class="button button-primary" href="#install">Install Histh</a>
+						<a class="button button-glass" href="#benchmarks">
+							See the benchmarks <span aria-hidden="true">↓</span>
 						</a>
 					</div>
 				</div>
 
-				<div class="hero-stats shell" aria-label="FreeCode at a glance">
+				<div class="hero-stats shell" aria-label="Histh at a glance">
 					{summaryStats.map((stat) => (
 						<div>
 							<strong>{stat.value}</strong>
@@ -89,7 +191,7 @@ const githubUrl = "https://github.com/ayandexyz/omacode";
 						<p class="eyebrow">01 / Mission</p>
 						<h2>The model is the intuitive core.<br />The harness makes it useful.</h2>
 						<p class="lede">
-							FreeCode is trying to push the frontier of intelligence from the harness level.
+							Histh is trying to push the frontier of intelligence from the harness level.
 							The next leaps come from scaling test-time compute with agent swarms, increasing
 							speed through parallelism, and solving continual learning through memory.
 						</p>
@@ -113,7 +215,7 @@ const githubUrl = "https://github.com/ayandexyz/omacode";
 				</div>
 			</section>
 
-			<section class="section benchmark-section" id="benchmarks">
+			<section class="section benchmark-section" id="resource-efficiency">
 				<div class="shell">
 					<div class="section-heading" data-reveal>
 						<div>
@@ -122,19 +224,33 @@ const githubUrl = "https://github.com/ayandexyz/omacode";
 						</div>
 						<p>
 							Swarms only scale when each worker is cheap. These measurements use the entire
-							process tree, not a hand-picked child process.
+							process tree—tool, every descendant, and the process group—not a hand-picked child.
 						</p>
 					</div>
 
 					<div class="benchmark-grid">
-						{resourceBenchmarks.map((benchmark) => (
-							<BenchmarkCard title={benchmark.title} detail={benchmark.detail} rows={benchmark.rows} />
-						))}
+						<BenchmarkCard
+							title="Memory footprint"
+							detail="One live session · proportional set size (PSS) · lower is better"
+							rows={memoryOne}
+						/>
+						<BenchmarkCard
+							title="Time to ready"
+							detail="Median spawn → input-responsive · ten interactive PTY launches"
+							rows={timeToReady}
+							footnote={neverReady.length ? `${neverReady.join(", ")} never became input-ready within the 20 s timeout, so they have no bar.` : undefined}
+						/>
+					</div>
+					<div class="benchmark-wide">
+						<BenchmarkCard
+							title="Ten sessions at once"
+							detail="Total PSS with ten clients running · what a small swarm actually costs"
+							rows={memoryTen}
+						/>
 					</div>
 
 					<p class="source-note" data-reveal>
-						Source: the published one-session memory run in the legacy benchmark dataset.
-						Lower is better. Missing readiness values are omitted.
+						Produced by <code>pnpm bench:memory</code>. Ratios are against Histh’s own row.
 					</p>
 				</div>
 			</section>
@@ -149,25 +265,32 @@ const githubUrl = "https://github.com/ayandexyz/omacode";
 							retrievable. The model gets the useful edge of the output without paying for the
 							same wall of text twice.
 						</p>
-						<div class="callout">
-							<strong>35% fewer modeled tokens</strong>
-							<span>than the 45k-token comparison rows across three large-output fixtures.</span>
-						</div>
+						{tokenSaving !== null && (
+							<div class="callout">
+								<strong>{tokenSaving}% fewer modeled tokens</strong>
+								<span>than the next-best harness across {tokenFixtures.length} large-output fixtures.</span>
+							</div>
+						)}
 					</div>
 
-					<BenchmarkCard title="Model-facing tool output" detail="Three deterministic fixtures · lower is better" rows={tokenBenchmarks} />
+					<BenchmarkCard
+						title="Model-input tokens per large-output turn"
+						detail={`${tokenFixtures.join(" · ")} · lower is better`}
+						rows={tokenRows}
+					/>
 				</div>
 
 				<div class="shell">
 					<p class="source-note" data-reveal>
-						Modeled from source, not a live API measurement. FreeCode’s lead comes largely from
-						a tighter first-turn cap; that is a deliberate frugality tradeoff, not a claim of
-						strictly greater capability.
+						Modeled from each tool’s truncation policy in its own source, not a live API run. Histh’s
+						lead comes largely from a tighter first-turn cap (30 KB vs 50 KB); that is a deliberate
+						frugality tradeoff, not a claim of strictly greater capability. Rows marked * are
+						unverified from source.
 					</p>
 				</div>
 			</section>
 
-			<section class="section evidence-section" id="evidence">
+			<section class="section evidence-section" id="benchmarks">
 				<div class="shell">
 					<div class="section-heading" data-reveal>
 						<div>
@@ -175,31 +298,171 @@ const githubUrl = "https://github.com/ayandexyz/omacode";
 							<h2>Six ways to be wrong in public.</h2>
 						</div>
 						<p>
-							Each instrument has its own runner, data artifact, and command. A loss belongs in
-							the headline just as much as a win.
+							Each instrument has its own runner, data artifact, and command. Nothing is curated by
+							hand: a run appears here by being published, and a loss belongs in the headline just
+							as much as a win.
 						</p>
 					</div>
 
-					<a class="benchmark-page-link" href="/benchmark" data-reveal>
-						<span>Open the agent benchmark</span>
-						<strong>Outcomes, token cost, and every graded bug <span aria-hidden="true">↗</span></strong>
-					</a>
-
-					<div class="evidence-grid">
-						{evidenceSections.map((item) => (
-							<article class="evidence-card" data-reveal>
+					<nav class="evidence-grid" aria-label="Benchmark sections">
+						{evidence.map((item, i) => (
+							<a class="evidence-card" href={`#${item.id}`} data-reveal>
 								<div class="evidence-topline">
-									<span>{item.number}</span>
-									<code>{item.command}</code>
+									<span>{String(i + 1).padStart(2, "0")}</span>
+									<code>{commands[item.id]}</code>
 								</div>
 								<h3>{item.title}</h3>
 								<div class="evidence-metric">
 									<strong>{item.metric}</strong>
 									<span>{item.label}</span>
 								</div>
-								<p>{item.copy}</p>
-							</article>
+								<p>{evidenceCopy[item.id]}</p>
+								<span class="evidence-go" aria-hidden="true">Jump to chart ↓</span>
+							</a>
 						))}
+					</nav>
+
+					<section class="bench-block" id="agent-comparison">
+						<div class="bench-head">
+							<p class="eyebrow">02 · Agent comparison</p>
+							<h3>Same bugs, same model, one meter.</h3>
+							<p>
+								Histh against other coding agents on SWE-bench Lite, graded by the official harness in
+								Docker, with tokens and cost read off a recording proxy rather than self-reports.
+							</p>
+							<code class="command">pnpm bench:agents --isolate --trials 3 · bench:grade · bench:bundle</code>
+						</div>
+						{matchups.length === 0 ? (
+							<div class="empty-state">No matchups published yet.</div>
+						) : (
+							<div class="benchmark-grid">
+								{matchups.map((m) => {
+									const free = m.agents.find((a) => a.isFreeCode);
+									const rival = m.agents.find((a) => !a.isFreeCode);
+									const provisional = !m.graded || m.isolation === "none";
+									const edge =
+										free?.meanTokens !== undefined && rival?.meanTokens !== undefined
+											? `Histh used ${Math.abs(Math.round((1 - free.meanTokens / rival.meanTokens) * 100))}% ${free.meanTokens <= rival.meanTokens ? "fewer" : "more"} tokens per trial than ${displayName(rival.id)}.`
+											: undefined;
+									return (
+										<BenchmarkCard
+											title={`${displayName(US)} vs ${m.agents.filter((a) => !a.isFreeCode).map((a) => displayName(a.id)).join(", ")}`}
+											detail={`${m.model} · ${m.sharedInstances.length} instances · ${m.graded ? "graded" : "ungraded"} · ${m.isolation === "container" ? "container" : "open network"}${provisional ? " · provisional" : ""}`}
+											max={1}
+											rows={m.agents.map((a) => ({
+												label: displayName(a.id),
+												value: a.rate,
+												display: `${Math.round(a.rate * 100)}% · ${a.successes}/${a.trials}`,
+												note: a.meanTokens !== undefined ? `${tok(a.meanTokens)} tok/trial` : "unmetered",
+												featured: a.isFreeCode,
+												color: agentColor(a.id),
+											}))}
+											footnote={edge}
+										/>
+									);
+								})}
+							</div>
+						)}
+						<a class="button button-secondary bench-more" href="/benchmark">Full matrix, cost scatter, and every caveat <span aria-hidden="true">↗</span></a>
+					</section>
+
+					<section class="bench-block" id="optimization-task">
+						<div class="bench-head">
+							<p class="eyebrow">03 · Optimization task</p>
+							<h3>Make a tested primitive faster.</h3>
+							<p>
+								The agent gets a working implementation, an exhaustive verifier, and a deterministic cost
+								model. Score is doublings of improvement; time is recorded, never capped. Tasks are jcode
+								bench v1, unmodified, so the numbers sit on the same axis as jcode’s published runs.
+							</p>
+							<code class="command">pnpm bench:jcode --agents freecode,claude-code</code>
+						</div>
+						{opt.tasks.length === 0 ? (
+							<div class="empty-state">No optimisation runs published yet.</div>
+						) : (
+							<div class="stack">
+								<StatTiles tiles={optTiles} />
+								{opt.tasks.map((t) => <OptimizationTask task={t} />)}
+								<p class="source-note">
+									Rank is by the official final grade on the submission as left; a run whose final
+									verification failed has no score. <em>Best</em> is the highest sample the agent saw and
+									can sit above the final. jcode’s variance note puts run-to-run spread near 0.1, so a
+									smaller gap says nothing. Tasks are the public{" "}
+									<a class="inline-link" href="https://github.com/1jehuang/jcode-bench" target="_blank" rel="noreferrer">1jehuang/jcode-bench</a>.
+								</p>
+							</div>
+						)}
+					</section>
+
+					<section class="bench-block" id="confidence-stepping">
+						<div class="bench-head">
+							<p class="eyebrow">04 · Confidence stepping</p>
+							<h3>A jump to 100 is a claim.</h3>
+							<p>
+								The todo tool asks for a confidence per item, at assignment and again at completion. A low
+								number at assignment is signal; a leap straight to 100 at the end is a claim. With the gate
+								on, a spike sends the model back to verify.
+							</p>
+							<code class="command">pnpm bench:signals</code>
+						</div>
+						<ConfidenceChart report={signals} />
+					</section>
+
+					<section class="bench-block" id="hill-climbable-goals">
+						<div class="bench-head">
+							<p class="eyebrow">05 · Hill-climbable goals</p>
+							<h3>Give the agent a metric to climb.</h3>
+							<p>
+								Every goal is rated 0–100 for how measurable its progress is. Below the gate, the harness
+								asks for a reframe into something with a check to iterate against.
+							</p>
+							<code class="command">pnpm bench:signals</code>
+						</div>
+						<HillClimbChart report={signals} />
+					</section>
+
+					<section class="bench-block" id="auto-poke">
+						<div class="bench-head">
+							<p class="eyebrow">06 · Auto-poke</p>
+							<h3>Most failures are early exits.</h3>
+							<p>
+								When a turn ends with todo items open, the loop can poke the model back to work—capped, and
+								stopped the moment a poke changes nothing. Off by default until these numbers say otherwise.
+							</p>
+							<code class="command">pnpm bench:signals · FREECODE_AUTO_POKE=1 to enable</code>
+						</div>
+						{poke.sessionsWithTodos === 0 ? (
+							<div class="empty-state">No sessions with a todo list recorded yet.</div>
+						) : (
+							<div class="stack">
+								<StatTiles tiles={pokeTiles} />
+								<div class="benchmark-grid">
+									<BenchmarkCard
+										title="Sessions that ended with open todos"
+										detail="Lower is better · the before/after the default flip waits on"
+										rows={pokeCompare}
+										max={1}
+										footnote="A session counts as gate-on when a poke fired or the loop recorded a skip reason other than disabled. Sessions from before the gate existed count as off."
+									/>
+									{pokeSkips.length > 0 && (
+										<BenchmarkCard
+											title="Why the loop did not poke"
+											detail="Every stop with a todo list present is recorded, poked or not"
+											rows={pokeSkips}
+										/>
+									)}
+								</div>
+							</div>
+						)}
+					</section>
+
+					<div class="bench-summary">
+						<StatTiles tiles={footerTiles} />
+						<p class="source-note">
+							Every harness lives under <code>bench/</code>; the operator reference is{" "}
+							<code>HARNESS-BENCH.md</code> at the repo root, and the design is in{" "}
+							<code>docs/specs/2026-09-12-harness-bench.md</code>.
+						</p>
 					</div>
 				</div>
 			</section>
@@ -212,22 +475,25 @@ const githubUrl = "https://github.com/ayandexyz/omacode";
 						<p class="lede-small">
 							Bring your provider, open a project, and let the harness handle the loop.
 						</p>
-						<a class="text-link" href="https://docs.freecode.website/" target="_blank" rel="noreferrer">
+						<a class="button button-secondary" href={docsUrl} target="_blank" rel="noreferrer">
 							Read the documentation <span aria-hidden="true">↗</span>
 						</a>
 					</div>
 
 					<div class="terminal" data-install-panel data-reveal>
-						<div class="terminal-tabs" role="tablist" aria-label="Installation method">
-							{installCommands.map((installer, index) => (
-								<button type="button" role="tab" aria-selected={index === 0 ? "true" : "false"} data-install-tab data-command={installer.command}>
-									{installer.label}
-								</button>
-							))}
+						<div class="terminal-bar">
+							<span class="terminal-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+							<div class="terminal-tabs" role="tablist" aria-label="Installation method">
+								{installCommands.map((installer, index) => (
+									<button type="button" role="tab" aria-selected={index === 0 ? "true" : "false"} data-install-tab data-command={installer.command}>
+										{installer.label}
+									</button>
+								))}
+							</div>
 						</div>
 						<div class="terminal-command">
 							<code><span aria-hidden="true">$ </span><span data-install-command>{installCommands[0].command}</span></code>
-							<button type="button" data-copy-command>Copy</button>
+							<button type="button" class="button button-sm button-terminal" data-copy-command>Copy</button>
 						</div>
 					</div>
 				</div>
@@ -235,24 +501,26 @@ const githubUrl = "https://github.com/ayandexyz/omacode";
 		</main>
 
 		<footer class="site-footer">
-			<div class="footer-display" aria-hidden="true">HistH!</div>
+			<div class="footer-display" aria-hidden="true">Histh!</div>
 			<div class="shell footer-grid">
 				<div>
-					<a class="brand footer-brand" href="#top" aria-label="HistH home">
+					<a class="brand footer-brand" href="#top" aria-label="Histh home">
 						<img class="brand-logo" src="/logo.png" alt="" width="395" height="632" />
-						<span class="brand-wordmark">HistH!</span>
+						<span class="brand-wordmark">Histh!</span>
 					</a>
-					<p>Open source. Open research. Built for useful work.</p>
+					<p>Honey, I Shrunk the Harness. Open source. Open research. Built for useful work.</p>
 				</div>
 				<div class="footer-links">
 					<a href="#mission">Mission</a>
-					<a href="/benchmark">Benchmark</a>
+					<a href="#benchmarks">Benchmarks</a>
+					<a href="/benchmark">Agent bench</a>
 					<a href="#install">Install</a>
+					<a href={docsUrl} target="_blank" rel="noreferrer">Docs ↗</a>
 					<a href={githubUrl} target="_blank" rel="noreferrer">GitHub ↗</a>
 				</div>
 			</div>
 			<div class="shell footer-bottom">
-				<span>FreeCode / 2026</span>
+				<span>Histh / 2026</span>
 				<span>Numbers are published artifacts, not promises.</span>
 			</div>
 		</footer>

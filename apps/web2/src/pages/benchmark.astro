@@ -1,29 +1,42 @@
 ---
-import { benchmarkRuns, caveats, taskTitles } from "../data/benchmarks";
+import { agentColor, type BenchView, type MatrixCell } from "../data/agent-bench";
+import ComparisonCards from "../components/ComparisonCards.astro";
+import PerBugCost from "../components/PerBugCost.astro";
+import { agentName, models, runs, totals } from "../data/agent-bench-page";
+import { githubUrl } from "../data/site";
 import "../styles/global.css";
 import "../styles/benchmark.css";
 
-const githubUrl = "https://github.com/ayandexyz/omacode";
-const firstRun = benchmarkRuns[0];
+const firstRun = runs.find((r) => r.view.model === models[0]) ?? runs[0];
 
-const agentName = (id: string) => ({
-	freecode: "FreeCode",
-	"claude-code": "Claude Code",
-	opencode: "OpenCode",
-})[id] ?? id;
 
-const percent = (value: number) => `${Math.round(value * 100)}%`;
-const compact = (value: number) => new Intl.NumberFormat("en-US", {
-	notation: "compact",
-	maximumFractionDigits: 1,
-}).format(value);
-const dollars = (value: number) => `$${value.toFixed(value >= 1 ? 2 : 3)}`;
+const percent = (value: number | undefined | null) => (value == null ? "—" : `${Math.round(value * 100)}%`);
+const compact = (value: number | undefined | null) =>
+	value == null
+		? "—"
+		: new Intl.NumberFormat("en-US", {
+				notation: "compact",
+				maximumFractionDigits: 1,
+			}).format(value);
+const dollars = (value: number | undefined | null) => (value == null ? "—" : `$${value.toFixed(value >= 1 ? 2 : 3)}`);
 const seconds = (value: number) => `${(value / 1000).toFixed(value < 100000 ? 1 : 0)}s`;
-const date = (value: string) => new Intl.DateTimeFormat("en", {
-	month: "short",
-	day: "numeric",
-	year: "numeric",
-}).format(new Date(value));
+const date = (value: string) =>
+	new Intl.DateTimeFormat("en", {
+		month: "short",
+		day: "numeric",
+		year: "numeric",
+	}).format(new Date(value));
+const rivalNames = (view: BenchView) =>
+	view.agents.filter((a) => !a.isFreeCode).map((a) => agentName(a.id)).join(" / ");
+// What a trial actually means, in words. Graded, "failed" splits in two:
+// the grader rejecting a patch is a different fact from no patch at all.
+const cellStatus = (graded: boolean, c: MatrixCell) =>
+	c.ok
+		? { kind: "ok", glyph: "✓", text: graded ? "resolved" : "produced a patch" }
+		: graded && c.producedPatch
+			? { kind: "fail", glyph: "✕", text: "patched, not resolved" }
+			: { kind: "none", glyph: "–", text: "no patch" };
+const shortId = (id: string) => id.replace(/^[a-z]+__[a-z]+-/, "#");
 ---
 
 <!doctype html>
@@ -36,25 +49,25 @@ const date = (value: string) => new Intl.DateTimeFormat("en", {
 		<meta name="generator" content={Astro.generator} />
 		<meta
 			name="description"
-			content="FreeCode agent benchmark results on SWE-bench Lite, with outcomes, cost, tokens, and per-instance evidence."
+			content="Histh agent benchmark results on SWE-bench Lite, with outcomes, cost, tokens, and per-instance evidence."
 		/>
 		<meta name="theme-color" content="#f2f1ec" />
-		<title>Agent benchmark — HistH</title>
+		<title>Agent benchmark — Histh</title>
 	</head>
 	<body class="benchmark-page">
 		<a class="skip-link" href="#benchmark-main">Skip to benchmark</a>
 
 		<header class="benchmark-header shell">
-			<a class="brand header-brand" href="/" aria-label="FreeCode home">
+			<a class="brand header-brand" href="/" aria-label="Histh home">
 				<img class="brand-logo" src="/logo.png" alt="" width="395" height="632" />
 				<span class="brand-wordmark">Histh!</span>
 			</a>
 			<nav aria-label="Benchmark navigation">
 				<a href="/">Overview</a>
-				<a href="/benchmark" aria-current="page">Benchmark</a>
+				<a href="/benchmark" aria-current="page">Agent bench</a>
 				<a href="/#install">Install</a>
 			</nav>
-			<a class="github-link" href={githubUrl} target="_blank" rel="noreferrer">GitHub ↗</a>
+			<a class="button button-sm button-secondary github-link" href={githubUrl} target="_blank" rel="noreferrer">GitHub ↗</a>
 		</header>
 
 		<main id="benchmark-main">
@@ -69,269 +82,353 @@ const date = (value: string) => new Intl.DateTimeFormat("en", {
 						published artifacts, and the whole token bill.
 					</p>
 					<div class="hero-facts">
-						<span><strong>3</strong> matchups</span>
-						<span><strong>66</strong> paired trials</span>
-						<span><strong>2</strong> model families</span>
+						<span><strong>{totals.matchups}</strong> matchups</span>
+						<span><strong>{totals.trials}</strong> graded trials</span>
+						<span><strong>{totals.models}</strong> pinned models</span>
 					</div>
 				</div>
 			</section>
 
-			<section class="run-picker-wrap">
-				<div class="shell run-picker" aria-label="Choose a benchmark run">
-					<span>Compare</span>
-					<div class="run-picker-options" role="tablist" aria-label="Benchmark runs">
-						{benchmarkRuns.map((run, index) => (
-							<button
-								type="button"
-								role="tab"
-								aria-selected={index === 0 ? "true" : "false"}
-								aria-controls={`report-${run.key}`}
-								data-run-button={run.key}
-							>
-								<small>{run.model}</small>
-								{run.label.replace("FreeCode vs ", "vs ")}
-							</button>
-						))}
-					</div>
-				</div>
-			</section>
-
-			<div class="benchmark-reports">
-				{benchmarkRuns.map((run, runIndex) => {
-					const freecode = run.agents[0];
-					const rival = run.agents[1];
-					const outcomeDelta = rival.rate - freecode.rate;
-					return (
-						<article
-							class="benchmark-report shell"
-							id={`report-${run.key}`}
-							data-run-report={run.key}
-							hidden={runIndex !== 0}
-						>
-							<header class="report-header">
-								<div>
-									<p class="eyebrow">{run.model} · {run.instances.length} Django issues</p>
-									<h2>{run.label}</h2>
-								</div>
-								<div class="report-status">
-									<span class="status-dot status-good">Officially graded</span>
-									<span class:list={["status-dot", run.isolation === "none" && "status-warn"]}>
-										{run.isolation === "container" ? "Container isolated" : "No isolation · provisional"}
-									</span>
-									<span>Published {date(run.generatedAt)}</span>
-								</div>
-							</header>
-
-							{run.isolation === "none" && (
-								<div class="provisional-note">
-									<strong>Provisional run.</strong> Network and home-directory isolation were not enabled,
-									so this matchup is useful context—not headline evidence.
-								</div>
-							)}
-
-							<section class="score-grid" aria-label="Headline results">
-								<div class="score-card score-primary">
-									<span>Official outcome</span>
-									<strong>
-										{Math.abs(outcomeDelta) < 0.001
-											? "Tie"
-											: `${agentName(outcomeDelta > 0 ? rival.id : freecode.id)} +${Math.abs(outcomeDelta * 100).toFixed(1)} pts`}
-									</strong>
-									<p>{freecode.successes}/{freecode.trials} vs {rival.successes}/{rival.trials} resolved</p>
-								</div>
-								<div class="score-card">
-									<span>FreeCode token edge</span>
-									<strong>{run.tokenEdge}% fewer</strong>
-									<p>{compact(freecode.meanTokens)} vs {compact(rival.meanTokens)} mean tokens</p>
-								</div>
-								<div class="score-card">
-									<span>Comparable solved cost</span>
-									<strong>{dollars(run.cost[0].meanUsd)}</strong>
-									<p>FreeCode mean · rival {dollars(run.cost[1].meanUsd)}</p>
-								</div>
-							</section>
-
-							<section class="report-section">
-								<div class="report-section-heading">
-									<div>
-										<p class="eyebrow">01 / Outcome + efficiency</p>
-										<h3>The result, with the bill attached.</h3>
-									</div>
-									<p>Every number below includes all trials, not only successful runs.</p>
-								</div>
-
-								<div class="agent-panels">
-									{run.agents.map((agent) => (
-										<section class:list={["agent-panel", agent.id === "freecode" && "agent-panel-freecode"]}>
-											<div class="agent-title">
-												<div>
-													<span>{agent.id === "freecode" ? "This harness" : "Comparison harness"}</span>
-													<h4>{agentName(agent.id)}</h4>
-												</div>
-												<code>v{agent.version}</code>
-											</div>
-											<div class="outcome-bar" aria-label={`${percent(agent.rate)} resolved`}>
-												<span style={`width: ${agent.rate * 100}%`}></span>
-											</div>
-											<div class="agent-rate"><strong>{percent(agent.rate)}</strong><span>officially resolved</span></div>
-											<dl class="metric-list">
-												<div><dt>Median wall time</dt><dd>{seconds(agent.medianMs)}</dd></div>
-												<div><dt>Mean tokens</dt><dd>{compact(agent.meanTokens)}</dd></div>
-												<div><dt>Mean cost</dt><dd>{dollars(agent.meanUsd)}</dd></div>
-												<div><dt>Mean turns</dt><dd>{agent.meanTurns}</dd></div>
-												<div><dt>Median patch</dt><dd>{compact(agent.medianPatchBytes)}B</dd></div>
-												<div><dt>Cache hit</dt><dd>{percent(agent.cacheHitRate)}</dd></div>
-											</dl>
-											<p class="autonomy"><span>Autonomy</span><code>{agent.autonomy}</code></p>
-										</section>
+			{runs.length === 0 ? (
+				<p class="shell empty-runs">No matchups published yet. <code>pnpm bench:agents</code> writes one file per matchup.</p>
+			) : (
+				<>
+					<section class="run-picker-wrap">
+						<div class="shell run-picker">
+							<label class="model-picker">
+								<span>Model</span>
+								<select data-model-select aria-label="Pinned model">
+									{models.map((m) => (
+										<option value={m} selected={m === firstRun!.view.model}>
+											{m}
+										</option>
 									))}
-								</div>
-							</section>
+								</select>
+							</label>
+							<div class="run-picker-options" role="tablist" aria-label="Matchups on this model">
+								{runs.map(({ key, view }) => (
+									<button
+										type="button"
+										role="tab"
+										aria-selected={key === firstRun!.key ? "true" : "false"}
+										aria-controls={`report-${key}`}
+										data-run-button={key}
+										data-model={view.model}
+										hidden={view.model !== firstRun!.view.model}
+									>
+										<small>{view.isolation === "container" ? "Container" : "Provisional"} · {view.sharedInstances.length} bugs</small>
+										vs {view.agents.filter((a) => !a.isFreeCode).map((a) => agentName(a.id)).join(", ")}
+									</button>
+								))}
+							</div>
+						</div>
+					</section>
 
-							<section class="report-section">
-								<div class="report-section-heading">
-									<div>
-										<p class="eyebrow">02 / Instance matrix</p>
-										<h3>Every bug stays visible.</h3>
-									</div>
-									<p>Dots are graded trials. Filled means resolved; outlined means unresolved.</p>
-								</div>
-
-								<div class="matrix-wrap">
-									<table class="instance-table">
-										<thead>
-											<tr>
-												<th scope="col">SWE-bench issue</th>
-												{run.agents.map((agent) => <th scope="col">{agentName(agent.id)}</th>)}
-											</tr>
-										</thead>
-										<tbody>
-											{run.instances.map((instance) => (
-												<tr>
-													<th scope="row">
-														<strong>{instance.id.replace("django__django-", "#")}</strong>
-														<span>{taskTitles[instance.id]}</span>
-													</th>
-													{instance.cells.map((cell) => (
-														<td>
-															<div class="trial-dots" aria-label={`${cell.wins} of ${cell.trials} resolved`}>
-																{Array.from({ length: cell.trials }, (_, index) => (
-																	<span class:list={[index < cell.wins && "trial-win"]}></span>
-																))}
-															</div>
-															<small>{compact(cell.meanTokens)} tok · {dollars(cell.meanUsd)}</small>
-														</td>
-													))}
-												</tr>
-											))}
-										</tbody>
-									</table>
-								</div>
-							</section>
-
-							<section class="report-section evidence-callout">
-								<p class="eyebrow">03 / Cost evidence</p>
-								<div class="cost-copy">
-									<h3>Compare cost only where both harnesses solved the bug.</h3>
-									<p>
-										Across the mutually solved instances, FreeCode averaged
-										<strong>{dollars(run.cost[0].meanUsd)}</strong> and <strong>{compact(run.cost[0].meanTokens)}</strong>
-										tokens. {agentName(run.cost[1].id)} averaged <strong>{dollars(run.cost[1].meanUsd)}</strong>
-										and <strong>{compact(run.cost[1].meanTokens)}</strong> tokens.
-									</p>
-								</div>
-								<div class="cost-bars">
-									{run.cost.map((item) => (
+					<div class="benchmark-reports">
+						{runs.map(({ key, view, instances }) => {
+							const freecode = view.agents.find((a) => a.isFreeCode) ?? view.agents[0]!;
+							const rival = view.agents.find((a) => a.id === view.tokenEdge?.rivalId) ?? view.agents.find((a) => a !== freecode)!;
+							const outcomeDelta = rival.rate - freecode.rate;
+							const cost = view.cost && !view.cost.suppressed ? view.cost : undefined;
+							const costOf = (id: string) => cost?.perAgent.find((p) => p.id === id);
+							const freeUsd = costOf(freecode.id)?.meanUsd;
+							const rivalUsd = costOf(rival.id)?.meanUsd;
+							// Relative cost on mutually solved bugs: + is cheaper, − is costlier.
+							const costEdge = freeUsd != null && rivalUsd ? Math.round((1 - freeUsd / rivalUsd) * 100) : null;
+							const maxCost = Math.max(...(cost?.perAgent.map((p) => p.meanUsd ?? 0) ?? [0]), 0) || 1;
+							return (
+								<article class="benchmark-report shell" id={`report-${key}`} data-run-report={key} hidden={key !== firstRun!.key}>
+									<header class="report-header">
 										<div>
-											<span>{agentName(item.id)}</span>
-											<div><i style={`width: ${(item.meanUsd / Math.max(...run.cost.map((entry) => entry.meanUsd))) * 100}%`}></i></div>
-											<strong>{dollars(item.meanUsd)}</strong>
+											<p class="eyebrow">{view.model} · {view.sharedInstances.length} {view.taskSet.repo} issues</p>
+											<h2>{view.agents.map((a) => agentName(a.id)).join(" vs ")}</h2>
 										</div>
-									))}
-								</div>
-							</section>
+										<div class="report-status">
+											<span class:list={["status-dot", view.graded ? "status-good" : "status-warn"]}>
+												{view.graded ? "Officially graded" : "Ungraded · patch produced only"}
+											</span>
+											<span class:list={["status-dot", view.isolation === "none" ? "status-warn" : "status-good"]}>
+												{view.isolation === "container" ? "Container isolated" : "No isolation · provisional"}
+											</span>
+											<span>Published {date(view.generatedAt)}</span>
+										</div>
+									</header>
 
-							<footer class="run-meta">
-								<span>Run {run.runId}</span>
-								<span>SWE-bench Lite · django/django</span>
-								<span>{run.isolation === "container" ? "Network closed · fresh HOME" : "Open network · shared HOME"}</span>
-							</footer>
-						</article>
-					);
-				})}
-			</div>
+									{view.isolation === "none" && (
+										<div class="provisional-note">
+											<strong>Provisional run.</strong> Network and home-directory isolation were not enabled,
+											so this matchup is useful context—not headline evidence.
+										</div>
+									)}
+
+									<section class="score-grid" aria-label="Headline results">
+										<div class="score-card score-primary">
+											<span>{view.graded ? "Official outcome" : "Patches produced"}</span>
+											<strong>
+												{Math.abs(outcomeDelta) < 0.001
+													? "Tie"
+													: `${agentName(outcomeDelta > 0 ? rival.id : freecode.id)} +${Math.abs(outcomeDelta * 100).toFixed(1)} pts`}
+											</strong>
+											<p>{freecode.successes}/{freecode.trials} vs {rival.successes}/{rival.trials} {view.metric.label.toLowerCase()}</p>
+										</div>
+										<div class="score-card">
+											<span>Histh token edge</span>
+											<strong>
+												{view.tokenEdge
+													? `${Math.abs(view.tokenEdge.pctFewer)}% ${view.tokenEdge.pctFewer >= 0 ? "fewer" : "more"}`
+													: "unmetered"}
+											</strong>
+											<p>{compact(freecode.meanTokens)} vs {compact(rival.meanTokens)} mean tokens</p>
+										</div>
+										<div class="score-card">
+											<span>Comparable solved cost</span>
+											<strong>
+												{!cost
+													? "withheld"
+													: costEdge === null
+														? "unpriced"
+														: costEdge === 0
+															? "Same cost"
+															: `${Math.abs(costEdge)}% ${costEdge > 0 ? "cheaper" : "costlier"}`}
+											</strong>
+											<p>
+												{cost
+													? `${dollars(freeUsd)} vs ${dollars(rivalUsd)} mean per solved bug`
+													: "fewer than 3 bugs solved by every agent"}
+											</p>
+										</div>
+									</section>
+
+									<section class="report-section">
+										<div class="report-section-heading">
+											<div>
+												<p class="eyebrow">01 / Outcome + efficiency</p>
+												<h3>The result, with the bill attached.</h3>
+											</div>
+											<p>{view.metric.help} Every number below includes all trials, not only successful runs.</p>
+										</div>
+
+										<div class="agent-panels">
+											{view.agents.map((agent) => (
+												<section class:list={["agent-panel", agent.isFreeCode && "agent-panel-freecode"]}>
+													<div class="agent-title">
+														<div>
+															<span>{agent.isFreeCode ? "This harness" : "Comparison harness"}</span>
+															<h4 style={agent.isFreeCode ? undefined : `color: ${agentColor(agent.id)}`}>{agentName(agent.id)}</h4>
+														</div>
+														<code>v{agent.version}</code>
+													</div>
+													<div class="outcome-bar" aria-label={`${percent(agent.rate)} ${view.metric.label.toLowerCase()}`}>
+														<span style={`width: ${agent.rate * 100}%`}></span>
+													</div>
+													<div class="agent-rate"><strong>{percent(agent.rate)}</strong><span>{view.graded ? "officially resolved" : "produced a patch"}</span></div>
+													<dl class="metric-list">
+														<div><dt>Median wall time</dt><dd>{seconds(agent.medianMs)}</dd></div>
+														<div><dt>Mean tokens</dt><dd>{compact(agent.meanTokens)}</dd></div>
+														<div><dt>Mean cost</dt><dd>{dollars(agent.meanUsd)}</dd></div>
+														<div><dt>Worst trial</dt><dd>{dollars(agent.worstUsd)}</dd></div>
+														<div><dt>Mean turns</dt><dd>{agent.meanTurns?.toFixed(1) ?? "—"}</dd></div>
+														<div><dt>Cache hit</dt><dd>{percent(agent.cacheHitRate)}</dd></div>
+													</dl>
+													<p class="autonomy"><span>Autonomy</span><code>{agent.autonomy}</code></p>
+												</section>
+											))}
+										</div>
+
+										<ComparisonCards view={view} />
+									</section>
+
+									<section class="report-section">
+										<div class="report-section-heading">
+											<div>
+												<p class="eyebrow">02 / Instance matrix</p>
+												<h3>Every bug stays visible.</h3>
+											</div>
+											<p>
+												One row per bug, one chip per trial. Disagreement between trials of the same agent is the
+												interesting signal — it is what a single-run benchmark cannot show you. The last column is
+												Histh against {rivalNames(view)} on that bug: mean cost and tokens over every trial.
+											</p>
+										</div>
+
+										<p class="matrix-legend">
+											<span><i class="chip-key ok">✓</i> {view.graded ? "resolved" : "produced a patch"}</span>
+											{view.graded && <span><i class="chip-key fail">✕</i> patched, not resolved</span>}
+											<span><i class="chip-key none">–</i> no patch</span>
+											<span class="dim">hover a chip for time, tokens, cost and reason</span>
+										</p>
+
+										<div class="matrix-wrap">
+											<table class="instance-table">
+												<thead>
+													<tr>
+														<th scope="col">{view.taskSet.repo} issue</th>
+														{view.agents.map((agent) => <th scope="col">{agentName(agent.id)}</th>)}
+														<th scope="col">Histh vs {rivalNames(view)}</th>
+													</tr>
+												</thead>
+												<tbody>
+													{instances.map((instance) => (
+														<tr>
+															<th scope="row">
+																<span class="issue-title">{instance.title ?? instance.id}</span>
+																<strong>{shortId(instance.id)}{!instance.shared && " · partial"}</strong>
+															</th>
+															{instance.cells.map((cell) => (
+																<td>
+																	<div class="trial-chips" aria-label={`${cell.wins} of ${cell.trials} ${view.graded ? "resolved" : "patched"}`}>
+																		{cell.runs.map((t) => {
+																			const status = cellStatus(view.graded, t);
+																			return (
+																				<span
+																					class:list={["trial-chip", status.kind, { open: view.isolationMix.mixed && t.isolation !== "container" }]}
+																					style={t.ok ? `color: ${agentColor(t.agent)}` : undefined}
+																					title={`${status.text} · t${t.trial} · ${seconds(t.durationMs)} · ${t.reason} · ${t.patchBytes}B${t.turns !== undefined ? ` · ${t.turns} turns` : ""}${t.tokens !== undefined ? ` · ${compact(t.tokens)} tok` : ""}${typeof t.usd === "number" ? ` · ${dollars(t.usd)}` : ""}`}
+																				>
+																					{status.glyph}
+																				</span>
+																			);
+																		})}
+																	</div>
+																	<small>{compact(cell.meanTokens)} tok · {dollars(cell.meanUsd)}</small>
+																</td>
+															))}
+															<td>
+																<div class="edge-badges">
+																	{instance.edges.length === 0
+																		? <span class="dim">unmetered</span>
+																		: instance.edges.map((e) => <span class:list={["edge-badge", e.tone]}>{e.text}</span>)}
+																</div>
+															</td>
+														</tr>
+													))}
+												</tbody>
+											</table>
+										</div>
+									</section>
+
+									{cost && cost.perBug.length > 0 && <PerBugCost view={view} />}
+
+									{cost && (
+										<section class="report-section evidence-callout">
+											<p class="eyebrow">03 / Cost evidence</p>
+											<div class="cost-copy">
+												<h3>Compare cost only where every harness solved the bug.</h3>
+												<p>
+													Across the {cost.instances.length} mutually solved instances,{" "}
+													{cost.perAgent.map((p, i) => (
+														<>
+															{i > 0 && (i === cost.perAgent.length - 1 ? " and " : ", ")}
+															{agentName(p.id)} averaged <strong>{dollars(p.meanUsd)}</strong> and <strong>{compact(p.meanTokens)}</strong> tokens
+														</>
+													))}
+													.
+												</p>
+											</div>
+											<div class="cost-bars">
+												{cost.perAgent.map((item) => (
+													<div>
+														<span>{agentName(item.id)}</span>
+														<div><i style={`width: ${((item.meanUsd ?? 0) / maxCost) * 100}%`}></i></div>
+														<strong>{dollars(item.meanUsd)}</strong>
+													</div>
+												))}
+											</div>
+										</section>
+									)}
+
+									<section class="report-section">
+										<div class="report-section-heading">
+											<div>
+												<p class="eyebrow">{cost ? "04" : "03"} / Read before quoting</p>
+												<h3>What this matchup does not prove.</h3>
+											</div>
+											<p>Derived from this run’s own data, so a caveat retires itself when the run stops needing it.</p>
+										</div>
+										<div class="caveat-list">
+											{view.caveats.map((caveat, index) => (
+												<article>
+													<span>{String(index + 1).padStart(2, "0")}</span>
+													<h4>{caveat.title}</h4>
+													<p>{caveat.body}</p>
+												</article>
+											))}
+										</div>
+									</section>
+
+									<footer class="run-meta">
+										<span>Run {view.runId}{view.runs.length > 1 && ` + ${view.runs.length - 1} more`}</span>
+										<span>SWE-bench Lite · {view.taskSet.repo}</span>
+										<span>{view.isolation === "container" ? "Network closed · fresh HOME" : "Open network · shared HOME"}</span>
+									</footer>
+								</article>
+							);
+						})}
+					</div>
+				</>
+			)}
 
 			<section class="method-section">
 				<div class="shell">
-					<div class="report-section-heading method-heading">
-						<div>
-							<p class="eyebrow">04 / Read before quoting</p>
-							<h2>What these numbers do not prove.</h2>
-						</div>
-						<p>The benchmark is evidence with boundaries, not a universal agent ranking.</p>
-					</div>
-					<div class="caveat-grid">
-						{caveats.map((caveat, index) => (
-							<article>
-								<span>0{index + 1}</span>
-								<h3>{caveat.title}</h3>
-								<p>{caveat.body}</p>
-							</article>
-						))}
-					</div>
 					<div class="method-note">
 						<p>
 							<strong>Method:</strong> each harness receives the same checked-out repository, issue text,
 							model, key, time budget, and official SWE-bench grader. Container runs close the network
-							and use a fresh home directory. Token totals include cached input.
+							and use a fresh home directory. Token totals include cached input. Every number on this page
+							is read from the files <code>pnpm bench:agents</code> publishes.
 						</p>
-						<a class="button button-dark" href={githubUrl} target="_blank" rel="noreferrer">Inspect the repository ↗</a>
+						<a class="button button-primary" href={githubUrl} target="_blank" rel="noreferrer">Inspect the repository ↗</a>
 					</div>
 				</div>
 			</section>
 		</main>
 
 		<footer class="benchmark-footer">
-			<div class="footer-display" aria-hidden="true">HistH!</div>
+			<div class="footer-display" aria-hidden="true">Histh!</div>
 			<div class="shell benchmark-footer-content">
-				<a class="brand footer-brand benchmark-footer-brand" href="/" aria-label="HistH home">
+				<a class="brand footer-brand benchmark-footer-brand" href="/" aria-label="Histh home">
 					<img class="brand-logo" src="/logo.png" alt="" width="395" height="632" />
-					<span class="brand-wordmark">HistH!</span>
+					<span class="brand-wordmark">Histh!</span>
 				</a>
 				<a href="/">Back to overview ↑</a>
 			</div>
 		</footer>
 
-		<script define:vars={{ initialRun: firstRun.key }}>
-			const buttons = document.querySelectorAll("[data-run-button]");
+		<script define:vars={{ initialRun: firstRun?.key ?? "" }}>
+			const select = document.querySelector("[data-model-select]");
+			const buttons = [...document.querySelectorAll("[data-run-button]")];
 			const reports = document.querySelectorAll("[data-run-report]");
 
-			function selectRun(key, updateHash = true) {
-				let matched = false;
-				for (const report of reports) {
-					const selected = report.getAttribute("data-run-report") === key;
-					report.toggleAttribute("hidden", !selected);
-					if (selected) matched = true;
-				}
-				if (!matched) return selectRun(initialRun, false);
-				for (const button of buttons) {
-					button.setAttribute("aria-selected", String(button.getAttribute("data-run-button") === key));
-				}
-				if (updateHash) {
-					history.replaceState(null, "", `#${key}`);
-					const picker = document.querySelector(".run-picker-wrap");
-					if (picker) {
-						window.scrollTo({
-							top: picker.getBoundingClientRect().top + window.scrollY - 12,
-							behavior: "smooth",
-						});
-					}
+			function showModel(model) {
+				for (const button of buttons) button.hidden = button.dataset.model !== model;
+				if (select) select.value = model;
+			}
+
+			function selectRun(slug, scroll = true) {
+				const button = buttons.find((b) => b.dataset.runButton === slug);
+				if (!button) return slug === initialRun ? undefined : selectRun(initialRun, false);
+				// A run belongs to exactly one model; opening it (e.g. from a shared
+				// #hash) switches the picker to that model too.
+				showModel(button.dataset.model);
+				for (const report of reports) report.hidden = report.dataset.runReport !== slug;
+				for (const b of buttons) b.setAttribute("aria-selected", String(b === button));
+				history.replaceState(null, "", `#${slug}`);
+				const picker = document.querySelector(".run-picker-wrap");
+				if (scroll && picker) {
+					window.scrollTo({ top: picker.getBoundingClientRect().top + window.scrollY - 12, behavior: "smooth" });
 				}
 			}
 
 			for (const button of buttons) {
-				button.addEventListener("click", () => selectRun(button.getAttribute("data-run-button") ?? initialRun));
+				button.addEventListener("click", () => selectRun(button.dataset.runButton));
 			}
+
+			// Picking a model swaps the whole page: numbers measured on different
+			// models never share a table.
+			select?.addEventListener("change", () => {
+				const first = buttons.find((b) => b.dataset.model === select.value);
+				if (first) selectRun(first.dataset.runButton, false);
+			});
 
 			selectRun(location.hash.slice(1) || initialRun, false);
 		</script>

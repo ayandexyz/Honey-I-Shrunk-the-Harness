@@ -1,5 +1,6 @@
 import {
   Box,
+  Image,
   Markdown,
   Text,
   truncateToWidth,
@@ -224,7 +225,16 @@ class WidthBounded implements Component {
 /**
  * Create a user message component — gray background with markdown content
  */
-export function createUserMessageComponent(content: string): Component {
+/** A pasted image echoed under the user's message. */
+export interface UserImage {
+  data: string;
+  mediaType: string;
+}
+
+export function createUserMessageComponent(
+  content: string,
+  images: UserImage[] = [],
+): Component {
   const displayContent = stripPrefix(content);
 
   // Box invokes this formatter once per rendered line, so it can't tell which
@@ -250,14 +260,27 @@ export function createUserMessageComponent(content: string): Component {
   box.addChild(markdown);
 
   const boundedBox = new WidthBounded(box);
-  
+  // Images sit outside WidthBounded: truncateToWidth would cut the Kitty /
+  // iTerm2 escape sequence, which carries the whole file. On a terminal
+  // without an image protocol, Image renders a one-line `[Image: …]` fallback.
+  const imageRows = images.map(
+    (img) =>
+      new Image(img.data, img.mediaType, { fallbackColor: chalk.dim }, {
+        maxWidthCells: 60,
+        maxHeightCells: 20,
+      }),
+  );
+
   return {
     render(width: number): string[] {
       prefixPending = true;
-      return boundedBox.render(width);
+      const lines = boundedBox.render(width);
+      if (imageRows.length === 0) return lines;
+      return [...lines, ...imageRows.flatMap((img) => ["", ...img.render(width)])];
     },
     invalidate() {
       if (typeof boundedBox.invalidate === "function") boundedBox.invalidate();
+      for (const img of imageRows) img.invalidate();
     },
     addChild() {},
     destroy() {},

@@ -5,6 +5,7 @@ import { messageStore, type MessageStore } from "../state/message-store.js";
 import { ThinkingMessage } from "./message-row.js";
 import { normalize, type Selection } from "../state/selection-store.js";
 import { highlightRange } from "../utils/ansi-select.js";
+import { sliceWithImages } from "./image-clip.js";
 
 /**
  * VirtualMessageList — scrollable message history that implements pi-tui's Component interface.
@@ -374,7 +375,8 @@ export class VirtualMessageList implements Component {
       // otherwise the editor, which renders right after this component,
       // jumps position the moment scrolling starts (the alt screen has no
       // native scrollback to paper over a height that swings with mode).
-      return lines.slice(-(content + 1));
+      const from = Math.max(0, lines.length - (content + 1));
+      return sliceWithImages(lines, from, lines.length);
     }
 
     // Scrolled mode: return a stable window of lines plus an indicator row.
@@ -383,7 +385,7 @@ export class VirtualMessageList implements Component {
     // by a row the moment scrolling starts.
     this.scrollTop = Math.min(this.scrollTop, lines.length - content);
     const start = this.scrollTop;
-    const window = lines.slice(start, start + content);
+    const window = sliceWithImages(lines, start, start + content);
     // const below = lines.length - (start + content);
     // window.push(
     //   chalk.dim(

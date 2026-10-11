@@ -84,6 +84,11 @@
           "default": true,
           "description": "Mine finished turns for facts worth remembering."
         },
+        "autoRecall": {
+          "type": "boolean",
+          "default": true,
+          "description": "Retrieve and inject relevant memories into every request. Off leaves the memory tool in place."
+        },
         "extractEveryNRuns": {
           "type": "integer",
           "minimum": 1,
@@ -92,7 +97,7 @@
         },
         "retrievalJudge": {
           "type": "boolean",
-          "default": true,
+          "default": false,
           "description": "Judge retrieved memories for relevance before injecting them. Fails closed."
         },
         "autoConsolidate": {
@@ -204,6 +209,35 @@
           "minimum": 1,
           "default": 100,
           "description": "Checkpoints retained per session; the oldest are trimmed."
+        }
+      }
+    },
+    "tasks": {
+      "description": "Background agents and shells report back when they finish.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "notify": {
+          "type": "boolean",
+          "default": true,
+          "description": "Deliver completion notifications. Off makes background requests run in the foreground."
+        }
+      }
+    },
+    "cache": {
+      "description": "Prompt-cache behaviour.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "warming": {
+          "type": "string",
+          "enum": [
+            "off",
+            "streaming",
+            "idle"
+          ],
+          "default": "off",
+          "description": "Refresh the Anthropic prompt cache before its TTL ends, when the expected saving is worth it."
         }
       }
     }

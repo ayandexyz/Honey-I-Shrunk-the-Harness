@@ -101,9 +101,16 @@ it — are **dropped before anything touches disk**. Not to protect the agent
 under test (it cannot see this repo): to keep an answer key out of a repository
 agents work in every day.
 
-The django mirror (~250 MB) is cloned on first use into
-`bench/agent-bench/.cache/repos/` and hardlinked per trial, so a run does not
-measure GitHub's mood.
+The django mirror (~800 MB) is cloned on first use into
+`bench/agent-bench/.cache/repos/`, so a run does not measure GitHub's mood.
+Trials never clone the mirror itself: it carries every later commit, branch
+and tag, fix included, and on 2026-10-11 a Sonnet 5 trial found the answer
+with `git log --all | grep`. Instead each base commit gets a cached bare repo
+holding only that commit and its ancestors (`.cache/repos/base/`, ~170 MB and
+~8 s once per instance), and each trial clones that, with no remote, no tags
+and no alternates link. `createWorkspace` refuses to hand over a workspace
+that can reach, or merely stores, any commit past the base
+(`assertNoFutureHistory`).
 
 `.cache/` and `results/` are git-ignored.
 
@@ -244,8 +251,10 @@ freecode from a **released** binary (build arg `FREECODE_VERSION`, default
 v0.43.0), the others from npm — because at trial time there is no network to
 install anything with. `agentVersion` is read from the image, `$HOME` is a
 tmpfs-style throwaway inside the container (no memory between trials, §6.3),
-the workspace mounts rw at `/workspace`, the bench dir ro at `/bench`
-(`{benchDir}` resolves there), and env values ride bare `-e NAME` flags so
+the workspace mounts rw at `/workspace` and nothing else from the host does:
+`bench/agent-bench` holds `results/` (earlier trials' patches for the same
+instance) and the full mirror, so it is mounted only into the proxy container,
+and an adapter using `{benchDir}` is refused under `--isolate`. Env values ride bare `-e NAME` flags so
 `argv.json` never contains a secret. A timed-out trial gets `docker rm -f`,
 not just a dead client.
 

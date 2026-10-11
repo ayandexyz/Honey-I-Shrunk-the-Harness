@@ -47,6 +47,7 @@ import {
   type WebCredentials,
 } from "./providers/config.js";
 import { resolveCatalogue } from "./providers/catalogue.js";
+import { listSettings, setSetting } from "./settings/toggles.js";
 import { logger } from "./utils/logger.js";
 import { formatFatalError } from "./cli/format-fatal-error.js";
 import { validateParams, INVALID_PARAMS } from "./ipc/validate-params.js";
@@ -1499,6 +1500,18 @@ export const methodHandlers: Record<
   ): Promise<void> => {
     const { mode } = params as { mode: string };
     setLastAgentMode(mode);
+  },
+
+  // The /settings panel. Every reader re-reads settings.json at least once per
+  // run, so a change applies from the next turn without a restart.
+  "settings.list": async (params: Record<string, unknown>): Promise<unknown> => {
+    const { cwd } = params as { cwd: string };
+    return listSettings(cwd || process.cwd());
+  },
+
+  "settings.set": async (params: Record<string, unknown>): Promise<void> => {
+    const { key, value } = params as { key: string; value: string };
+    setSetting(key, value);
   },
 
   // ========== Memory Methods ==========

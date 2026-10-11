@@ -1,0 +1,326 @@
+---
+title: "AI guardrails"
+description: "The safety checks that control agent actions, runtime behavior, secrets, and recovery."
+---
+
+# AI guardrails in FreeCode
+
+## What is an AI guardrail?
+
+An **AI guardrail** is a rule enforced by software around an AI model. It limits
+what the model can do, checks its actions, or stops unsafe and runaway behavior.
+
+A prompt such as “do not delete files” is only an instruction. The model might
+misunderstand or ignore it. A guardrail is stronger because the application
+checks the action in code before allowing it.
+
+For example:
+
+```text
+Model asks to edit a file
+        ↓
+FreeCode checks the current agent mode and permission rules
+        ↓
+Allow it, deny it, or ask the user for approval
+        ↓
+Only an allowed action reaches the tool
+```
+
+Guardrails are **defense in depth**. Several small, independent checks are safer
+than relying on one prompt or one filter.
+
+## Short answer
+
+FreeCode has guardrails for **agent actions**, **permissions**, **runtime
+behavior**, **secrets**, and **recovery**. These controls are implemented across
+several subsystems rather than in one component named `AI Guardrail`.
+
+FreeCode does **not** currently have a universal content-moderation system that
+classifies every prompt and response for harmful content, personal information,
+hallucinations, or prompt injection.
+
+## How a tool call is guarded
+
+A simplified tool-call path looks like this:
+
+```text
+Model requests a tool
+  → role tool allowlist
+  → PreToolUse hook
+  → agent-mode enforcement
+  → deny / ask / allow permission rules
+  → PermissionRequest hook
+  → user approval when required
+  → tool input validation
+  → tool execution
+  → PostToolUse hook and rollout record
+```
+
+A rejected call is recorded as a denial. It is not counted as a tool that ran.
+
+## Guardrails that are implemented
+
+### 1. Agent modes
+
+An **agent mode** sets the default level of access for a session.
+
+| Mode | Default behavior |
+| --- | --- |
+| `plan` | Read-only. Mutating tools are denied. |
+| `review` | Read-only. Explicitly allowed read-only shell commands can pass through the permission rules. |
+| `explore` | Read-only and non-interactive. An action that would require approval is denied instead. |
+| `build` | Read operations inside the project are normally allowed. Mutating, network, and out-of-project actions normally ask for approval. |
+| `danger` | Bypasses the normal permission rules, `PermissionRequest` hooks, and approval prompts. |
+
+The read-only modes are **hard enforcement**: a normal allow rule cannot turn a
+mutating tool into an allowed operation. Unknown tools are treated as mutating,
+which is a **fail-closed** default. An MCP or extension tool is considered
+read-only only when it explicitly declares that property.
+
+`danger` is an intentional escape hatch. It bypasses the permission pipeline,
+but the role's tool allowlist and `PreToolUse` hooks still run before that
+pipeline. It should still be treated as unrestricted access for normal safety
+decisions.
+
+Implementation:
+
+- `apps/core/src/permission/mode-policy.ts`
+- `apps/core/src/permission/evaluate.ts`
+- `apps/core/src/agent/loop.ts`
+
+### 2. Permission rules and approval prompts
+
+Permission rules can return three decisions:
+
+- **allow** — run the tool without asking.
+- **ask** — pause and request the user's approval.
+- **deny** — refuse the operation.
+
+Rule precedence is:
+
+```text
+deny → ask → allow → mode default
+```
+
+A deny rule is absolute and cannot be overridden by an allow rule or a session
+grant. Rules can be scoped to tool names, file paths, URLs, and command prefixes.
+The user can approve an action once, for the session, for the project, or as a
+persistent rule.
+
+The `--yes` option automatically accepts actions whose decision is `ask`. It
+does not override a hard `deny`. Unattended runs use their own permission
+envelope instead of waiting for a user who is not present.
+
+Implementation:
+
+- `apps/core/src/permission/rules.ts`
+- `apps/core/src/permission/settings.ts`
+- `apps/core/src/permission/prompt.ts`
+
+### 3. Hooks
+
+Hooks let a project add policy around an action without changing the agent
+loop. Important safety-related hooks include:
+
+- **PreToolUse** — may block a tool call or modify its input before permission
+  evaluation.
+- **PermissionRequest** — may allow or deny a permission-gated action.
+- **PostToolUse** and **PostToolUseFailure** — observe what happened after a
+  tool ran.
+
+A permission rule or agent mode that already denied an action cannot be changed
+to allow by a `PermissionRequest` hook.
+
+Implementation: `apps/core/src/hooks/`
+
+### 4. Role and subagent capability limits
+
+An agent role may have a tool allowlist. Calling a tool outside that list is
+treated as a hallucinated or stale tool call and is denied.
+
+Subagents use capability profiles and are read-only by default. The agent
+registry also limits nesting and the number of concurrently running agents so
+the model cannot grow an unbounded subagent tree.
+
+Implementation:
+
+- `apps/core/src/permission/profiles.ts`
+- `apps/core/src/agent/registry/`
+- `apps/core/src/agent/subagent.ts`
+
+### 5. Tool input validation
+
+Tools define schemas for their arguments. FreeCode rejects missing or invalid
+arguments before executing the tool. Individual tools can also add custom
+validation and permission checks.
+
+This protects against malformed model output, but it does not prove that a
+valid-looking command is safe. Permission checks are still required.
+
+Implementation:
+
+- `apps/core/src/tools/factory.ts`
+- `apps/core/src/tools/orchestrator.ts`
+
+### 6. Runaway-loop protection
+
+The **loop-health evaluator** watches the agent for patterns that suggest it is
+stuck:
+
+- repeated identical tool calls;
+- several turns with no file changes;
+- edit/revert oscillation;
+- highly similar repeated reasoning;
+- an explicit iteration limit when the caller provides one.
+
+The first threshold normally produces a warning. Stronger repetition or
+oscillation produces a hard stop. Normal interactive sessions are not stopped
+by a fixed iteration count by default; headless runs and subagents can provide a
+limit.
+
+Implementation: `apps/core/src/effect/loop-health.ts`
+
+### 7. Timeouts and process limits
+
+Timeouts prevent an external service or command from hanging forever:
+
+- provider response headers default to a 300-second timeout;
+- silence on a live SSE stream defaults to 180 seconds;
+- hooks have execution timeouts;
+- foreground shell commands have bounded waiting behavior;
+- background shells and monitors have count and lifetime limits.
+
+Long-running shell commands may be moved into the background instead of being
+killed. The agent must then inspect or stop them with the background-shell
+tools.
+
+Implementation:
+
+- `apps/core/src/providers/fetch-timeout.ts`
+- `apps/core/src/tools/bash.ts`
+- `apps/core/src/tools/shells/`
+
+### 8. Secret filtering and redaction
+
+The **secret filter** recognizes common credential formats, including private
+keys and tokens for Anthropic, OpenAI, AWS, GitHub, GitLab, Google, and Slack.
+It is used to keep likely secrets out of persistent memory, memory embeddings,
+and unattended-run reports. Configuration returned through IPC is also
+redacted.
+
+This is a targeted filter, not universal **data loss prevention (DLP)**. It does
+not inspect or block every file read, tool result, prompt, provider request, or
+final answer. A new or unusual secret format may not match its patterns.
+
+Implementation:
+
+- `apps/core/src/memory/graph/secret-filter.ts`
+- `apps/core/src/tools/memory.ts`
+- `apps/core/src/autonomous/night-store.ts`
+
+### 9. Unattended-run envelope and budgets
+
+An unattended run cannot stop to ask a person for approval. Its **permission
+envelope** therefore makes immediate allow-or-deny decisions and records
+refusals for the morning report. Command scanning recognizes denied commands
+even when they appear after shell separators, environment assignments, or path
+qualified executable names.
+
+The autonomous-run subsystem also defines ceilings for turns, tokens, elapsed
+time, and USD cost. These budget checks belong to bounded autonomous workflows;
+they are not a universal spending limit on every normal interactive session.
+
+Implementation:
+
+- `apps/core/src/autonomous/envelope.ts`
+- `apps/core/src/autonomous/budget.ts`
+
+### 10. Checkpoints and rewind
+
+FreeCode captures a file checkpoint for each user turn when checkpoints are
+enabled. `/rewind` can restore the conversation and the files changed since
+that checkpoint.
+
+This is a **recovery guardrail**, not prevention: the change happens first, and
+the user can undo it afterward. A checkpoint diff cannot distinguish an agent's
+edit from a human edit made after the checkpoint, so the preview must be read
+carefully before confirming a rewind.
+
+Implementation: `apps/core/src/checkpoint/`
+
+### 11. Audit trail and observability
+
+The rollout log records model calls, executed tools, denied tool calls, hooks,
+timeouts, token usage, and errors. `freecode trace` turns these events into a
+human-readable execution trace.
+
+An audit trail does not prevent an unsafe action by itself. It makes behavior
+visible, testable, and diagnosable, which supports the preventive guardrails.
+
+Implementation: `apps/core/src/rollout/`
+
+## What is not implemented as a universal guardrail
+
+FreeCode should not be described as having all-purpose AI safety filtering. In
+particular, it does not currently provide a universal:
+
+- **content moderation** classifier for every input and output;
+- **hallucination** or factual-accuracy checker;
+- **prompt-injection** detector for every repository file or web page;
+- **PII detector** for every provider request;
+- **DLP gateway** over all tool and model traffic;
+- operating-system sandbox for every normal interactive session.
+
+Some benchmarks, evaluations, and autonomous workflows use containers or
+restricted environments. That does not mean every normal FreeCode session is
+sandboxed.
+
+## Guardrails are not a security boundary
+
+Permissions reduce risk, but an allowed shell command can still read, modify,
+or transmit anything available to the FreeCode process. Rules that inspect a
+tool name or command prefix are not equivalent to kernel-level isolation.
+
+For higher-risk work:
+
+1. Use `plan`, `review`, or `explore` when changes are not required.
+2. Keep deny rules for sensitive files and dangerous commands.
+3. Review approval prompts rather than automatically accepting them.
+4. Avoid `danger` and `--yes` unless the environment is already trusted.
+5. Use an OS container or virtual machine when strong isolation is required.
+6. Keep credentials outside the project and expose only the minimum necessary
+   environment variables.
+7. Review checkpoint paths before using `/rewind`.
+
+## Key terms
+
+- **Guardrail:** code that constrains or checks AI behavior.
+- **Permission rule:** an allow, ask, or deny policy for a tool action.
+- **Agent mode:** the session's default capability level.
+- **Fail closed:** deny an unknown or uncertain action instead of assuming it
+  is safe.
+- **Defense in depth:** multiple independent layers of protection.
+- **Hook:** project-defined code that observes, changes, or blocks a lifecycle
+  event.
+- **Capability profile:** the operations available to an agent or subagent.
+- **Loop health:** detection of repeated, stagnant, or oscillating behavior.
+- **Permission envelope:** the fixed policy used when no user is present.
+- **Content moderation:** classification of text or media against safety rules.
+- **Prompt injection:** untrusted content that tries to redirect the agent.
+- **DLP:** data loss prevention—controls that stop sensitive information from
+  leaving an approved boundary.
+- **Sandbox:** operating-system isolation that restricts files, processes, and
+  network access.
+- **Checkpoint:** a recoverable snapshot used to undo later file changes.
+
+## Summary
+
+FreeCode's strongest guardrails control **what the agent can execute** and **how
+long it can continue**. Permissions, modes, hooks, validation, loop detection,
+timeouts, secret filtering, unattended envelopes, checkpoints, and traces are
+all real parts of the codebase.
+
+They are not a replacement for content moderation or operating-system
+sandboxing. The safest mental model is: FreeCode has layered application-level
+controls, while strong isolation must still come from the environment in which
+FreeCode runs.

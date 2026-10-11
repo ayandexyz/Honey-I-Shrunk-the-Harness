@@ -21,7 +21,8 @@ import { registerBuiltInCommands } from "./commands/built-in.js";
 import { Input, type Component } from "@earendil-works/pi-tui";
 import { Loader, Text } from "@earendil-works/pi-tui";
 import chalk from "chalk";
-import { palette, refreshPalette } from "./palette.js";
+import { palette, refreshPalette, setTerminalScheme } from "./palette.js";
+import { detectTerminalScheme } from "./utils/terminal-scheme.js";
 import { omarchyPalette, watchOmarchyTheme } from "./utils/omarchy-theme.js";
 import { defaultEditorTheme, MODE_COLORS } from "./themes.js";
 import {
@@ -94,6 +95,8 @@ import {
   setCurrentModel,
   getLastAgentMode,
   setLastAgentMode,
+  listSettings,
+  setSetting,
   getPromptHistory,
   appendPromptHistory,
   setApiKey,
@@ -155,6 +158,8 @@ import {
   providerRows,
 } from "./components/model-picker.js";
 import { createMcpSelector } from "./components/mcp-picker.js";
+import { createSettingsPanel } from "./components/settings-panel.js";
+import type { SettingsList } from "@earendil-works/pi-tui";
 import { ShellsPanel } from "./components/shells-panel.js";
 import { AgentsPanel } from "./components/agents-panel.js";
 import { NightPanel } from "./components/night-panel.js";
@@ -308,6 +313,7 @@ let modelMenu: OverlayHandle | null = null;
 let effortPicker: EffortPicker | null = null;
 let resumeSelector: ResumePicker | null = null;
 let mcpSelector: SearchableSelectList | null = null;
+let settingsPanel: SettingsList | null = null;
 let treeSelector: SearchableSelectList | null = null;
 /** `/rewind` — two steps: pick a checkpoint, then confirm the file list. */
 let rewindSelector: SearchableSelectList | null = null;
@@ -996,6 +1002,53 @@ async function forkSession(): Promise<void> {
     showMessage(`**Forked into a new session** (${result.messages?.length ?? 0} messages carried over).`);
   } catch (err) {
     showMessage(`**Error:** ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+function hideSettingsPanel(): void {
+  if (settingsPanel) {
+    const idx = tui.children.indexOf(settingsPanel);
+    if (idx !== -1) tui.children.splice(idx, 1);
+    settingsPanel = null;
+  }
+  tui.setFocus(focusTarget());
+  tui.requestRender();
+}
+
+/**
+ * The /settings panel: core's flippable settings, cycled with Enter. Core
+ * writes ~/.freecode/settings.json and every reader picks it up next turn.
+ */
+async function showSettingsPanel(): Promise<void> {
+  hideSettingsPanel();
+  hideMcpSelector();
+  hideModelSelector();
+  try {
+    const settings = await listSettings(process.cwd());
+    const previous = new Map(settings.map((s) => [s.key, s.value]));
+    const panel = createSettingsPanel(
+      settings,
+      8,
+      (key, value) => {
+        void setSetting(key, value).then(
+          () => previous.set(key, value),
+          (err) => {
+            // SettingsList already shows the new value; put the real one back.
+            panel.updateValue(key, previous.get(key) ?? value);
+            showMessage(`**Error:** ${err instanceof Error ? err.message : String(err)}`);
+            tui.requestRender();
+          },
+        );
+      },
+      () => hideSettingsPanel(),
+    );
+    settingsPanel = panel;
+    const editorIdx = tui.children.indexOf(editor);
+    tui.children.splice(editorIdx + 1, 0, panel);
+    tui.setFocus(panel);
+    tui.requestRender();
+  } catch (err) {
+    showMessage(`**Error:** Failed to load settings: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -2261,6 +2314,7 @@ async function submitPrompt(
   // below) so the user sees one row, not two.
   const userMsg = createUserMessage(
     `**${palette.red("You")}:** ${displayText ?? promptText}`,
+    images,
   );
   // Seed ↓ with a live input estimate so it isn't 0 while streaming: prior
   // accumulated context plus this prompt (~4 chars/token). Input is fixed at
@@ -2485,6 +2539,7 @@ editor.onSubmit = async (value: string) => {
           showModelSelector: () => showProviderSelector("api"),
           showWebSelector: () => showProviderSelector("web"),
           showMcpPicker: () => showMcpPicker(),
+          showSettingsPanel: () => showSettingsPanel(),
           showShellsPanel: () => showShellsPanel(),
           showNightPanel,
   showAgentsPanel: () => showAgentsPanel(),
@@ -3155,6 +3210,10 @@ tui.addInputListener((data) => {
       hideMcpSelector();
       return { consume: true };
     }
+    if (settingsPanel) {
+      hideSettingsPanel();
+      return { consume: true };
+    }
     if (treeSelector) {
       hideTreeSelector();
       return { consume: true };
@@ -3402,6 +3461,15 @@ const stopThemeWatch = watchOmarchyTheme(() => {
   tui.requestRender();
 });
 
+// Off Omarchy, follow the terminal's light/dark scheme: once at startup (see
+// detectTerminalScheme, after tui.start below) and on every change the
+// terminal reports (mode ?2031, which tui.start re-enables after each stop).
+// setTerminalScheme is a no-op under an Omarchy theme.
+tui.setTerminalColorSchemeNotifications(true);
+tui.onTerminalColorSchemeChange((scheme) => {
+  if (setTerminalScheme(scheme)) tui.requestRender();
+});
+
 // Safety net for crash / uncaught-exception exits that skip the explicit
 // shutdown() path above — restoreScreen() is idempotent, so this is a no-op
 // when the alt screen was already exited cleanly.
@@ -3428,3 +3496,8 @@ installCrashHandlers({
 
 process.stdout.write(ENTER_ALT_SCREEN);
 tui.start();
+if (!omarchyPalette) {
+  void detectTerminalScheme(tui).then((scheme) => {
+    if (scheme && setTerminalScheme(scheme)) tui.requestRender();
+  });
+}

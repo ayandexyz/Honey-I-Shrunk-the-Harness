@@ -1,23 +1,28 @@
 import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
-import chalk from "chalk";
-import { logoLines } from "../assets/logo.js";
+import chalk, { Chalk } from "chalk";
+import { PORTRAIT_WIDTH, portraitLines } from "../assets/portrait.js";
 import { getDisplayDirectory, getVersion } from "../utils/display.js";
 import { palette } from "../palette.js";
 
-// Two-tone logo: accent for the bright half, accentDim for the other — the
-// active theme on Omarchy, the chalk yellows elsewhere.
-const { accent: accentColor, accentDim: dimColor } = palette;
+// The portrait carries its own truecolour per run, so paint it at level 3
+// (same as palette.ts) rather than through the theme's accent pair.
+const hex = new Chalk({ level: 3 });
 
-// Split on the blank column between the A and C glyphs (col 39 of 85) so
-// the seam is OMA | CODE. floor(len/2) = 42 cut through the middle of the C,
-// leaving that one letter two-toned.
-const COLOR_SPLIT = 39;
+const coloredLogoLines = portraitLines.map((runs) =>
+  runs
+    .map(([text, fg, bg]) => {
+      let paint = (t: string) => t;
+      if (fg) paint = hex.hex(fg);
+      if (bg) {
+        const fgPaint = paint;
+        paint = (t) => hex.bgHex(bg)(fgPaint(t));
+      }
+      return paint(text);
+    })
+    .join(""),
+);
 
-const coloredLogoLines = logoLines.map((line) => {
-  return accentColor(line.slice(0, COLOR_SPLIT)) + dimColor(line.slice(COLOR_SPLIT));
-});
-
-const LOGO_WIDTH = 85;
+const LOGO_WIDTH = PORTRAIT_WIDTH;
 
 /** Blank rows rendered above the logo. */
 const TOP_PADDING = 4;
@@ -26,8 +31,8 @@ const TOP_PADDING = 4;
 const PENDING = "…";
 
 /**
- * Pinned top-of-TUI logo header. Renders the OmaCode logo (centered, two-tone
- * yellow) with the `>_ OmaCode (vX.Y.Z)` subtitle, a compact stats line
+ * Pinned top-of-TUI logo header. Renders the ASCII portrait logo (centered,
+ * truecolour) with the `>_ Histh! (vX.Y.Z)` subtitle, a compact stats line
  * (tools/MCP/skills/plugins counts) and a directory line — all centered and in yellow.
  *
  * The counts come from accessor functions so the parent can cache them
@@ -82,7 +87,7 @@ export class LogoHeader implements Component {
 
   render(width: number): string[] {
     if (width < LOGO_WIDTH) {
-      // Logo is 34 chars wide; skip the overlay rather than truncating it.
+      // Too narrow for the portrait; skip the overlay rather than truncating it.
       return [];
     }
 
@@ -108,12 +113,12 @@ export class LogoHeader implements Component {
     const indent = " ".repeat(padLeft);
     const rightPad = " ".repeat(padRight);
 
-    // Subtitle: `>_ OmaCode (vX.Y.Z)` — plain + styled built separately so the
+    // Subtitle: `>_ Histh!ss (vX.Y.Z)` — plain + styled built separately so the
     // centered pad math matches the visible width.
     const version = getVersion();
-    const subtitlePlain = `>_ OmaCode (v${version})`;
+    const subtitlePlain = `>_ Histh! (v${version})`;
     const subtitleStyled =
-      `>_ ${chalk.bold(palette.accent("OmaCode"))} ` +
+      `>_ ${chalk.bold(palette.accent("Histh!s"))} ` +
       chalk.dim(`(v${version})`);
     const subtitleLine = this.centerLine(width, subtitlePlain.length, subtitleStyled);
 

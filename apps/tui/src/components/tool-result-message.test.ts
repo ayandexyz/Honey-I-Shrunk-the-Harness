@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import * as path from "path";
 import stripAnsi from "strip-ansi";
 import stringWidth from "string-width";
+import { setCapabilities, resetCapabilitiesCache } from "@earendil-works/pi-tui";
 import { ToolResultMessage, type ToolResultMessageOptions } from "./tool-result-message.js";
 
 function msg(over: Partial<ToolResultMessageOptions>): ToolResultMessage {
@@ -102,5 +103,21 @@ test("no rendered row is wider than the width it was given", () => {
     for (const width of [30, 80]) {
       for (const row of m.render(width)) assert.ok(stringWidth(stripAnsi(row)) <= width, `${width}: ${stripAnsi(row)}`);
     }
+  }
+});
+
+test("a Read header links its path on terminals that show hyperlinks", () => {
+  const file = path.join(process.cwd(), "src", "a b.ts");
+  try {
+    setCapabilities({ images: null, trueColor: true, hyperlinks: true });
+    const header = msg({ toolName: "read", args: { file_path: file } }).render(100)[0]!;
+    assert.ok(header.includes(`\x1b]8;;file://${file.replace(/ /g, "%20")}\x1b\\`));
+    assert.match(stripAnsi(header), /Read\(src\/a b\.ts\)/, "visible text is unchanged");
+
+    setCapabilities({ images: null, trueColor: true, hyperlinks: false });
+    const plain = msg({ toolName: "read", args: { file_path: file } }).render(100)[0]!;
+    assert.ok(!plain.includes("\x1b]8;"));
+  } finally {
+    resetCapabilitiesCache();
   }
 });

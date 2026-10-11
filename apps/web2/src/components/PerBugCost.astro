@@ -1,0 +1,138 @@
+---
+// Only the bugs every agent resolved: same bug, same model, so the gap is how
+// much context each harness moved to get there. One scale for the whole card,
+// so bugs compare to each other, not just agents within a bug.
+import { agentColor, type BenchView } from "../data/agent-bench";
+import { agentName, edgesFor } from "../data/agent-bench-page";
+
+interface Props {
+	view: BenchView;
+}
+
+const { view } = Astro.props;
+const cost = view.cost!;
+
+const usd = (n: number) => `$${n.toFixed(4)}`;
+const tok = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(2)}M` : `${Math.round(n / 1000)}k`);
+
+const groups = [
+	...cost.perBug.map((row) => ({
+		key: row.instanceId,
+		title: view.taskSet.titles?.[row.instanceId] ?? row.instanceId.replace(/^.*__/, ""),
+		id: row.instanceId.replace(/^.*__/, ""),
+		perAgent: row.perAgent,
+		mean: false,
+	})),
+	{
+		key: "mean",
+		title: `Mean over ${cost.perBug.length} bugs`,
+		id: "",
+		perAgent: cost.perAgent.map((p) => ({ id: p.id, usd: p.meanUsd, tokens: p.meanTokens })),
+		mean: true,
+	},
+];
+
+const maxUsd =
+	Math.max(...cost.perBug.flatMap((row) => row.perAgent.map((p) => p.usd).filter((u): u is number => typeof u === "number"))) || 1;
+---
+
+<section class="report-section per-bug">
+	<div class="report-section-heading">
+		<div>
+			<p class="eyebrow">Per-bug cost</p>
+			<h3>What each fix cost.</h3>
+		</div>
+		<p>
+			Only the {cost.instances.length} bugs every agent resolved — same bug, same model, so the gap is how much
+			context each harness moved to get there. Cost is the mean over that agent’s resolved trials of the bug;
+			the badges compare Histh with the cheapest rival on that row.
+		</p>
+	</div>
+
+	<div class="per-bug-card">
+		{groups.map((g) => {
+			const priced = g.perAgent.map((p) => p.usd).filter((u): u is number => typeof u === "number");
+			const cheapest = priced.length ? Math.min(...priced) : null;
+			return (
+				<div class:list={["bug-group", { mean: g.mean }]}>
+					<div class="bug-head">
+						<div>
+							<span class="bug-title">{g.title}</span>
+							{g.id && <span class="bug-id">{g.id}</span>}
+						</div>
+						<div class="edge-badges">
+							{edgesFor(g.perAgent).map((e) => <span class:list={["edge-badge", e.tone]}>{e.text}</span>)}
+						</div>
+					</div>
+					{view.agents.map((a) => {
+						const p = g.perAgent.find((x) => x.id === a.id);
+						const best = typeof p?.usd === "number" && p.usd === cheapest;
+						return (
+							<div class="bug-row">
+								<span class="bug-agent" style={`color: ${agentColor(a.id)}`}>{agentName(a.id)}</span>
+								<div class="bug-track">
+									{typeof p?.usd === "number" && (
+										<span style={`width: ${Math.max((p.usd / maxUsd) * 100, 1)}%; background: ${agentColor(a.id)}`}></span>
+									)}
+								</div>
+								<span class:list={["bug-value", { best }]}>
+									{typeof p?.usd === "number" ? usd(p.usd) : "—"}
+									{p?.tokens != null && <span class="dim"> ({tok(p.tokens)})</span>}
+								</span>
+							</div>
+						);
+					})}
+				</div>
+			);
+		})}
+	</div>
+</section>
+
+<style>
+	.per-bug-card {
+		padding: clamp(1.1rem, 3vw, 1.75rem) clamp(1.35rem, 3vw, 2rem);
+		border: 1px solid var(--line);
+		border-radius: var(--radius-lg);
+		background: var(--surface);
+		box-shadow: var(--shadow-sm);
+	}
+
+	.bug-group { padding: 1.1rem 0; border-bottom: 1px solid var(--line); }
+	.bug-group:last-child { border-bottom: 0; }
+	.bug-group.mean { margin-top: 0.25rem; border-top: 2px solid var(--line); }
+
+	.bug-head {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: 0.5rem 1rem;
+		margin-bottom: 0.75rem;
+	}
+
+	.bug-title { margin-right: 0.75rem; font-size: 0.98rem; font-weight: 550; }
+	.mean .bug-title { font-family: var(--mono); font-size: 0.8rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted-strong); }
+	.bug-id { color: var(--muted); font-family: var(--mono); font-size: 0.74rem; }
+
+	.bug-row {
+		display: grid;
+		grid-template-columns: 8rem minmax(0, 1fr) 10.5rem;
+		gap: 0.9rem;
+		align-items: center;
+		margin-top: 0.45rem;
+		font-family: var(--mono);
+		font-size: 0.86rem;
+	}
+
+	.bug-agent { font-weight: 700; }
+	.bug-track { height: 0.55rem; overflow: hidden; border-radius: 999px; background: var(--track); }
+	.bug-track span { display: block; height: 100%; border-radius: inherit; }
+	.bug-value { text-align: right; color: var(--muted-strong); font-variant-numeric: tabular-nums; }
+	.bug-value.best { color: var(--accent-strong); font-weight: 700; }
+	.dim { color: var(--muted); font-weight: 400; }
+
+	@media (max-width: 680px) {
+		.bug-row { grid-template-columns: 5.5rem minmax(0, 1fr) auto; font-size: 0.8rem; }
+		.bug-value .dim { display: none; }
+	}
+</style>

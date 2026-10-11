@@ -5,16 +5,20 @@ interface Row {
 	display: string;
 	featured?: boolean;
 	note?: string;
+	color?: string;
 }
 
 interface Props {
 	title: string;
 	detail: string;
 	rows: readonly Row[];
+	footnote?: string;
+	/** Fixed scale (e.g. 1 for rates); defaults to the largest row. */
+	max?: number;
 }
 
-const { title, detail, rows } = Astro.props;
-const max = Math.max(...rows.map((row) => row.value));
+const { title, detail, rows, footnote } = Astro.props;
+const max = Astro.props.max ?? (Math.max(...rows.map((row) => row.value), 0) || 1);
 ---
 
 <article class="benchmark-card" data-reveal>
@@ -25,18 +29,22 @@ const max = Math.max(...rows.map((row) => row.value));
 
 	<div class="bar-list">
 		{rows.map((row) => (
-			<div class:list={["bar-row", { featured: row.featured }]}>
-				<div class="bar-meta">
-					<span>{row.label}</span>
-					<span class="bar-value">{row.display}</span>
-				</div>
+			<div class:list={["bar-row", { featured: row.featured }]} title={row.note ? `${row.display} · ${row.note}` : row.display}>
+				<span class="bar-label" style={row.color ? `color: ${row.color}` : undefined}>{row.label}</span>
+				<span class="bar-value">
+					{row.display}
+					{row.note && <span class="bar-note">{row.note}</span>}
+				</span>
 				<div class="bar-track" aria-hidden="true">
-					<span style={`--bar-size: ${Math.max((row.value / max) * 100, 3)}%`} />
+					<span style={`--bar-size: ${Math.max((row.value / max) * 100, 2)}%;${row.color ? ` --bar-color: ${row.color};` : ""}`} />
 				</div>
-				{row.note && <span class="bar-note">{row.note}</span>}
 			</div>
 		))}
 	</div>
+
+	<slot />
+
+	{footnote && <p class="card-footnote">{footnote}</p>}
 </article>
 
 <style>
@@ -45,11 +53,10 @@ const max = Math.max(...rows.map((row) => row.value));
 		border: 1px solid var(--line);
 		border-radius: var(--radius-lg);
 		background: var(--surface);
+		box-shadow: var(--shadow-sm);
 	}
 
-	header {
-		margin-bottom: 2rem;
-	}
+	header { margin-bottom: 1.75rem; }
 
 	h3 {
 		margin: 0;
@@ -59,43 +66,45 @@ const max = Math.max(...rows.map((row) => row.value));
 	}
 
 	header p {
-		margin: 0.45rem 0 0;
-		color: var(--muted);
-		font-size: 0.82rem;
+		margin: 0.5rem 0 0;
+		color: var(--muted-strong);
+		font-size: 0.9rem;
+		line-height: 1.55;
 	}
 
-	.bar-list {
-		display: grid;
-		gap: 1.1rem;
-	}
+	.bar-list { display: grid; gap: 0.95rem; }
 
 	.bar-row {
 		display: grid;
 		grid-template-columns: minmax(0, 1fr) auto;
-		gap: 0.5rem 1rem;
-	}
-
-	.bar-meta {
-		display: contents;
+		gap: 0.45rem 1rem;
 		font-family: var(--mono);
-		font-size: 0.78rem;
+		font-size: 0.86rem;
 	}
 
-	.bar-meta > span:first-child {
-		color: var(--muted-strong);
-	}
+	.bar-label { color: var(--muted-strong); }
 
 	.bar-value {
-		color: var(--muted);
+		display: inline-flex;
+		gap: 0.75rem;
+		align-items: baseline;
+		color: var(--muted-strong);
 		font-variant-numeric: tabular-nums;
+	}
+
+	.bar-note {
+		min-width: 6.5rem;
+		color: var(--muted);
+		font-size: 0.74rem;
+		text-align: right;
 	}
 
 	.bar-track {
 		grid-column: 1 / -1;
-		height: 0.32rem;
+		height: 0.4rem;
 		overflow: hidden;
 		border-radius: 999px;
-		background: var(--line);
+		background: var(--track);
 	}
 
 	.bar-track span {
@@ -103,25 +112,31 @@ const max = Math.max(...rows.map((row) => row.value));
 		width: var(--bar-size);
 		height: 100%;
 		border-radius: inherit;
-		background: #a8aaa5;
-		transform-origin: left;
-		transition: width 700ms var(--ease);
+		background: var(--bar-color, var(--bar-muted));
+		transition: width 700ms var(--ease), filter 180ms ease;
 	}
 
-	.featured .bar-meta > span:first-child,
+	.bar-row:hover .bar-track span { filter: brightness(0.9); }
+
+	.featured .bar-label,
 	.featured .bar-value {
 		color: var(--accent-strong);
 		font-weight: 700;
 	}
 
-	.featured .bar-track span {
-		background: var(--accent);
+	.featured .bar-track span { background: var(--bar-color, var(--accent)); }
+
+	.card-footnote {
+		margin: 1.5rem 0 0;
+		padding: 0.85rem 1rem;
+		border-radius: var(--radius-sm);
+		background: var(--surface-muted);
+		color: var(--muted-strong);
+		font-size: 0.82rem;
+		line-height: 1.6;
 	}
 
-	.bar-note {
-		grid-column: 1 / -1;
-		color: var(--muted);
-		font-family: var(--mono);
-		font-size: 0.68rem;
+	@media (max-width: 680px) {
+		.bar-note { display: none; }
 	}
 </style>

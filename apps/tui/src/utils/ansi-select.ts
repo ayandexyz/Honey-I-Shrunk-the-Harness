@@ -4,9 +4,11 @@ import stripAnsi from "strip-ansi";
 const REVERSE_ON = "\x1b[7m";
 const REVERSE_OFF = "\x1b[27m";
 
-// Matches a single SGR/CSI escape sequence so we can walk `ansiLine`
-// character-by-character while skipping escape bytes when counting columns.
-const ANSI_SEQUENCE_RE = /^(?:\x1b\[[0-9;]*[a-zA-Z])/;
+// Matches a single SGR/CSI or OSC (e.g. an OSC 8 hyperlink) escape sequence so
+// we can walk `ansiLine` character-by-character while skipping escape bytes
+// when counting columns. Without OSC, a link's URL counted as visible columns.
+const ANSI_SEQUENCE_RE =
+  /^(?:\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\))/;
 
 export function displayWidth(text: string): number {
   return stringWidth(text);

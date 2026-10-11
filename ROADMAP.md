@@ -178,3 +178,59 @@ headless `freecode run` that should stop itself or park a prompt.
       `CONNECTING` (`use-websocket.ts:19`, `:61`). The TUI's
       `[250, 1_000, 3_000]`-then-give-up budget (`apps/tui/src/ipc/client.ts:87`)
       is right for a local child process but wrong for a network client.
+
+## Speed and cost experiments (from the 2026-10-11/12 docs)
+
+Sources: `docs/2026-10-11-performance-recommendations.md` (latency, TUI, web app)
+and `docs/2026-10-12-token-and-cost-efficiency.md` (tokens, cost). Each item is
+an experiment: measure first, keep it only if the measurement and the quality
+check both hold. The two bugs those docs found are in `TODO.md`.
+
+### Measurement first (blocks everything below)
+
+- [ ] **Local performance harness.** Deterministic fixtures for cold start,
+      send, resume and streaming (long Markdown reply in fixed chunk sizes,
+      large transcripts, small/large git repos). Report p50/p95 and work counts
+      (parses, renders, bytes read), paired before/after on one machine. Local
+      and free — not an `evals/*.jsonl` case. Perf doc §1 and "A practical
+      implementation sequence".
+- [ ] **Experiment ledger.** One append-only record per experiment
+      (hypothesis, variants, workload, quality, cost, kept/rejected/inconclusive)
+      so a rejected idea such as `FREECODE_BASH_COMPRESS` is not retried. Cost
+      doc §11.
+- [ ] **Closed loop via `freecode night`.** Objective taken from this list,
+      `--verify` running the harness or `eval ab`, `--max-usd` as the limit. Only
+      possible once the harness exists.
+
+### TUI and web app
+
+- [ ] **TUI: stop re-parsing the whole reply while it streams.**
+      `StreamingAssistantMessage` rebuilds the full Markdown component when
+      dirty (`apps/tui/src/components/message-row.ts:382`), so total work grows
+      faster than the reply. Reuse stable regions; rendered lines must stay
+      identical. Perf doc §3.
+- [ ] **Web app: memoize unchanged messages and follow output only near the
+      bottom.** Perf doc §4.
+
+### Core latency
+
+- [ ] **History cache.** `readEntries` (`session/store.ts:512`) reads and parses
+      the whole `messages.jsonl` on every send. Measure first; a validated cache
+      in the store, invalidated on compaction/navigate/rewind/import. Perf doc §5.
+- [ ] **Checkpoint capture profiling.** Size checks `stat` untracked files one at
+      a time (`checkpoint/shadow-git.ts:168`) before every turn. Split the
+      capture timing before changing anything. Perf doc §6.
+
+### Cost
+
+- [ ] **Complete cost accounting.** `traceCost` does not include subagent
+      sessions, `cache.warm` events, or compaction summarizer calls
+      (`compaction/llm-summarizer.ts` does not return usage). Fix before any
+      cost A/B, or a cheaper-looking variant may just be uncounted. Cost doc §4.
+- [ ] **Split root `CLAUDE.md`** (75,962 bytes, sent in full on every session)
+      into a short guide plus topic docs, and check that the right topic doc
+      still gets read. Changes what the model sees → `eval ab`. Cost doc §5.
+- [ ] **Model/effort per operation** (extraction, compaction, verifier), only
+      after accounting is complete. Cost doc §8.
+- [ ] **Compaction tuning.** `FREECODE_COMPACT_TARGET_TOKENS` is allowed in a
+      case's `env` but not in `eval ab`'s allowlist. Cost doc §9.

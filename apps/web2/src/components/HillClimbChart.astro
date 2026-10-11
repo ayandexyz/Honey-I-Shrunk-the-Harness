@@ -1,0 +1,86 @@
+---
+// Histogram of hillClimbability ratings with the reframe gate drawn as a
+// labelled line. One fill; bars below the gate are its muted step.
+import type { SignalsReport } from "../data/harness-signals";
+import StatTiles from "./StatTiles.astro";
+import type { StatTile } from "./types";
+
+interface Props {
+	report: SignalsReport;
+}
+
+const h = Astro.props.report.hillClimb;
+const pct = (n: number | null) => (n === null ? null : `${Math.round(n * 100)}%`);
+
+const tiles: StatTile[] = [
+	{ value: String(h.n), label: "goals", note: `first rating per item · ${h.ratings ?? h.n} with re-ratings · ${h.sessions} sessions` },
+	{ value: h.mean === null ? null : h.mean.toFixed(1), label: "mean", note: `median ${h.median ?? "—"}` },
+	{
+		value: pct(h.belowGateRate),
+		label: `below ${h.threshold}`,
+		note: `${h.belowGate} asked to reframe · ${h.flagged.gated} nudged`,
+		tone: (h.belowGateRate ?? 0) > 0.25 ? "bad" : undefined,
+	},
+	{ value: h.range ? `${h.range[0]}–${h.range[1]}` : null, label: "observed range" },
+];
+
+const scores = Object.keys(h.histogram).map(Number).sort((a, b) => a - b);
+const max = Math.max(...Object.values(h.histogram), 1);
+const W = 1080;
+const H = 260;
+const padL = 36;
+const padB = 28;
+const padT = 14;
+const plotW = W - padL - 12;
+const plotH = H - padT - padB;
+const xFor = (s: number) => padL + (s / 100) * plotW;
+const barW = Math.max(4, plotW / 101 - 3);
+const gateX = xFor(h.threshold) - barW / 2 - 1;
+---
+
+{h.n === 0 ? (
+	<div class="empty-state">
+		No hill-climbability ratings yet. Each todo item can carry a <code>hillClimbability</code> score;
+		ratings below {h.threshold} ask the model to reframe the goal when the gate is on.
+	</div>
+) : (
+	<div>
+		<StatTiles tiles={tiles} />
+		<article class="chart-card" data-reveal>
+			<header class="chart-head">
+				<div>
+					<h3>Ratings by score</h3>
+					<p>Only scores that received a submission are drawn. A goal rated below the gate has no metric to climb yet.</p>
+				</div>
+			</header>
+			<svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Hill-climbability rating histogram">
+				{[0, 25, 50, 75, 100].map((s) => (
+					<text class="axis" x={xFor(s)} y={H - padB + 16} text-anchor="middle">{s}</text>
+				))}
+				<line class="grid" x1={padL} x2={W - 12} y1={padT + plotH} y2={padT + plotH} />
+				{scores.map((s) => {
+					const n = h.histogram[String(s)]!;
+					const bh = (n / max) * plotH;
+					return (
+						<g>
+							<rect
+								x={xFor(s) - barW / 2}
+								y={padT + plotH - bh}
+								width={barW}
+								height={bh}
+								rx="2"
+								fill="var(--series-us)"
+								fill-opacity={s < h.threshold ? 0.35 : 0.9}
+							>
+								<title>{`${s}: ${n} rating${n === 1 ? "" : "s"}${s < h.threshold ? " · below the gate" : ""}`}</title>
+							</rect>
+							{n === max && <text class="axis strong" x={xFor(s)} y={padT + plotH - bh - 4} text-anchor="middle">{n}</text>}
+						</g>
+					);
+				})}
+				<line class="gate" x1={gateX} x2={gateX} y1={padT} y2={padT + plotH} />
+				<text class="axis" x={gateX - 4} y={padT + 10} text-anchor="end">reframe below {h.threshold}</text>
+			</svg>
+		</article>
+	</div>
+)}

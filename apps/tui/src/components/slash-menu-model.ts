@@ -46,7 +46,11 @@ const GROUPS: Group[] = [
 const PROMPTS: Omit<Group, "commands"> = { id: "prompts", label: "Prompts", icon: "\u{f044}" };
 
 /** Commands that sit on the root itself, after the groups — Omarchy's About/System. */
-const ROOT_LEAVES: Record<string, string> = { help: "\u{f11c}", exit: "\u{f0343}" };
+const ROOT_LEAVES: Record<string, string> = {
+  settings: "\u{f0493}", // md-cog
+  help: "\u{f11c}",
+  exit: "\u{f0343}",
+};
 
 const LEAF_ICONS: Record<string, string> = {
   model: "\u{f06a9}",

@@ -7,7 +7,6 @@ const c: Containerize = {
   network: "agent-bench-internal",
   name: "trial-x",
   wsDir: "/tmp/ws",
-  benchDir: "/repo/bench/agent-bench",
   envNames: ["ANTHROPIC_BASE_URL", "MINIMAX_API_KEY"],
   uid: 1000,
   gid: 1000,
@@ -21,7 +20,9 @@ test("dockerArgv: env rides as bare -e NAME — no secret ever lands in argv", (
   assert.equal(argv[argv.indexOf("--network") + 1], "agent-bench-internal");
   assert.equal(argv[argv.indexOf("--user") + 1], "1000:1000");
   assert.equal(argv.includes("/tmp/ws:/workspace"), true);
-  assert.equal(argv.includes("/repo/bench/agent-bench:/bench:ro"), true);
+  // Only the workspace: bench/agent-bench holds earlier trials' patches and the full mirror.
+  assert.equal(argv.filter((a) => a === "-v").length, 1);
+  assert.equal(argv.some((a) => a.includes(":/bench")), false);
 });
 
 test("forwardedEnvNames: adapter names + meter names; \"\" (unset) is not forwarded", () => {
@@ -38,7 +39,6 @@ test("dockerArgv: a configDir is mounted rw — opencode writes into XDG_CONFIG_
     network: "n",
     name: "t",
     wsDir: "/ws",
-    benchDir: "/bench",
     envNames: [],
     uid: 1000,
     gid: 1000,

@@ -28,7 +28,7 @@ export const INTERNAL_NETWORK = "agent-bench-internal";
 export const EGRESS_NETWORK = "agent-bench-egress";
 /** Fixed proxy port; the agent's base-URL env points here before the proxy exists. */
 export const PROXY_PORT = 8080;
-/** Where the workspace and bench dir land inside the container. */
+/** Where the workspace lands in the agent container, and the bench dir in the proxy's. */
 export const WORKSPACE = "/workspace";
 export const BENCH_MOUNT = "/bench";
 
@@ -37,10 +37,13 @@ export interface Containerize {
   network: string;
   /** Unique per trial, so a timeout can `docker rm -f` exactly this one. */
   name: string;
-  /** Host workspace dir, mounted rw at /workspace. */
+  /**
+   * Host workspace dir, mounted rw at /workspace — the agent's only view of the
+   * host. bench/agent-bench is deliberately NOT mounted: it holds results/
+   * (every earlier trial's patch.diff for the same instance) and .cache/repos
+   * (the full upstream mirror, fix commits included).
+   */
   wsDir: string;
-  /** Host bench/agent-bench dir, mounted ro at /bench. */
-  benchDir: string;
   /** Env NAMES to forward. Values come from the spawn env, never argv. */
   envNames: string[];
   /**
@@ -64,7 +67,6 @@ export function dockerArgv(c: Containerize, argv: string[]): string[] {
     "--network", c.network,
     "--user", `${c.uid}:${c.gid}`,
     "-v", `${c.wsDir}:${WORKSPACE}`,
-    "-v", `${c.benchDir}:${BENCH_MOUNT}:ro`,
     ...(c.configDir ? ["-v", `${c.configDir}:${CONFIG_MOUNT}`] : []),
     "-w", WORKSPACE,
     // Writable HOME for CLIs that insist on one; --user means /root is not it.
