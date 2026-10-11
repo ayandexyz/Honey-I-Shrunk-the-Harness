@@ -1,6 +1,7 @@
 ---
-import { agentColor } from "../data/agent-bench";
+import { agentColor, type BenchView, type MatrixCell } from "../data/agent-bench";
 import ComparisonCards from "../components/ComparisonCards.astro";
+import PerBugCost from "../components/PerBugCost.astro";
 import { agentName, models, runs, totals } from "../data/agent-bench-page";
 import { githubUrl } from "../data/site";
 import "../styles/global.css";
@@ -25,6 +26,16 @@ const date = (value: string) =>
 		day: "numeric",
 		year: "numeric",
 	}).format(new Date(value));
+const rivalNames = (view: BenchView) =>
+	view.agents.filter((a) => !a.isFreeCode).map((a) => agentName(a.id)).join(" / ");
+// What a trial actually means, in words. Graded, "failed" splits in two:
+// the grader rejecting a patch is a different fact from no patch at all.
+const cellStatus = (graded: boolean, c: MatrixCell) =>
+	c.ok
+		? { kind: "ok", glyph: "✓", text: graded ? "resolved" : "produced a patch" }
+		: graded && c.producedPatch
+			? { kind: "fail", glyph: "✕", text: "patched, not resolved" }
+			: { kind: "none", glyph: "–", text: "no patch" };
 const shortId = (id: string) => id.replace(/^[a-z]+__[a-z]+-/, "#");
 ---
 
@@ -233,8 +244,19 @@ const shortId = (id: string) => id.replace(/^[a-z]+__[a-z]+-/, "#");
 												<p class="eyebrow">02 / Instance matrix</p>
 												<h3>Every bug stays visible.</h3>
 											</div>
-											<p>Dots are graded trials. Filled means resolved; outlined means unresolved.</p>
+											<p>
+												One row per bug, one chip per trial. Disagreement between trials of the same agent is the
+												interesting signal — it is what a single-run benchmark cannot show you. The last column is
+												Histh against {rivalNames(view)} on that bug: mean cost and tokens over every trial.
+											</p>
 										</div>
+
+										<p class="matrix-legend">
+											<span><i class="chip-key ok">✓</i> {view.graded ? "resolved" : "produced a patch"}</span>
+											{view.graded && <span><i class="chip-key fail">✕</i> patched, not resolved</span>}
+											<span><i class="chip-key none">–</i> no patch</span>
+											<span class="dim">hover a chip for time, tokens, cost and reason</span>
+										</p>
 
 										<div class="matrix-wrap">
 											<table class="instance-table">
@@ -242,31 +264,50 @@ const shortId = (id: string) => id.replace(/^[a-z]+__[a-z]+-/, "#");
 													<tr>
 														<th scope="col">{view.taskSet.repo} issue</th>
 														{view.agents.map((agent) => <th scope="col">{agentName(agent.id)}</th>)}
+														<th scope="col">Histh vs {rivalNames(view)}</th>
 													</tr>
 												</thead>
 												<tbody>
 													{instances.map((instance) => (
 														<tr>
 															<th scope="row">
+																<span class="issue-title">{instance.title ?? instance.id}</span>
 																<strong>{shortId(instance.id)}{!instance.shared && " · partial"}</strong>
-																<span>{instance.title ?? instance.id}</span>
 															</th>
 															{instance.cells.map((cell) => (
 																<td>
-																	<div class="trial-dots" aria-label={`${cell.wins} of ${cell.trials} resolved`}>
-																		{Array.from({ length: cell.trials }, (_, index) => (
-																			<span class:list={[index < cell.wins && "trial-win"]}></span>
-																		))}
+																	<div class="trial-chips" aria-label={`${cell.wins} of ${cell.trials} ${view.graded ? "resolved" : "patched"}`}>
+																		{cell.runs.map((t) => {
+																			const status = cellStatus(view.graded, t);
+																			return (
+																				<span
+																					class:list={["trial-chip", status.kind, { open: view.isolationMix.mixed && t.isolation !== "container" }]}
+																					style={t.ok ? `color: ${agentColor(t.agent)}` : undefined}
+																					title={`${status.text} · t${t.trial} · ${seconds(t.durationMs)} · ${t.reason} · ${t.patchBytes}B${t.turns !== undefined ? ` · ${t.turns} turns` : ""}${t.tokens !== undefined ? ` · ${compact(t.tokens)} tok` : ""}${typeof t.usd === "number" ? ` · ${dollars(t.usd)}` : ""}`}
+																				>
+																					{status.glyph}
+																				</span>
+																			);
+																		})}
 																	</div>
 																	<small>{compact(cell.meanTokens)} tok · {dollars(cell.meanUsd)}</small>
 																</td>
 															))}
+															<td>
+																<div class="edge-badges">
+																	{instance.edges.length === 0
+																		? <span class="dim">unmetered</span>
+																		: instance.edges.map((e) => <span class:list={["edge-badge", e.tone]}>{e.text}</span>)}
+																</div>
+															</td>
 														</tr>
 													))}
 												</tbody>
 											</table>
 										</div>
 									</section>
+
+									{cost && cost.perBug.length > 0 && <PerBugCost view={view} />}
 
 									{cost && (
 										<section class="report-section evidence-callout">

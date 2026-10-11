@@ -16,6 +16,8 @@ export interface InstanceCell {
 	meanUsd: number | null;
 	/** Some trial of this cell ran outside the container. */
 	open: boolean;
+	/** The trials themselves, for the per-trial chips. */
+	runs: MatrixCell[];
 }
 
 export interface InstanceRow {
@@ -23,6 +25,43 @@ export interface InstanceRow {
 	title: string | undefined;
 	shared: boolean;
 	cells: InstanceCell[];
+	/** Histh against the best rival on this bug, price then tokens. */
+	edges: Edge[];
+}
+
+export interface Edge {
+	text: string;
+	tone: "good" | "bad" | "even";
+}
+
+/**
+ * Histh's number against the best rival's, as a percentage: "40% cheaper",
+ * "12% more tokens". Within 5% is called even rather than inventing a winner
+ * out of rounding; a missing number on either side yields nothing, never 0%.
+ */
+export function compareEdge(
+	mine: number | null | undefined,
+	theirs: (number | null | undefined)[],
+	[win, lose, noun]: [string, string, string],
+): Edge | null {
+	const priced = theirs.filter((t): t is number => typeof t === "number" && t > 0);
+	if (typeof mine !== "number" || mine <= 0 || priced.length === 0) return null;
+	const pct = Math.round((1 - mine / Math.min(...priced)) * 100);
+	if (Math.abs(pct) < 5) return { text: `even ${noun}`, tone: "even" };
+	return pct > 0 ? { text: `${pct}% ${win}`, tone: "good" } : { text: `${-pct}% ${lose}`, tone: "bad" };
+}
+
+export const PRICE: [string, string, string] = ["cheaper", "costlier", "price"];
+export const TOKENS: [string, string, string] = ["fewer tokens", "more tokens", "tokens"];
+
+/** Price and token edges for one row of per-agent numbers. */
+export function edgesFor(perAgent: { id: string; usd: number | null; tokens: number | null }[]): Edge[] {
+	const free = perAgent.find((p) => p.id === "freecode");
+	const rivals = perAgent.filter((p) => p.id !== "freecode");
+	return [
+		compareEdge(free?.usd, rivals.map((p) => p.usd), PRICE),
+		compareEdge(free?.tokens, rivals.map((p) => p.tokens), TOKENS),
+	].filter((e): e is Edge => e !== null);
 }
 
 export interface BenchRun {
@@ -46,6 +85,7 @@ function rollUp(agent: string, cells: MatrixCell[]): InstanceCell {
 		meanTokens: avg(mine.flatMap((c) => (c.tokens === undefined ? [] : [c.tokens]))),
 		meanUsd: avg(mine.flatMap((c) => (typeof c.usd === "number" ? [c.usd] : []))),
 		open: mine.some((c) => c.isolation !== "container"),
+		runs: mine,
 	};
 }
 
@@ -63,12 +103,16 @@ export const runs: BenchRun[] = matchupFiles
 	.map((view) => ({
 		key: `${view.slug.replace(/\..*$/, "")}--${view.model.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
 		view,
-		instances: view.matrix.map((row) => ({
-			id: row.instanceId,
-			title: view.taskSet.titles?.[row.instanceId],
-			shared: view.sharedInstances.includes(row.instanceId),
-			cells: view.agents.map((a) => rollUp(a.id, row.cells)),
-		})),
+		instances: view.matrix.map((row) => {
+			const cells = view.agents.map((a) => rollUp(a.id, row.cells));
+			return {
+				id: row.instanceId,
+				title: view.taskSet.titles?.[row.instanceId],
+				shared: view.sharedInstances.includes(row.instanceId),
+				cells,
+				edges: edgesFor(cells.map((c) => ({ id: c.agent, usd: c.meanUsd, tokens: c.meanTokens }))),
+			};
+		}),
 	}));
 
 /**
