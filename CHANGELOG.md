@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.43.3
+
+A run no longer dies on an empty message, and no longer ends on a reply the output limit cut off. Both were found in the 2026-10-11 agent bench.
+
+### Fixed
+
+- **Empty text blocks never reach the provider** (`65e7dc61`). When a model's only tool call had unparseable JSON, the turn was saved as an empty assistant message; it went out as an empty text block, `applyMessageCaching` anchored it as the tail, and the provider rejected the request — `cache_control cannot be set for empty text blocks` — ending the run. Empty text is now dropped when history is converted for the wire, which also repairs sessions already holding one. Found on Sonnet 5, `django__django-11133`.
+- **A reply cut off at the output limit gets another turn** (`65e7dc61`). The loop discarded the stream's stop reason, so a text-only reply that hit the 32K cap mid-sentence was taken as the final answer. It now continues, under the existing two-retry budget. Found on MiniMax-M3, `django__django-11019`.
+- **An unparseable tool call is reported as what it is** (`65e7dc61`). Every dropped call used to be logged as "output token limit reached" with advice to send a smaller payload; that is now said only when the reply really hit the limit, and malformed JSON gets its own reminder.
+
+### Notes
+
+Tests: core 1861/1861 (7 new), TUI 360/360, typecheck clean. `eval trajectory --gate` on MiniMax-M3: gate open, 27/28 — the new paths did not fire there, so the unit tests are what cover them. The agent bench also changed (no effect on the binary): freecode's adapters no longer pass `--max-turns 40`, a cap neither rival had, and the shared task prompt forbids fetching the upstream project's code or releases, which both agents did on the unisolated Sonnet 5 run (freecode in 7 of 30 trials, claude-code in 1).
+
 ## v0.43.2
 
 Fewer wasted turns. The system prompt now tells the agent when to stop verifying: a test run the environment cannot do is tried once and reported, not worked around. On the trajectory eval that is 10% fewer tokens and 29 fewer turns at the same pass rate. Also: `!cmd` in the TUI records its output as context for your next prompt instead of starting a turn, and the Hommies permission bridge is verified before it sees or answers anything.
