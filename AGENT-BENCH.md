@@ -144,6 +144,7 @@ Read this file before you spend.
 | `--agents` | `freecode,claude-code` | comma-separated adapter ids from `bench/agent-bench/agents/` |
 | `--instances` | every id in `instances/django-lite.txt` (10 django bugs) | comma-separated SWE-bench instance ids |
 | `--trials` | `1` | trials per (agent, instance). Phase 2 onward: **3**, and publish the spread. Never merge into best-of |
+| `--first-trial` | `1` | number the trials from N. Extends an earlier run (`--trials 2 --first-trial 2` adds trials 2–3) instead of overwriting its trial 1 — publish keys rows by (agent, instance, trial) |
 | `--timeout` | `900000` (15 min) | per-trial wall-clock cap, ms. Timeout SIGKILLs the agent |
 | `--out` | `bench/agent-bench/results/<timestamp>` | artifact root |
 | `--fresh` | off | passed through to publish: discard the matchup JSON and start over |

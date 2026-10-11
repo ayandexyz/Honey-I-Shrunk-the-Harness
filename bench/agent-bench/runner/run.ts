@@ -45,6 +45,10 @@ function arg(name: string, fallback?: string): string | undefined {
 
 const agentIds = (arg("agents", "freecode,claude-code") as string).split(",");
 const trials = Number(arg("trials", "1"));
+// Extends an earlier run instead of overwriting it: publish keys a row by
+// (agent, instance, trial), so a second run numbered from 1 would replace the
+// first run's trials. `--trials 2 --first-trial 2` adds trials 2 and 3.
+const firstTrial = Number(arg("first-trial", "1"));
 // `--set freecode-commits` runs the judged set (spec 2026-09-29-commit-
 // reconstruction-bench.md): approved tasks from this repo's own commits,
 // scored afterwards by `pnpm bench:judge`, not by the SWE-bench grader.
@@ -59,7 +63,9 @@ const requestedIds = arg("instances")?.split(",");
 /** The containers' pnpm store (spec §4.7): operator-owned, shared by every trial. */
 const PNPM_STORE_DIR = path.join(CACHE_DIR, "pnpm-store");
 const runId = new Date().toISOString().replace(/[:.]/g, "-");
-const outDir = arg("out", path.join(ROOT, "results", runId)) as string;
+// Absolute: the trial dir is bind-mounted into containers, and docker reads a
+// relative `-v` source as a (invalid) named volume — every trial fails to start.
+const outDir = path.resolve(arg("out", path.join(ROOT, "results", runId)) as string);
 const meter = !process.argv.includes("--no-meter");
 const isolate = process.argv.includes("--isolate");
 
@@ -120,7 +126,7 @@ async function main() {
 
   const records: TrialRecord[] = [];
   for (const inst of instances) {
-    for (let trial = 1; trial <= trials; trial++) {
+    for (let trial = firstTrial; trial < firstTrial + trials; trial++) {
       for (const spec of agents) {
         const artifactDir = path.join(
           outDir,
