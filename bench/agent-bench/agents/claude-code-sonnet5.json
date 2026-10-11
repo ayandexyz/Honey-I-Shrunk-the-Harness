@@ -1,0 +1,25 @@
+{
+  "id": "claude-code-sonnet5",
+  "versionCmd": [
+    "claude",
+    "--version"
+  ],
+  "run": [
+    "claude",
+    "-p",
+    "{prompt}",
+    "--dangerously-skip-permissions",
+    "--model",
+    "{model}",
+    "--effort",
+    "high"
+  ],
+  "model": "claude-sonnet-5",
+  "autonomy": "--dangerously-skip-permissions: all permission checks bypassed; --effort high",
+  "env": {
+    "ANTHROPIC_BASE_URL": "",
+    "ANTHROPIC_API_KEY": "",
+    "ANTHROPIC_AUTH_TOKEN": ""
+  },
+  "notes": "Sonnet 5 on the operator's Claude subscription (Claude Code's own login). Host-only, --no-meter: cost is folded afterwards from the session transcripts (API-equivalent, not the subscription bill). --effort high matches freecode-sonnet5; the CLI flag also outranks any modelSettings effort in ~/.claude/settings.json. The three blanks keep a stray shell export from rerouting the run."
+}

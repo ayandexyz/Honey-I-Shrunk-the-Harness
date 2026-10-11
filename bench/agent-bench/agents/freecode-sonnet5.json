@@ -1,0 +1,28 @@
+{
+  "id": "freecode-sonnet5",
+  "versionCmd": [
+    "freecode",
+    "--version"
+  ],
+  "run": [
+    "freecode",
+    "run",
+    "{prompt}",
+    "--model",
+    "{model}",
+    "--agent",
+    "danger",
+    "--max-turns",
+    "40",
+    "--effort",
+    "high"
+  ],
+  "model": "anthropic/claude-sonnet-5",
+  "autonomy": "--agent danger: no permission prompts; --effort high",
+  "env": {
+    "FREECODE_ANTHROPIC_AUTH": "oauth",
+    "ANTHROPIC_BASE_URL": "",
+    "ANTHROPIC_API_KEY": ""
+  },
+  "notes": "Sonnet 5 on the operator's Claude subscription via freecode's anthropic OAuth auth mode. Pair with claude-code-sonnet5; host-only, --no-meter. --effort high is pinned on BOTH adapters: unpinned, freecode sends no effort (API default) while Claude Code applies its own default, and the matchup would measure that setting instead of the harness."
+}
