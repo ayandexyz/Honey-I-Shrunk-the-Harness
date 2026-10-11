@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.44.0
+
+The TUI picks up more of pi-tui: pasted images are drawn inline, file paths in tool rows are clickable, pickers search fuzzily, the colours follow a light terminal, and `/settings` turns features on and off without editing JSON. Also: the system prompt tells the agent to stop once the change is made and checked.
+
+### Added
+
+- **`/settings` panel** (`1c5e8f2f`). Eleven on/off and choice settings (memory recall, extraction, judge and consolidation; checkpoints; background notifications; cache warming; redirect and the three loop gates) with their effective values, each read through the module that owns it. Enter cycles a value; core writes only `~/.freecode/settings.json`, keeps every other key, refuses a file it cannot parse, and writes via a temp file and rename. A setting decided by an environment variable or the project's `.freecode/settings.json` is shown `(locked)` with the reason. Changes apply from the next turn. New IPC methods `settings.list` and `settings.set`.
+- **Pasted images drawn in the transcript** (`7d9c56e2`), with pi-tui's `Image` component, on terminals with the Kitty or iTerm2 image protocol (Ghostty, kitty, WezTerm, iTerm2); elsewhere a one-line `[Image: …]` placeholder. An image partly scrolled off the transcript is redrawn cropped to its visible rows instead of vanishing or spilling over the editor; iTerm2 cannot crop, so it shows a placeholder until scrolled fully into view.
+- **Clickable file paths** (`a87dcb2a`) in `Read(…)` and `Update(…)` tool headers, as OSC 8 `file://` links on terminals that render them. While the TUI holds the mouse, most terminals need Shift held as well.
+- **Light terminal palette** (`8f4f275c`). Off Omarchy, the TUI asks the terminal whether it is light or dark at startup (`CSI ?996n`, else the OSC 11 background colour), without delaying startup, and repaints when the terminal reports a change. An Omarchy theme always wins.
+
+### Changed
+
+- **Stop when the change is made and checked** (`a13f0c70`). The system prompt now says to review the diff once and stop: no re-running searches already done, no verifying against upstream, and no long deliberation over an issue's optional suggestion. `eval ab trajectory` on MiniMax-M3, 5 trials: 136/154 → 139/153, no majority regressions, tokens −33.6%, cost −24.1%, turns 452 → 348. Ledger: `2026-10-11-trajectory-1`.
+- **Fuzzy search in pickers** (`e53793af`). The model and provider pickers and the `/mcp`, `/tree` and `/rewind` lists rank with pi-tui's `fuzzyFilter`, so `opus55` finds `claude-opus-5-5`. The `/` command menu keeps its own ranking.
+- **TUI header** (`5dc671eb`, `23e1b82e`): a truecolour portrait logo and the `>_ Histh!` name.
+
+### Fixed
+
+- **`memory.autoRecall`, `tasks.notify` and `cache.warming` no longer warn "Unknown setting"** (`1c5e8f2f`). They were read but missing from the known-keys list and the JSON schema.
+- **`retrievalJudge` documented default is `false`** (`1c5e8f2f`), as it has been in code since 2026-09-25; the schema and settings reference said `true`.
+- **Selecting text over a link** (`a87dcb2a`). The selection highlighter counted an OSC 8 link's URL as visible columns, shifting the highlight.
+- **Header name** (`91995b6b`). The header showed `Histh!s` while centring itself as `Histh!`; it now shows `Histh!`, and the two header tests that still expected `OmaCode` pass again.
+
+### Notes
+
+Tests: core 1867/1867 (6 new), TUI 378/378 (18 new), typecheck clean; test-guard baselines re-recorded. No eval was run for the TUI and settings work: none of it changes what the model sees, and every setting's default is unchanged. The bench workspace leak fix (`76d1f5d2`), new docs and `apps/web2` changes do not affect the binary.
+
 ## v0.43.3
 
 A run no longer dies on an empty message, and no longer ends on a reply the output limit cut off. Both were found in the 2026-10-11 agent bench.

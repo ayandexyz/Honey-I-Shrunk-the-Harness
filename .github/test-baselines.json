@@ -1,10 +1,10 @@
 {
   "core": {
-    "tests": 1861,
-    "files": 224
+    "tests": 1867,
+    "files": 225
   },
   "tui": {
-    "tests": 360,
-    "files": 39
+    "tests": 378,
+    "files": 43
   }
 }
