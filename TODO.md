@@ -12,14 +12,6 @@ be "fixed" → `docs/DECISIONS.md`.
 
 ## Small known limitations
 
-### A run can end on a plan instead of an edit (found 2026-10-11)
-
-MiniMax-M3 bench, freecode 0.43.2 vs opencode, `django__django-11019` t3 (results `2026-10-10T23-44-29-000Z`):
-exited 0 with no patch, its final message a plan ("add … to `Media.merge()` … then run `test_media.py` to
-confirm") with no edit made — the loop accepted a proposal as done. A prompt-level change, so it needs
-`eval ab trajectory` before it ships. (The same run's t2 — a reply cut off at the output limit and taken as
-final — is fixed: `cutOff` in `loop.ts` gives it another turn.)
-
 ### `freecode eval` does not exit after printing its results (found 2026-09-24)
 
 **Status:** confirmed, wastes wall-clock only, not money. Pre-dates the
