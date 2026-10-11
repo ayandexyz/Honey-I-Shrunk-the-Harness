@@ -9,6 +9,7 @@ export default {
   bus: "Event bus",
   hooks: "Lifecycle hooks",
   permissions: "Permission engine",
+  guardrails: "AI guardrails",
   subagents: "Sub-agent runtime",
   memory: "Memory",
   "knowledge-graph": "Knowledge graph",
