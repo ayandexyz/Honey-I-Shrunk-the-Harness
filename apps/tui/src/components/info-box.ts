@@ -93,7 +93,7 @@ export class ResponsiveInfoBox implements Component {
     const infoBoxLines = [
       `╭${"─".repeat(leftColWidth)}┬${"─".repeat(rightColWidth)}╮`,
       `│${" ".repeat(leftColWidth)}│${" ".repeat(rightColWidth)}│`,
-      `│${" ".repeat(leftColWidth)}│ >_ ${chalk.bold(palette.accent("OmaCode"))} (v${getVersion()})${" ".repeat(Math.max(0, rightColWidth - 16 - getVersion().length))}│`,
+      `│${" ".repeat(leftColWidth)}│ >_ ${chalk.bold(palette.accent("Histh!"))} (v${getVersion()})${" ".repeat(Math.max(0, rightColWidth - 16 - getVersion().length))}│`,
       `│${padL}${coloredLogoLines[0]}${padR}│ /help for help   ${palette.accent("/model")} to change${" ".repeat(Math.max(0, rightColWidth - 34))}│`,
       `│${padL}${coloredLogoLines[1]}${padR}│ ${chalk.bold(palette.accent("Directory:"))} ${cwdPath}${" ".repeat(Math.max(0, rightColWidth - 12 - cwdPath.length))}│`,
       `│${padL}${coloredLogoLines[2]}${padR}├${"─".repeat(rightColWidth)}┤`,

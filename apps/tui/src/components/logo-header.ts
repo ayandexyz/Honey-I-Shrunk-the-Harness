@@ -32,7 +32,7 @@ const PENDING = "…";
 
 /**
  * Pinned top-of-TUI logo header. Renders the ASCII portrait logo (centered,
- * truecolour) with the `>_ OmaCode (vX.Y.Z)` subtitle, a compact stats line
+ * truecolour) with the `>_ Histh! (vX.Y.Z)` subtitle, a compact stats line
  * (tools/MCP/skills/plugins counts) and a directory line — all centered and in yellow.
  *
  * The counts come from accessor functions so the parent can cache them
@@ -113,12 +113,12 @@ export class LogoHeader implements Component {
     const indent = " ".repeat(padLeft);
     const rightPad = " ".repeat(padRight);
 
-    // Subtitle: `>_ OmaCode (vX.Y.Z)` — plain + styled built separately so the
+    // Subtitle: `>_ Histh!ss (vX.Y.Z)` — plain + styled built separately so the
     // centered pad math matches the visible width.
     const version = getVersion();
-    const subtitlePlain = `>_ OmaCode (v${version})`;
+    const subtitlePlain = `>_ Histh! (v${version})`;
     const subtitleStyled =
-      `>_ ${chalk.bold(palette.accent("OmaCode"))} ` +
+      `>_ ${chalk.bold(palette.accent("Histh!s"))} ` +
       chalk.dim(`(v${version})`);
     const subtitleLine = this.centerLine(width, subtitlePlain.length, subtitleStyled);
 
