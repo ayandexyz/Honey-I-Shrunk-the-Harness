@@ -513,7 +513,7 @@ Flags verified 2026-09-03 — **the adapter file is the source of truth:**
 
 | Agent | Version | Full autonomy | Shipped? |
 | --- | --- | --- | --- |
-| freecode | local | `run "<p>" --model <p/m> --agent danger --max-turns 40` | yes |
+| freecode | local | `run "<p>" --model <p/m> --agent danger` (no turn cap — see the adapter notes) | yes |
 | claude | 2.1.251 | `-p "<p>" --dangerously-skip-permissions --model <m>` | yes |
 | opencode | 1.18.25 | `run --pure --auto --model <p/m> "<p>"` + `XDG_CONFIG_HOME` | yes |
 | codex | 0.151.0 | `exec --dangerously-bypass-approvals-and-sandbox --ephemeral --ignore-user-config` | Phase 3 |
