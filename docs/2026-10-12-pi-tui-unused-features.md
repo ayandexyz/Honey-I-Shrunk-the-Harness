@@ -6,36 +6,21 @@ This compares everything pi-tui exports (`dist/index.d.ts`) with what
 `apps/tui/src` imports. FreeCode already uses `Editor`, `Markdown`,
 `SelectList`, `Input`, `Loader`, `Box`, overlays, keybindings, autocomplete,
 `Image` (since `7d9c56e2`), `hyperlink` (clickable file paths in tool
-headers) and `fuzzyFilter` (model/provider pickers, `/mcp`, `/tree`,
-`/rewind`; the `/` command menu keeps its own ranking). Below are the parts
-it doesn't use, in the order they're worth building.
+headers), `fuzzyFilter` (model/provider pickers, `/mcp`, `/tree`,
+`/rewind`; the `/` command menu keeps its own ranking) and terminal
+light/dark detection (a light palette off Omarchy). Below are the parts it
+doesn't use, in the order they're worth building.
 
 | # | Feature | Effort | Verdict |
 |---|---|---|---|
-| 1 | Terminal light/dark detection | Medium | Worth doing |
-| 2 | `SettingsList` | Medium, + one IPC method | Worth doing |
-| 3 | `KeybindingsManager` / `setKeybindings` | Small–medium | Worth doing |
-| 4 | `CancellableLoader` | — | Skip |
-| 5 | `TruncatedText` | — | Skip |
+| 1 | `SettingsList` | Medium, + one IPC method | Worth doing |
+| 2 | `KeybindingsManager` / `setKeybindings` | Small–medium | Worth doing |
+| 3 | `CancellableLoader` | — | Skip |
+| 4 | `TruncatedText` | — | Skip |
 
 ---
 
-## 1. Terminal light/dark detection
-
-**What it is.** `TUI.onTerminalColorSchemeChange(listener)` +
-`setTerminalColorSchemeNotifications(true)` (mode `?2031`), plus
-`parseOsc11BackgroundColor` for a one-off read of the background colour
-(OSC 11).
-
-**Where it goes.** `palette.ts` takes its colours from the Omarchy theme. In
-terminals that report a colour scheme, FreeCode could switch to its light or
-dark palette when the system theme changes, instead of drawing dark-theme
-colours on a light background.
-
-**Watch for.** Many terminals never answer either query. Keep the current
-theme when there's no reply, and never wait on one at startup.
-
-## 2. `SettingsList`: a `/settings` panel
+## 1. `SettingsList`: a `/settings` panel
 
 **What it is.** A list of settings, each with a label on the left and its
 current value on the right. `values` makes Enter/Space cycle through choices,
@@ -51,7 +36,7 @@ changes; core reads and writes the settings files. That needs a
 `config.set` IPC method, since only `config.get` exists today. Loop gates that
 are off by default should be labelled as experimental.
 
-## 3. `KeybindingsManager` / `setKeybindings`: user keybindings
+## 2. `KeybindingsManager` / `setKeybindings`: user keybindings
 
 **What it is.** A keybinding registry that reports conflicts, with
 `TUI_KEYBINDINGS` as the defaults.
@@ -64,13 +49,13 @@ and `getKeybindings()` is read by `menu-card.ts`,
 **Watch for.** Report conflicts as a notice at startup instead of silently
 letting one binding win.
 
-## 4. `CancellableLoader`: skip
+## 3. `CancellableLoader`: skip
 
 A spinner that Esc can cancel. FreeCode's own in-progress row
 (`createInProgressMessage`) already shows token counts and context use and
 handles Esc. Switching would remove features.
 
-## 5. `TruncatedText`: skip
+## 4. `TruncatedText`: skip
 
 Single-line text cut to fit the width. `WidthBounded` and
 `truncateToWidth` already do this throughout `message-row.ts`.

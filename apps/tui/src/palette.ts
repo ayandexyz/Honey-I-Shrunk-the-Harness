@@ -168,6 +168,80 @@ function defaultPalette(): Palette {
   };
 }
 
+/**
+ * `defaultPalette` for a light terminal background: GitHub-light hues, dark
+ * text, dark chips under white text. Chosen off Omarchy only, when the
+ * terminal reports a light scheme (see `setTerminalScheme`).
+ */
+function lightPalette(): Palette {
+  return {
+    accent: chalk.hex("#9a6700"),
+    accentDim: chalk.hex("#7d5600"),
+    accent2: chalk.hex("#0969da"),
+    muted: chalk.hex("#6e7781"),
+    fg: chalk.hex("#24292f"),
+    fgBright: chalk.hex("#000000"),
+
+    red: chalk.hex("#cf222e"),
+    green: chalk.hex("#1a7f37"),
+    yellow: chalk.hex("#9a6700"),
+    orange: chalk.hex("#bc4c00"),
+    blue: chalk.hex("#0969da"),
+    magenta: chalk.hex("#8250df"),
+    cyan: chalk.hex("#1b7c83"),
+    // "Bright" means more emphatic, which on white is darker.
+    brightRed: chalk.hex("#a40e26"),
+    brightGreen: chalk.hex("#116329"),
+    brightYellow: chalk.hex("#7d4e00"),
+    brightBlue: chalk.hex("#0550ae"),
+    brightMagenta: chalk.hex("#6639ba"),
+    brightCyan: chalk.hex("#0e5a63"),
+
+    onAccent: chalk.hex("#ffffff"),
+    bgSurface: chalk.bgHex("#eaeef2"),
+    bgUserMessage: chalk.bgHex("#eaeef2"),
+    bgSelection: chalk.bgHex("#b6d7ff"),
+    fgSelection: chalk.hex("#000000"),
+    bgDiffAdd: chalk.bgHex("#dafbe1"),
+    bgDiffDel: chalk.bgHex("#ffebe9"),
+    bgAccent: chalk.bgHex("#9a6700"),
+    bgAccent2: chalk.bgHex("#0969da"),
+    bgRed: chalk.bgHex("#cf222e"),
+    bgGreen: chalk.bgHex("#1a7f37"),
+    bgBlue: chalk.bgHex("#0969da"),
+    bgMagenta: chalk.bgHex("#8250df"),
+
+    // GitHub light.
+    syntax: {
+      keyword: chalk.hex("#cf222e"),
+      builtin: chalk.hex("#0550ae"),
+      literal: chalk.hex("#0550ae"),
+      string: chalk.hex("#0a3069"),
+      comment: chalk.hex("#6e7781"),
+      function: chalk.hex("#8250df"),
+      attr: chalk.hex("#953800"),
+      default: chalk.hex("#24292f"),
+    },
+
+    segments: {
+      "system-prompt": "#bc4c00",
+      "project-instructions": "#0969da",
+      skills: "#1b7c83",
+      "agent-types": "#116329",
+      "memory-guidance": "#8250df",
+      tools: "#cf222e",
+      "mcp-tools": "#a40e26",
+      "compaction-summary": "#7d4e00",
+      memories: "#6639ba",
+      todos: "#1a7f37",
+      "project-context": "#0e5a63",
+      messages: "#9a6700",
+    },
+    segmentFree: "#d0d7de",
+    shimmer: { base: "#8c959f", glow: "#000000" },
+  };
+}
+
 function omarchyThemedPalette(t: NonNullable<typeof omarchyPalette>): Palette {
   return {
     accent: chalk.hex(t.accent),
@@ -332,6 +406,21 @@ export function refreshPalette(load: () => OmarchyPalette | null = loadOmarchyPa
   }
   currentSource = next;
   applyPalette(omarchyThemedPalette(next));
+  return true;
+}
+
+/** The terminal's light/dark scheme; picks between the two built-in palettes. */
+let terminalScheme: "light" | "dark" = "dark";
+
+/**
+ * Follow the terminal's light/dark scheme. Off Omarchy only: an Omarchy theme
+ * is the user's actual colours, and it already carries its own background.
+ * Returns true when the palette moved, like `refreshPalette`.
+ */
+export function setTerminalScheme(scheme: "light" | "dark"): boolean {
+  if (currentSource || scheme === terminalScheme) return false;
+  terminalScheme = scheme;
+  applyPalette(scheme === "light" ? lightPalette() : defaultPalette());
   return true;
 }
 

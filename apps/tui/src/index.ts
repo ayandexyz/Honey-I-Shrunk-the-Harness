@@ -21,7 +21,8 @@ import { registerBuiltInCommands } from "./commands/built-in.js";
 import { Input, type Component } from "@earendil-works/pi-tui";
 import { Loader, Text } from "@earendil-works/pi-tui";
 import chalk from "chalk";
-import { palette, refreshPalette } from "./palette.js";
+import { palette, refreshPalette, setTerminalScheme } from "./palette.js";
+import { detectTerminalScheme } from "./utils/terminal-scheme.js";
 import { omarchyPalette, watchOmarchyTheme } from "./utils/omarchy-theme.js";
 import { defaultEditorTheme, MODE_COLORS } from "./themes.js";
 import {
@@ -3403,6 +3404,15 @@ const stopThemeWatch = watchOmarchyTheme(() => {
   tui.requestRender();
 });
 
+// Off Omarchy, follow the terminal's light/dark scheme: once at startup (see
+// detectTerminalScheme, after tui.start below) and on every change the
+// terminal reports (mode ?2031, which tui.start re-enables after each stop).
+// setTerminalScheme is a no-op under an Omarchy theme.
+tui.setTerminalColorSchemeNotifications(true);
+tui.onTerminalColorSchemeChange((scheme) => {
+  if (setTerminalScheme(scheme)) tui.requestRender();
+});
+
 // Safety net for crash / uncaught-exception exits that skip the explicit
 // shutdown() path above — restoreScreen() is idempotent, so this is a no-op
 // when the alt screen was already exited cleanly.
@@ -3429,3 +3439,8 @@ installCrashHandlers({
 
 process.stdout.write(ENTER_ALT_SCREEN);
 tui.start();
+if (!omarchyPalette) {
+  void detectTerminalScheme(tui).then((scheme) => {
+    if (scheme && setTerminalScheme(scheme)) tui.requestRender();
+  });
+}
