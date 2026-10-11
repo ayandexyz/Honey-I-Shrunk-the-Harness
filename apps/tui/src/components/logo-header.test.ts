@@ -19,7 +19,7 @@ function render(update: string | null): string[] {
 test("no update notice while the probe is pending or empty", () => {
   const lines = render(null);
   assert.ok(
-    lines.some((l) => l.includes(">_ OmaCode")),
+    lines.some((l) => l.includes(">_ Histh!")),
     "subtitle should still render",
   );
   assert.ok(!lines.some((l) => l.includes("update available")));
@@ -27,7 +27,7 @@ test("no update notice while the probe is pending or empty", () => {
 
 test("update notice renders directly under the subtitle", () => {
   const lines = render("0.39.0");
-  const subtitleAt = lines.findIndex((l) => l.includes(">_ OmaCode"));
+  const subtitleAt = lines.findIndex((l) => l.includes(">_ Histh!"));
   const noticeAt = lines.findIndex((l) => l.includes("update available"));
   assert.notEqual(subtitleAt, -1);
   assert.equal(noticeAt, subtitleAt + 1, "notice belongs right below the version");

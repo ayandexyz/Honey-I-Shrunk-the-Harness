@@ -113,12 +113,12 @@ export class LogoHeader implements Component {
     const indent = " ".repeat(padLeft);
     const rightPad = " ".repeat(padRight);
 
-    // Subtitle: `>_ Histh!ss (vX.Y.Z)` — plain + styled built separately so the
+    // Subtitle: `>_ Histh! (vX.Y.Z)` — plain + styled built separately so the
     // centered pad math matches the visible width.
     const version = getVersion();
     const subtitlePlain = `>_ Histh! (v${version})`;
     const subtitleStyled =
-      `>_ ${chalk.bold(palette.accent("Histh!s"))} ` +
+      `>_ ${chalk.bold(palette.accent("Histh!"))} ` +
       chalk.dim(`(v${version})`);
     const subtitleLine = this.centerLine(width, subtitlePlain.length, subtitleStyled);
 
