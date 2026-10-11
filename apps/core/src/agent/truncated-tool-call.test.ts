@@ -18,6 +18,8 @@ import type {
 } from "../providers/types.js";
 import {
   MAX_TRUNCATED_TOOL_RETRIES,
+  cutOffReplyReminder,
+  malformedToolCallReminder,
   truncatedToolCallReminder,
 } from "./reminders.js";
 
@@ -33,6 +35,19 @@ test("truncatedToolCallReminder lists every truncated call", () => {
   const r = truncatedToolCallReminder(["write", "memory"]);
   assert.match(r, /`write`/);
   assert.match(r, /`memory`/);
+});
+
+test("malformedToolCallReminder blames the JSON, not the output limit", () => {
+  const r = malformedToolCallReminder(["read"]);
+  assert.match(r, /`read`/);
+  assert.match(r, /not valid JSON/);
+  assert.doesNotMatch(r, /output token limit|smaller/);
+});
+
+test("cutOffReplyReminder says the reply was cut off and asks to continue", () => {
+  const r = cutOffReplyReminder();
+  assert.match(r, /cut off by the output token limit/);
+  assert.match(r, /Continue/);
 });
 
 // The retry is bounded: each extra turn re-sends the whole prompt, so a model
@@ -198,6 +213,108 @@ test("a model that keeps truncating stops at the retry budget", async () => {
       /output tokens/,
       "the run says what stopped it",
     );
+  } finally {
+    await runtime.dispose();
+    rmSync(rolloutDir, { recursive: true, force: true });
+  }
+});
+
+// =============================================================================
+// Bench 2026-10-11, Sonnet 5 django-11133 t3: the model's only tool call was
+// unparseable at 98 output tokens (finish reason tool_use, not length). The
+// loop saved an EMPTY assistant text message, the next request anchored a
+// cache_control on it, and the provider rejected the run. The retry must run
+// and tell the model the JSON was bad (not "too long").
+// =============================================================================
+
+const tails: Record<string, string[]> = { malformed: [], cutoff: [] };
+
+let malformedCalls = 0;
+registerProvider("malformed-once-fake" as ProviderId, {
+  info: info("malformed-once-fake"),
+  create: (): AIProvider => ({
+    info: info("malformed-once-fake"),
+    execute: async () => done,
+    stream: async function* (opts): AsyncGenerator<ProviderChunk> {
+      malformedCalls += 1;
+      tails.malformed.push(opts.ephemeralTail ?? "");
+      if (malformedCalls === 1) {
+        yield { type: "tool_call_invalid", id: "call-1", name: "read" };
+        yield { type: "done", stopReason: "tool_use" };
+        return;
+      }
+      yield { type: "text_delta", delta: "read it properly" };
+      yield { type: "done", stopReason: "stop" };
+    },
+  }),
+});
+
+// The empty assistant turn it leaves behind is kept in the store (the
+// transcript must alternate on resume) and dropped at the wire instead —
+// see the empty-message cases in providers/tool-pairing.test.ts.
+test("an unparseable call that did not hit the limit retries as malformed", async () => {
+  const rolloutDir = mkdtempSync(join(tmpdir(), "freecode-rollout-"));
+  const { runtime, loop, projectPath } = await runLoop(
+    "malformed-once",
+    "malformed-once-fake",
+    rolloutDir,
+  );
+  try {
+    await loop.run({
+      prompt: "read the file",
+      sessionId: "malformed-once",
+      provider: "malformed-once-fake",
+      projectPath,
+    });
+    assert.equal(malformedCalls, 2, "the model was given a second turn");
+    assert.match(tails.malformed[1], /not valid JSON/);
+    assert.doesNotMatch(tails.malformed[1], /output token limit/);
+
+  } finally {
+    await runtime.dispose();
+    rmSync(rolloutDir, { recursive: true, force: true });
+  }
+});
+
+// Bench 2026-10-11, MiniMax django-11019 t2: a text-only reply cut off at the
+// output limit mid-sentence was taken as the model's final answer.
+let cutoffCalls = 0;
+registerProvider("cutoff-once-fake" as ProviderId, {
+  info: info("cutoff-once-fake"),
+  create: (): AIProvider => ({
+    info: info("cutoff-once-fake"),
+    execute: async () => done,
+    stream: async function* (opts): AsyncGenerator<ProviderChunk> {
+      cutoffCalls += 1;
+      tails.cutoff.push(opts.ephemeralTail ?? "");
+      if (cutoffCalls === 1) {
+        yield { type: "text_delta", delta: "Let me think about the pairs (1, 2) from list_1, (2, 3)" };
+        yield { type: "done", stopReason: "max_tokens" };
+        return;
+      }
+      yield { type: "text_delta", delta: "continued and finished" };
+      yield { type: "done", stopReason: "stop" };
+    },
+  }),
+});
+
+test("a text reply cut off at the output limit earns another turn", async () => {
+  const rolloutDir = mkdtempSync(join(tmpdir(), "freecode-rollout-"));
+  const { runtime, loop, projectPath } = await runLoop(
+    "cutoff-once",
+    "cutoff-once-fake",
+    rolloutDir,
+  );
+  try {
+    const result = await loop.run({
+      prompt: "fix it",
+      sessionId: "cutoff-once",
+      provider: "cutoff-once-fake",
+      projectPath,
+    });
+    assert.equal(cutoffCalls, 2, "the cut-off reply was not taken as the final answer");
+    assert.match(tails.cutoff[1], /cut off by the output token limit/);
+    assert.match(String(result.content ?? ""), /continued and finished/);
   } finally {
     await runtime.dispose();
     rmSync(rolloutDir, { recursive: true, force: true });

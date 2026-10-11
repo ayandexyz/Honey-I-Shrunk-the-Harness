@@ -14,7 +14,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { convertToCoreMessages } from "./utils.js";
+import { applyMessageCaching, convertToCoreMessages } from "./utils.js";
 
 let n = 0;
 const user = (text: string) => ({ id: `u${n++}`, role: "user", parts: [{ type: "text", content: text }] });
@@ -71,4 +71,37 @@ test("a tool part with no result still reaches the wire answered, and says why",
 test("an empty-string result is a real result, not a missing one", () => {
   const wire = convertToCoreMessages([user("go"), tool("bash", "")] as never) as any[];
   assert.equal(wire.find((m) => m.role === "tool").content[0].output.value, "");
+});
+
+// An assistant turn with nothing to say (the model's only tool call was
+// dropped as unparseable) must never reach the wire as an empty text block:
+// Anthropic rejects one, and applyMessageCaching anchors the last message —
+// so the empty block also carried a cache_control, which 400s every later
+// request ("cache_control cannot be set for empty text blocks").
+test("an assistant message with no text and no calls is not sent", () => {
+  const wire = convertToCoreMessages([user("go"), tool("grep", "3 matches"), text(""), user("reminder")] as never) as any[];
+  const assistants = wire.filter((m) => m.role === "assistant");
+  assert.equal(assistants.length, 1, "only the tool-call turn survives");
+  for (const m of wire) {
+    if (typeof m.content === "string") assert.notEqual(m.content.trim(), "", `${m.role} message is empty`);
+  }
+});
+
+test("whitespace-only text never becomes a text part beside a tool call", () => {
+  const msg = { ...tool("read", "ok") };
+  msg.parts = [{ type: "text", content: "  \n" }, ...msg.parts] as never;
+  const wire = convertToCoreMessages([user("go"), msg] as never) as any[];
+  const assistant = wire.find((m) => m.role === "assistant");
+  assert.deepEqual(assistant.content.map((c: any) => c.type), ["tool-call"]);
+});
+
+test("caching the converted tail never anchors an empty text block", () => {
+  const wire = convertToCoreMessages([user("go"), tool("grep", "x"), text("")] as never) as any[];
+  applyMessageCaching(wire);
+  for (const m of wire) {
+    if (!Array.isArray(m.content)) continue;
+    for (const p of m.content) {
+      if (p.type === "text") assert.notEqual(p.text.trim(), "", "empty text part on the wire");
+    }
+  }
 });

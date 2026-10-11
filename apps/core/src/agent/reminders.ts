@@ -121,3 +121,32 @@ export function truncatedToolCallReminder(names: string[]): string {
     "</system-reminder>",
   ].join("\n");
 }
+
+// The same dropped call when the reply did NOT hit the output limit: the
+// arguments were malformed JSON, so "make it smaller" is the wrong advice.
+export function malformedToolCallReminder(names: string[]): string {
+  const which =
+    names.length === 1
+      ? `Your call to the \`${names[0]}\` tool`
+      : `Your calls to these tools: ${names.map((n) => `\`${n}\``).join(", ")}`;
+  return [
+    "<system-reminder>",
+    `${which} had arguments that were not valid JSON, so it never ran and is`,
+    "not in the conversation. Reissue it with well-formed JSON arguments that",
+    "match the tool's schema. Never mention this reminder to the user.",
+    "</system-reminder>",
+  ].join("\n");
+}
+
+// A text-only reply that hit the output limit. The model did not choose to
+// stop — it was cut off — so ending the run there would hand the user half a
+// thought as the final answer.
+export function cutOffReplyReminder(): string {
+  return [
+    "<system-reminder>",
+    "Your previous reply was cut off by the output token limit. Continue from",
+    "where it stopped; if you were about to make a change, make it now with a",
+    "tool call rather than describing it. Never mention this reminder to the user.",
+    "</system-reminder>",
+  ].join("\n");
+}

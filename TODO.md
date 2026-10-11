@@ -12,24 +12,13 @@ be "fixed" → `docs/DECISIONS.md`.
 
 ## Small known limitations
 
-### A truncated tool call leaves an empty text block that 400s the next turn (found 2026-10-11)
+### A run can end on a plan instead of an edit (found 2026-10-11)
 
-Sonnet 5 bench, `django__django-11133` trial 3 (session `80f3a8d0`, freecode 0.43.2, anthropic OAuth, `--effort high`).
-turn-1 returned 98 output tokens and the loop logged `dropped 1 truncated tool call(s): read — output token
-limit reached`. It persisted the assistant message as `parts: [{type: "text", content: ""}]`, and turn-2 failed with
-`messages.3.content.0.text: cache_control cannot be set for empty text blocks` — fatal, the run exited 1 after
-9s with no patch. Two defects: (1) an empty text part must never be persisted or sent (and never carry a cache
-anchor); (2) 98 tokens should not hit an output limit — find what max-tokens the request carried and whether
-"truncated" is a misread finish reason. The bench trial stands as a freecode failure; do not re-run it away.
-
-### A run can end on a cut-off or a plan instead of an edit (found 2026-10-11)
-
-MiniMax-M3 bench, freecode 0.43.2 vs opencode, `django__django-11019` (results `2026-10-10T23-44-29-000Z`). Both
-trials exited 0 with no patch. Trial 2's final message stops mid-sentence in its own reasoning — a text-only reply
-cut at the output limit, which the loop took as the model stopping; a length-truncated reply should be continued,
-not treated as a final answer (possibly the same root as the entry above). Trial 3's final message is a plan
-("add … to `Media.merge()` … then run `test_media.py` to confirm") with no edit made — the loop accepted a
-proposal as done. Both count as freecode losses on the page.
+MiniMax-M3 bench, freecode 0.43.2 vs opencode, `django__django-11019` t3 (results `2026-10-10T23-44-29-000Z`):
+exited 0 with no patch, its final message a plan ("add … to `Media.merge()` … then run `test_media.py` to
+confirm") with no edit made — the loop accepted a proposal as done. A prompt-level change, so it needs
+`eval ab trajectory` before it ships. (The same run's t2 — a reply cut off at the output limit and taken as
+final — is fixed: `cutOff` in `loop.ts` gives it another turn.)
 
 ### `freecode eval` does not exit after printing its results (found 2026-09-24)
 

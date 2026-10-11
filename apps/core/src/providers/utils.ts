@@ -333,7 +333,11 @@ export function convertToCoreMessages(messages: Message[]): ModelMessage[] {
 
       for (const part of msg.parts) {
         if (part.type === "text") {
-          textParts.push(part.content);
+          // An empty text block is rejected by Anthropic — and as the tail it
+          // also picks up applyMessageCaching's cache_control, which fails
+          // every later request in the session. A turn whose only tool call
+          // was dropped as unparseable is saved with exactly that.
+          if (part.content.trim()) textParts.push(part.content);
         } else if (part.type === "code") {
           textParts.push(`\`\`\`${part.language}\n${part.content}\n\`\`\``);
         } else if (part.type === "tool") {
@@ -384,7 +388,7 @@ export function convertToCoreMessages(messages: Message[]): ModelMessage[] {
           role: "assistant",
           content,
         } as AssistantModelMessage);
-      } else {
+      } else if (textParts.length > 0) {
         coreMessages.push({
           role: "assistant",
           content: textParts.join("\n\n"),

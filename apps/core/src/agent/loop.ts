@@ -33,6 +33,7 @@ import type {
   SystemBlock,
   ExecuteUsage,
   ExecuteOptions,
+  ExecuteResult,
 } from "../providers/types.js";
 import { subscriptionAuth } from "../providers/config.js";
 import {
@@ -96,6 +97,8 @@ import {
   shouldNudgeTodo,
   todoNudgeReminder,
   truncatedToolCallReminder,
+  malformedToolCallReminder,
+  cutOffReplyReminder,
   wrapUpReminder,
 } from "./reminders.js";
 import {
@@ -1218,12 +1221,15 @@ export class AgentLoop {
         // every item pending, and a forced continuation turns a requested
         // plan into unsolicited implementation work.
         if (turnResult.toolResults.length === 0) {
-          // The model cut a tool call off mid-argument and nothing else ran,
-          // so this is not "the model wants to stop" — it is a failure the
-          // model can fix by reissuing the call smaller. executeTurn has
-          // already queued the reminder that says so; give it the turn.
+          // The model's tool call never parsed, or its reply was cut off by
+          // the output limit, and nothing else ran — so this is not "the model
+          // wants to stop", it is a failure the model can recover from.
+          // executeTurn has already queued the reminder that says so; give it
+          // the turn.
+          const interrupted =
+            turnResult.truncatedToolCall || turnResult.cutOff;
           if (
-            turnResult.truncatedToolCall &&
+            interrupted &&
             this.truncatedRetries < MAX_TRUNCATED_TOOL_RETRIES
           ) {
             this.truncatedRetries += 1;
@@ -1242,6 +1248,17 @@ export class AgentLoop {
             await this.stop("tool_call_truncated");
             return await this.complete(
               "Stopped: the model kept running out of output tokens mid-tool-call " +
+                `(${MAX_TRUNCATED_TOOL_RETRIES} retries). Ask for a smaller change, or raise the ` +
+                "output limit.",
+              turnResult.responseText,
+              turnResult.thinking,
+              usageSoFar(),
+            );
+          }
+          if (turnResult.cutOff) {
+            await this.stop("reply_cut_off");
+            return await this.complete(
+              "Stopped: the model kept running out of output tokens " +
                 `(${MAX_TRUNCATED_TOOL_RETRIES} retries). Ask for a smaller change, or raise the ` +
                 "output limit.",
               turnResult.responseText,
@@ -1776,6 +1793,8 @@ export class AgentLoop {
      * them, instead of ending the run on a failure it can fix itself.
      */
     truncatedToolCall?: boolean;
+    /** A text-only reply ended by the output token limit, not by the model. */
+    cutOff?: boolean;
     usage?: ExecuteUsage;
   }> {
     // Recorded here, before any provider call, so the event actually brackets
@@ -2095,18 +2114,33 @@ export class AgentLoop {
         });
       }
 
-      // A tool call the model cut off mid-argument. It never parsed, so it is
-      // not in `toolCalls` and never reaches history; the model is told to
-      // reissue it smaller on the next turn.
+      // A tool call whose arguments never parsed. It is not in `toolCalls`
+      // and never reaches history; the model is told to reissue it. Only a
+      // reply that hit the output limit was cut off mid-argument — otherwise
+      // the JSON was simply malformed, and "make it smaller" is wrong advice.
+      const hitOutputLimit = providerResult.stopReason === "max_tokens";
       const truncatedToolCalls = providerResult.truncatedToolCalls ?? [];
       if (truncatedToolCalls.length > 0) {
         logger.warn(
-          `[AgentLoop] dropped ${truncatedToolCalls.length} truncated tool call(s): ` +
-            `${truncatedToolCalls.join(", ")} — output token limit reached`,
+          `[AgentLoop] dropped ${truncatedToolCalls.length} unparseable tool call(s): ` +
+            `${truncatedToolCalls.join(", ")} — ` +
+            (hitOutputLimit ? "output token limit reached" : "malformed JSON arguments"),
         );
         this.pendingReminders.push(
-          truncatedToolCallReminder(truncatedToolCalls),
+          hitOutputLimit
+            ? truncatedToolCallReminder(truncatedToolCalls)
+            : malformedToolCallReminder(truncatedToolCalls),
         );
+      }
+      // A text-only reply that ran into the output limit was cut off, not
+      // finished: the run loop gives it another turn instead of ending on it.
+      const cutOff =
+        hitOutputLimit &&
+        toolCalls.length === 0 &&
+        truncatedToolCalls.length === 0;
+      if (cutOff) {
+        logger.warn("[AgentLoop] reply cut off at the output token limit — continuing");
+        this.pendingReminders.push(cutOffReplyReminder());
       }
 
       const usedTodoWrite = toolCalls.some((tc) => tc.tool === "todowrite");
@@ -2162,6 +2196,7 @@ export class AgentLoop {
           thinking: providerResult.thinking,
           madeFileChange: false,
           truncatedToolCall: truncatedToolCalls.length > 0,
+          cutOff,
           usage: providerResult.usage,
         };
       }
@@ -2326,6 +2361,8 @@ export class AgentLoop {
     /** Names of tool calls the model truncated mid-argument; see
      *  `tool_call_invalid` in providers/types.ts. */
     truncatedToolCalls?: string[];
+    /** Why the reply ended; `max_tokens` means it was cut off. */
+    stopReason?: ExecuteResult["stopReason"];
     usage?: ExecuteUsage;
     streamed?: boolean;
   }> {
@@ -2367,6 +2404,8 @@ export class AgentLoop {
     /** Names of tool calls the model truncated mid-argument; see
      *  `tool_call_invalid` in providers/types.ts. */
     truncatedToolCalls?: string[];
+    /** Why the reply ended; `max_tokens` means it was cut off. */
+    stopReason?: ExecuteResult["stopReason"];
     usage?: ExecuteUsage;
     streamed?: boolean;
   }> {
@@ -2514,6 +2553,7 @@ export class AgentLoop {
         // What the provider says it actually served, if it says anything. Only
         // the `done` chunk carries it, so it has to outlive the switch.
         let echoedModel: string | undefined;
+        let stopReason: ExecuteResult["stopReason"] | undefined;
         // Holds back the citation tag so it never reaches a frontend (D12).
         const citationFilter = new CitationStreamFilter();
 
@@ -2594,6 +2634,7 @@ export class AgentLoop {
               throw new Error(chunk.error);
             case "done":
               echoedModel = chunk.echoedModel;
+              stopReason = chunk.stopReason;
               break;
           }
         }
@@ -2631,6 +2672,7 @@ export class AgentLoop {
           thinking: thinking ? thinking : undefined,
           toolCalls,
           truncatedToolCalls,
+          stopReason,
           usage,
           streamed: true,
         };
@@ -2675,6 +2717,7 @@ export class AgentLoop {
         thinking: result.thinking,
         toolCalls: result.toolCalls,
         truncatedToolCalls: result.truncatedToolCalls,
+        stopReason: result.stopReason,
         usage: result.usage,
       };
     } catch (err) {
