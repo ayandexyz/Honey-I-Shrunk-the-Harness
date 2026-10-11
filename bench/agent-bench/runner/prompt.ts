@@ -7,9 +7,12 @@
 // experiment.
 //
 // The no-web line (2026-10-11): an unisolated run has an open network, and on
-// Sonnet 5 freecode fetched Django's upstream fix in 7 of 30 trials (claude-code
-// in 0). Isolation enforces it; subscription runs cannot be isolated (no
-// credentials in the container), so for them this instruction is the control.
+// Sonnet 5 freecode looked up Django's upstream fix in 7 of 30 trials
+// (webfetch/websearch, curl to GitHub raw) and claude-code in 1 (`pip download`
+// of a later Django release, then grep). "No web" alone would not cover the
+// second, hence "upstream code" in the wording. Isolation enforces it;
+// subscription runs cannot be isolated (no credentials in the container), so
+// for them this instruction is the control.
 // =============================================================================
 
 import type { Instance } from "./types.js";
@@ -26,7 +29,7 @@ export function taskPrompt(inst: Instance): string {
     "test suite, which is not present in this checkout.",
     "",
     "Work from this checkout only. Do not search the web or fetch the upstream",
-    "project's code, commits, or issue tracker — the fix must be your own.",
+    "project's code, commits, releases, or issue tracker — the fix must be your own.",
     "",
     "<issue>",
     inst.problemStatement.trim(),
