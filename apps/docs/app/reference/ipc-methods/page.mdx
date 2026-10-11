@@ -130,6 +130,8 @@ itself never crosses the pipe.
 | ✓ | `config.setCurrentModel` | `{ provider, model }` | `void` |
 | ✓ | `config.getLastAgentMode` | — | mode or `undefined` |
 | ✓ | `config.setLastAgentMode` | `{ mode }` | `void` |
+| ✓ | `settings.list` | `{ cwd }` | `SettingView[]` — the `/settings` rows, effective value, `locked` reason |
+| ✓ | `settings.set` | `{ key, value }` | `void` — writes `~/.freecode/settings.json`; rejects an unknown key or value |
 
 `config.get` returns the file with every secret replaced by whether it is set:
 each provider entry becomes `{ hasApiKey, model?, authMode? }` and each `web`

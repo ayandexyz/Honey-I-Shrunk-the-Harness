@@ -55,6 +55,7 @@ export interface CommandContext extends MessageCreators {
   showResumePicker?(): void;
   /** Interactive MCP server list with live connection status (the /mcp command). */
   showMcpPicker?(): Promise<void>;
+  showSettingsPanel?(): Promise<void>;
   /**
    * Background shells started by `bash(run_in_background: true)`, with a live
    * tail of the selected one (the /shells command). Lives in the shell because

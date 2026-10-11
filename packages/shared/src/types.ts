@@ -595,3 +595,17 @@ export interface ShellOutputResult {
   /** Pass back as `cursor` on the next poll to get only what is new. */
   nextCursor: number;
 }
+
+/** One row of the /settings panel (`settings.list`). */
+export interface SettingView {
+  /** Dotted settings.json key, e.g. `memory.autoRecall`. */
+  key: string;
+  label: string;
+  description: string;
+  /** Allowed values; booleans are `on` / `off`. */
+  values: string[];
+  /** Effective value, after env and project/user scopes. */
+  value: string;
+  /** Why it cannot be changed from the panel (env var or project file). */
+  locked?: string;
+}

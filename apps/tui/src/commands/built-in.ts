@@ -82,6 +82,18 @@ const mcpCommand: Command = {
   },
 };
 
+const settingsCommand: Command = {
+  name: "settings",
+  description: "Turn features on or off (memory, checkpoints, cache warming, …)",
+  execute: async (_args, ctx) => {
+    if (ctx.showSettingsPanel) {
+      await ctx.showSettingsPanel();
+    } else {
+      ctx.showMessage("Settings panel unavailable in this context.");
+    }
+  },
+};
+
 const shellsCommand: Command = {
   name: "shells",
   description: "Background shells — live output, kill a running one",
@@ -338,6 +350,7 @@ export function registerBuiltInCommands(): void {
   registerCommand(modelCommand);
   registerCommand(webCommand);
   registerCommand(mcpCommand);
+  registerCommand(settingsCommand);
   registerCommand(shellsCommand);
   registerCommand(agentsCommand);
   registerCommand(nightCommand);

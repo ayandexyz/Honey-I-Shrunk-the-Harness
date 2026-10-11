@@ -95,6 +95,8 @@ import {
   setCurrentModel,
   getLastAgentMode,
   setLastAgentMode,
+  listSettings,
+  setSetting,
   getPromptHistory,
   appendPromptHistory,
   setApiKey,
@@ -156,6 +158,8 @@ import {
   providerRows,
 } from "./components/model-picker.js";
 import { createMcpSelector } from "./components/mcp-picker.js";
+import { createSettingsPanel } from "./components/settings-panel.js";
+import type { SettingsList } from "@earendil-works/pi-tui";
 import { ShellsPanel } from "./components/shells-panel.js";
 import { AgentsPanel } from "./components/agents-panel.js";
 import { NightPanel } from "./components/night-panel.js";
@@ -309,6 +313,7 @@ let modelMenu: OverlayHandle | null = null;
 let effortPicker: EffortPicker | null = null;
 let resumeSelector: ResumePicker | null = null;
 let mcpSelector: SearchableSelectList | null = null;
+let settingsPanel: SettingsList | null = null;
 let treeSelector: SearchableSelectList | null = null;
 /** `/rewind` — two steps: pick a checkpoint, then confirm the file list. */
 let rewindSelector: SearchableSelectList | null = null;
@@ -997,6 +1002,53 @@ async function forkSession(): Promise<void> {
     showMessage(`**Forked into a new session** (${result.messages?.length ?? 0} messages carried over).`);
   } catch (err) {
     showMessage(`**Error:** ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+function hideSettingsPanel(): void {
+  if (settingsPanel) {
+    const idx = tui.children.indexOf(settingsPanel);
+    if (idx !== -1) tui.children.splice(idx, 1);
+    settingsPanel = null;
+  }
+  tui.setFocus(focusTarget());
+  tui.requestRender();
+}
+
+/**
+ * The /settings panel: core's flippable settings, cycled with Enter. Core
+ * writes ~/.freecode/settings.json and every reader picks it up next turn.
+ */
+async function showSettingsPanel(): Promise<void> {
+  hideSettingsPanel();
+  hideMcpSelector();
+  hideModelSelector();
+  try {
+    const settings = await listSettings(process.cwd());
+    const previous = new Map(settings.map((s) => [s.key, s.value]));
+    const panel = createSettingsPanel(
+      settings,
+      8,
+      (key, value) => {
+        void setSetting(key, value).then(
+          () => previous.set(key, value),
+          (err) => {
+            // SettingsList already shows the new value; put the real one back.
+            panel.updateValue(key, previous.get(key) ?? value);
+            showMessage(`**Error:** ${err instanceof Error ? err.message : String(err)}`);
+            tui.requestRender();
+          },
+        );
+      },
+      () => hideSettingsPanel(),
+    );
+    settingsPanel = panel;
+    const editorIdx = tui.children.indexOf(editor);
+    tui.children.splice(editorIdx + 1, 0, panel);
+    tui.setFocus(panel);
+    tui.requestRender();
+  } catch (err) {
+    showMessage(`**Error:** Failed to load settings: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -2487,6 +2539,7 @@ editor.onSubmit = async (value: string) => {
           showModelSelector: () => showProviderSelector("api"),
           showWebSelector: () => showProviderSelector("web"),
           showMcpPicker: () => showMcpPicker(),
+          showSettingsPanel: () => showSettingsPanel(),
           showShellsPanel: () => showShellsPanel(),
           showNightPanel,
   showAgentsPanel: () => showAgentsPanel(),
@@ -3155,6 +3208,10 @@ tui.addInputListener((data) => {
     }
     if (mcpSelector) {
       hideMcpSelector();
+      return { consume: true };
+    }
+    if (settingsPanel) {
+      hideSettingsPanel();
       return { consume: true };
     }
     if (treeSelector) {

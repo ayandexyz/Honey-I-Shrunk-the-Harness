@@ -7,6 +7,7 @@ import { resolve as pathResolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import { existsSync, readdirSync, statSync } from "fs";
 import type {
+  SettingView,
   JsonRpcRequest,
   JsonRpcResponse,
   ToolListItem,
@@ -771,6 +772,16 @@ export async function getLastAgentMode(): Promise<string | undefined> {
 
 export async function setLastAgentMode(mode: string): Promise<void> {
   await sendRequest("config.setLastAgentMode", { mode });
+}
+
+/** The /settings panel's rows, with effective values for this project. */
+export async function listSettings(cwd: string): Promise<SettingView[]> {
+  return (await sendRequest("settings.list", { cwd })) as SettingView[];
+}
+
+/** Write one setting to ~/.freecode/settings.json; rejects on a bad value. */
+export async function setSetting(key: string, value: string): Promise<void> {
+  await sendRequest("settings.set", { key, value });
 }
 
 // =============================================================================

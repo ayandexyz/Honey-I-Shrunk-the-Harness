@@ -600,6 +600,16 @@ export const METHODS = {
     params: { mode: "" },
     result: undefined as void,
   },
+  // The /settings panel: flippable settings with their effective values, and
+  // a write to ~/.freecode/settings.json (apps/core/src/settings/toggles.ts).
+  "settings.list": {
+    params: { cwd: "" },
+    result: [] as import("../types.js").SettingView[],
+  },
+  "settings.set": {
+    params: { key: "", value: "" },
+    result: undefined as void,
+  },
 
   // ===========================================================================
   // Memory
@@ -889,6 +899,8 @@ export const REQUIRED_PARAMS: Record<
   "config.getCurrentModel": {},
   "config.getLastAgentMode": {},
   "config.setLastAgentMode": { mode: "string" },
+  "settings.list": { cwd: "string" },
+  "settings.set": { key: "string", value: "string" },
   "memory.list": {},
   "memory.get": { name: "string", type: "string" },
   "memory.save": { entry: "object" },

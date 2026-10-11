@@ -31,6 +31,7 @@ export const KNOWN_SETTINGS: Readonly<
   hooks: "any",
   memory: [
     "autoExtract",
+    "autoRecall",
     "extractEveryNRuns",
     "retrievalJudge",
     "autoConsolidate",
@@ -43,6 +44,10 @@ export const KNOWN_SETTINGS: Readonly<
   // `checkpoint/settings.ts` — working-tree snapshots per user turn, ON by
   // default wherever the project is a git repo.
   checkpoints: ["enabled", "maxPerSession"],
+  // `agent/task-notify.ts` — background agent/shell completion notices.
+  tasks: ["notify"],
+  // `providers/cache-warmer.ts` — off | streaming | idle.
+  cache: ["warming"],
 };
 
 /**

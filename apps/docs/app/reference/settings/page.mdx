@@ -8,22 +8,37 @@ description: "Full schema for project and user settings."
 Settings are read from `.freecode/settings.json` (project) and
 `~/.freecode/settings.json` (user).
 
-The file is hand-written and holds no secrets, which is the point: the project
+The file is hand-written — or, for the on/off features, flipped with
+`/settings` in the TUI, which writes the user file — and holds no secrets, which is the point: the project
 copy is meant to be **committed**, so the permission rules and hooks your team
 agreed on travel with the repository. Credentials, the current model, and MCP
 servers are *not* here — they live in `~/.freecode/config.json`; see
 [the overview](/reference#the-three-surfaces).
 
-**Exactly four top-level keys are read.** Anything else produces a warning on
-startup naming the key — and, when it is a near miss, the key you probably
-meant.
+**These top-level keys are read** (`settings/known-keys.ts`). Anything else
+produces a warning on startup naming the key — and, when it is a near miss, the
+key you probably meant.
 
 | Key | Read by | Purpose |
 | --- | --- | --- |
 | [`permissions`](#permissions) | `permission/settings.ts` | which tool calls are allowed, asked about, or denied |
 | [`hooks`](#hooks) | `hooks/settings.ts` | shell commands to run at lifecycle events |
-| [`memory`](#memory) | `memory/extract-policy.ts` | automatic memory extraction |
+| [`memory`](#memory) | `memory/extract-policy.ts` | automatic memory recall, extraction, consolidation |
 | [`redirect`](#redirect) | `agent/redirect/settings.ts` | trajectory redirection (off by default) |
+| `signals` | `agent/signals/settings.ts` | auto-poke and the two todo gates (off by default) |
+| `checkpoints` | `checkpoint/settings.ts` | per-turn snapshots for `/rewind` (on by default) |
+| [`tasks`](#tasks) | `agent/task-notify.ts` | background task notifications |
+| [`cache`](#cache) | `providers/cache-warmer.ts` | prompt-cache warming (off by default) |
+
+### `/settings`
+
+The TUI's `/settings` panel lists the on/off and choice settings above with
+their effective values; Enter cycles one. It writes **only**
+`~/.freecode/settings.json`, keeping every other key, and refuses a file it
+cannot parse. A row set by an environment variable or by the project file is
+shown `(locked)` with the reason — writing the user file would not change it.
+Every reader re-reads the file at least once per run, so a change applies from
+the next turn.
 
 ## Editor completion
 
@@ -209,8 +224,9 @@ stdout form are documented under [hook events](/reference/hook-events#the-shell-
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `autoExtract` | boolean | `true` | mine finished turns for facts worth remembering |
+| `autoRecall` | boolean | `true` | retrieve and inject relevant memories into every request; off leaves the `memory` tool in place |
 | `extractEveryNRuns` | number | `8` | how often extraction is even considered; values `< 1` are ignored, non-integers are floored |
-| `retrievalJudge` | boolean | `true` | judge retrieved memories for relevance before injecting them; fails closed |
+| `retrievalJudge` | boolean | `false` | judge retrieved memories for relevance before injecting them; fails closed. Off by default since 2026-09-25 — measured cost- and quality-neutral |
 | `autoConsolidate` | boolean | `true` | one cheap merge pass per project per day — merges only, never deletes |
 | `consolidateMinHours` | number | `24` | minimum hours between consolidation runs |
 | `consolidateMinSessions` | number | `5` | minimum sessions since the last run before consolidating again; values `< 1` are ignored |
@@ -223,8 +239,9 @@ Scope merge here is **first definition wins, project → user → default**, per
 field. `FREECODE_DISABLE_MEMORY_EXTRACTION=1` overrides both files. Throttling is
 safe because each extraction rebuilds the transcript from the session's whole
 history, so a skipped run is covered by the next one.
-`FREECODE_DISABLE_MEMORY_JUDGE=1` and `FREECODE_DISABLE_MEMORY_CONSOLIDATION=1`
-do the same for the other two. Background: [memory](/internals/memory).
+`FREECODE_DISABLE_MEMORY_RECALL=1` and `FREECODE_DISABLE_MEMORY_CONSOLIDATION=1`
+do the same for those two; `FREECODE_DISABLE_MEMORY_JUDGE` is two-way (`1` off,
+`0` on). Background: [memory](/internals/memory).
 
 ## `redirect`
 
@@ -265,6 +282,20 @@ and `agent(run_in_background)` runs the sub-agent in the foreground instead,
 because the notification is the only way its result reaches the model. A
 background shell still runs; the model checks it with `bashoutput`. Background:
 [Sub-agents](/guides/subagents#background-notifications).
+
+## `cache`
+
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `warming` | `"off"` \| `"streaming"` \| `"idle"` | `"off"` | replay the last request with `maxTokens: 1` before the Anthropic prompt cache expires, when the expected saving is at least $0.05 |
+
+```json
+{ "cache": { "warming": "idle" } }
+```
+
+Project file first, then `~/.freecode/settings.json`. `FREECODE_CACHE_WARMING`
+overrides both. A warm is recorded as `cache.warm` in the rollout log, never as a
+model turn.
 
 ## Not in this file
 

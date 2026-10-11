@@ -8,35 +8,19 @@ This compares everything pi-tui exports (`dist/index.d.ts`) with what
 `Image` (since `7d9c56e2`), `hyperlink` (clickable file paths in tool
 headers), `fuzzyFilter` (model/provider pickers, `/mcp`, `/tree`,
 `/rewind`; the `/` command menu keeps its own ranking) and terminal
-light/dark detection (a light palette off Omarchy). Below are the parts it
+light/dark detection (a light palette off Omarchy) and `SettingsList` (the
+`/settings` panel). Below are the parts it
 doesn't use, in the order they're worth building.
 
 | # | Feature | Effort | Verdict |
 |---|---|---|---|
-| 1 | `SettingsList` | Medium, + one IPC method | Worth doing |
-| 2 | `KeybindingsManager` / `setKeybindings` | Small–medium | Worth doing |
-| 3 | `CancellableLoader` | — | Skip |
-| 4 | `TruncatedText` | — | Skip |
+| 1 | `KeybindingsManager` / `setKeybindings` | Small–medium | Worth doing |
+| 2 | `CancellableLoader` | — | Skip |
+| 3 | `TruncatedText` | — | Skip |
 
 ---
 
-## 1. `SettingsList`: a `/settings` panel
-
-**What it is.** A list of settings, each with a label on the left and its
-current value on the right. `values` makes Enter/Space cycle through choices,
-`submenu` opens a nested component, and `enableSearch` filters the list.
-
-**Where it goes.** A `/settings` panel for toggles that today can only be
-changed in `settings.json` or with environment variables: memory
-(`autoRecall`, `autoExtract`, `retrievalJudge`), `cache.warming`,
-`checkpoints.enabled`, `tasks.notify`, and the `signals.*` gates.
-
-**Watch for.** Frontends stay thin. The panel only shows values and sends
-changes; core reads and writes the settings files. That needs a
-`config.set` IPC method, since only `config.get` exists today. Loop gates that
-are off by default should be labelled as experimental.
-
-## 2. `KeybindingsManager` / `setKeybindings`: user keybindings
+## 1. `KeybindingsManager` / `setKeybindings`: user keybindings
 
 **What it is.** A keybinding registry that reports conflicts, with
 `TUI_KEYBINDINGS` as the defaults.
@@ -49,13 +33,13 @@ and `getKeybindings()` is read by `menu-card.ts`,
 **Watch for.** Report conflicts as a notice at startup instead of silently
 letting one binding win.
 
-## 3. `CancellableLoader`: skip
+## 2. `CancellableLoader`: skip
 
 A spinner that Esc can cancel. FreeCode's own in-progress row
 (`createInProgressMessage`) already shows token counts and context use and
 handles Esc. Switching would remove features.
 
-## 4. `TruncatedText`: skip
+## 3. `TruncatedText`: skip
 
 Single-line text cut to fit the width. `WidthBounded` and
 `truncateToWidth` already do this throughout `message-row.ts`.

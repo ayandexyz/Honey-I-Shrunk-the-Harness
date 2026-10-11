@@ -12,7 +12,7 @@ buckets, and confusing them is the usual source of "why is this not applying?"
 | --- | --- | --- |
 | `~/.freecode/config.json` | the app (`/model`, `freecode mcp add`) | never — it holds your API key |
 | `.freecode/settings.json` | you, by hand | **yes** — it is your team's policy |
-| `~/.freecode/settings.json` | you, by hand | it is per-machine, so nothing to commit |
+| `~/.freecode/settings.json` | you, by hand, or `/settings` in the TUI | it is per-machine, so nothing to commit |
 
 `config.json` is *state*: a credential and a cursor. `settings.json` is *policy*:
 what the agent is allowed to do, what should run around it, and what it should
