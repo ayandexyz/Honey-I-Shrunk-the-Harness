@@ -1,0 +1,373 @@
+---
+// One card per metric on the agent panels above, every agent on one bar so a
+// gap reads at a glance. Copy and arithmetic follow apps/web's AgentBenchmark:
+// a loss is drawn the same size as a win.
+import { agentColor, type BenchView } from "../data/agent-bench";
+import { agentName } from "../data/agent-bench-page";
+import BenchmarkCard from "./BenchmarkCard.astro";
+
+interface Props {
+	view: BenchView;
+}
+
+const { view } = Astro.props;
+
+const pct = (n: number) => `${Math.round(n * 100)}%`;
+const secs = (ms: number) => `${(ms / 1000).toFixed(0)}s`;
+const tok = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(2)}M` : `${Math.round(n / 1000)}k`);
+const usd = (n: number) => `$${n.toFixed(4)}`;
+
+const row = (a: BenchView["agents"][number], value: number, display: string, note: string) => ({
+	label: agentName(a.id),
+	value,
+	display,
+	note,
+	featured: a.isFreeCode,
+	color: agentColor(a.id),
+});
+
+const free = view.agents.find((a) => a.isFreeCode);
+const rivals = view.agents.filter((a) => !a.isFreeCode);
+const fastestRival = rivals.length ? rivals.reduce((m, a) => (a.medianMs < m.medianMs ? a : m)) : undefined;
+
+// Outcome, with one square per trial: the shape before any averaging.
+const outcomeRows = view.agents.map((a) => row(a, a.rate, pct(a.rate), `${a.successes}/${a.trials} trials`));
+const cellStatus = (c: { ok: boolean; producedPatch: boolean }) =>
+	view.graded ? (c.ok ? "resolved" : c.producedPatch ? "patched, not resolved" : "no patch") : c.ok ? "produced a patch" : "no patch";
+const stripFor = (agentId: string) =>
+	view.matrix
+		.filter((r) => view.sharedInstances.includes(r.instanceId))
+		.flatMap((r) => r.cells.filter((c) => c.agent === agentId).map((c) => ({ ...c, instanceId: r.instanceId })));
+
+const slowest = Math.max(...view.agents.map((a) => a.medianMs), 1);
+const speedRows = view.agents.map((a) => row(a, a.medianMs, secs(a.medianMs), `median of ${a.trials}`));
+// Wall time = turns × time per turn; the split says which one an agent loses on.
+const perTurn = (a: { medianMs: number; meanTurns?: number }) => a.medianMs / (a.meanTurns as number);
+const timeSplit =
+	free?.meanTurns !== undefined && fastestRival?.meanTurns !== undefined ? [free, fastestRival] : undefined;
+const timeNote = (() => {
+	if (!free || !fastestRival || !timeSplit) return "";
+	const freeSlower = free.medianMs > fastestRival.medianMs;
+	const freeMoreTurns = free.meanTurns! > fastestRival.meanTurns!;
+	const freeFasterTurns = perTurn(free) < perTurn(fastestRival);
+	return freeSlower && freeMoreTurns && freeFasterTurns
+		? `Histh's turns are actually faster than ${agentName(fastestRival.id)}'s — it loses wall time purely by making ~${Math.round((free.meanTurns! / fastestRival.meanTurns! - 1) * 100)}% more round trips. Every extra turn pays a full network round-trip plus time-to-first-token, even on a warm prompt cache; ${agentName(fastestRival.id)} packs more work into each turn and finishes sooner.`
+		: "Wall time is turns × time per turn: an agent can lose this bar by making slow turns, or by making more of them. The split above says which.";
+})();
+
+const sizeRows = view.agents.map((a) => row(a, a.medianPatchBytes, `${Math.round(a.medianPatchBytes)}B`, `median of ${a.trials}`));
+const noNewFiles = view.agents.every((a) => a.newFilesTotal === 0);
+const totalTrials = view.agents.reduce((s, a) => s + a.trials, 0);
+
+// Metering: an unmetered agent is labelled as such, never drawn as a zero.
+const anyMetered = view.agents.some((a) => a.meteredTrials > 0);
+const tokenRows = view.agents.map((a) =>
+	row(
+		a,
+		a.meanTokens ?? 0,
+		a.meanTokens !== undefined ? tok(a.meanTokens) : "unmetered",
+		a.meteredTrials > 0
+			? `mean of ${a.meteredTrials} metered${a.meanTurns !== undefined ? ` · ~${Math.round(a.meanTurns)} turns` : ""}`
+			: "proxy saw no traffic",
+	),
+);
+
+const anyCache = view.agents.some((a) => a.cacheHitRate !== undefined);
+const maxInput = Math.max(...view.agents.map((a) => a.meanInput ?? 0), 1);
+const freshOf = (a: { meanInput?: number; meanCacheRead?: number }) => Math.max((a.meanInput ?? 0) - (a.meanCacheRead ?? 0), 0);
+const freeCache = view.agents.find((a) => a.isFreeCode && a.cacheHitRate !== undefined);
+const rivalCache = view.agents.find((a) => !a.isFreeCode && a.cacheHitRate !== undefined);
+
+const costRows = view.agents.map((a) =>
+	row(
+		a,
+		typeof a.meanUsd === "number" ? a.meanUsd : 0,
+		typeof a.meanUsd === "number" ? usd(a.meanUsd) : a.meanUsd === null ? "unpriced" : "unmetered",
+		a.worstUsd !== undefined ? `worst trial ${usd(a.worstUsd)}` : a.meteredTrials > 0 ? "no rate-card row" : "proxy saw no traffic",
+	),
+);
+const costFootnote = view.cost
+	? view.cost.suppressed
+		? `Cost on the intersection of solved bugs is suppressed: only ${view.cost.instances.length} instance${view.cost.instances.length === 1 ? "" : "s"} were resolved by every agent, and below 3 the mean is an anecdote.`
+		: `On the ${view.cost.instances.length} bugs every agent solved: ${view.cost.perAgent
+				.map((p) => `${agentName(p.id)} ${typeof p.meanUsd === "number" ? usd(p.meanUsd) : "unpriced"}${p.meanTokens !== null ? ` (${tok(p.meanTokens)} tok)` : ""}`)
+				.join(" · ")}. Averaging over failures would make the quitter cheapest — this mean covers solved bugs only.`
+	: "Per-solved-bug cost appears once the matchup is graded — averaging cost over failed attempts would make the agent that gives up fastest look cheapest.";
+---
+
+<div class="compare-grid">
+	<BenchmarkCard
+		title={view.metric.label}
+		detail={`${view.metric.help} Computed over the ${view.sharedInstances.length} instance${view.sharedInstances.length === 1 ? "" : "s"} every agent in this matchup ran${view.ragged ? `, not all ${view.taskSet.instances.length} below` : ""}.`}
+		rows={outcomeRows}
+		max={1}
+		footnote={view.graded ? undefined : "Every agent scores 100% here as soon as it edits anything, which is exactly why this bar is not a scoreboard yet."}
+	>
+		<div class="card-extra">
+			{view.agents.map((a) => {
+				const cells = stripFor(a.id);
+				return (
+					<div class="trial-strip">
+						<span class="strip-name" style={`color: ${agentColor(a.id)}`}>{agentName(a.id)}</span>
+						<div class="strip-cells">
+							{cells.map((c) => (
+								<span
+									class:list={["strip-cell", { ok: c.ok, patched: !c.ok && (!view.graded || c.producedPatch) }]}
+									style={c.ok ? `background: ${agentColor(a.id)}; border-color: ${agentColor(a.id)}` : undefined}
+									title={`${c.instanceId} · t${c.trial} · ${cellStatus(c)} · ${secs(c.durationMs)} · ${c.reason}`}
+								></span>
+							))}
+						</div>
+						<span class="strip-count">{cells.filter((c) => c.ok).length}/{cells.length}</span>
+					</div>
+				);
+			})}
+			<p class="extra-legend">
+				<span><i class="strip-cell ok"></i> resolved</span>
+				{view.graded && <span><i class="strip-cell patched"></i> patched, not resolved</span>}
+				<span><i class="strip-cell"></i> no patch</span>
+			</p>
+		</div>
+	</BenchmarkCard>
+
+	<BenchmarkCard
+		title="Median wall time"
+		detail="Spawn to agent exit. Shorter is better — the longest bar is the slowest agent, not the winner. An agent that runs the tests pays for it here, which is not obviously a vice."
+		rows={speedRows}
+		footnote={`Slowest median in this matchup: ${secs(slowest)}.`}
+	>
+		{timeSplit && (
+			<div class="card-extra">
+				<h4>Where the time goes</h4>
+				{timeSplit.map((a) => (
+					<p class="split-row">
+						<span class="strip-name" style={`color: ${agentColor(a.id)}`}>{agentName(a.id)}</span>
+						<span>~{Math.round(a.meanTurns!)} turns per trial</span>
+						<span class="dim">·</span>
+						<span>~{(perTurn(a) / 1000).toFixed(1)}s per turn</span>
+					</p>
+				))}
+				<p class="extra-copy">{timeNote}</p>
+			</div>
+		)}
+	</BenchmarkCard>
+
+	{anyMetered && (
+		<BenchmarkCard
+			title="Tokens per trial"
+			detail="Input + output counted off one recording proxy for every agent — the same meter, the same rules, never each vendor's own accounting. Fewer is cheaper, but an agent that gives up early is also cheap; read this next to the outcome bar, not instead of it."
+			rows={tokenRows}
+		/>
+	)}
+
+	{anyMetered && (
+		<BenchmarkCard
+			title="Cost per trial"
+			detail="USD from a committed rate card applied to the proxy's counts — identical pricing for every agent. Cache reads are discounted, not added. The worst-single-trial figure is there because a good mean can hide one runaway."
+			rows={costRows}
+			footnote={costFootnote}
+		/>
+	)}
+
+	{anyCache && (
+		<article class="benchmark-card cache-card" data-reveal>
+			<header>
+				<h3>Prompt cache</h3>
+				<p>
+					How much of each trial’s input the provider served from its prompt cache, off the same meter as
+					the token chart. The pale segment was read from cache at a discounted rate; the solid segment is
+					fresh context, billed in full. Bars share one scale, so their lengths also compare input volume.
+				</p>
+			</header>
+			<div class="cache-list">
+				{view.agents.map((a) => {
+					const hasCache = a.cacheHitRate !== undefined;
+					const input = a.meanInput ?? 0;
+					const cached = a.meanCacheRead ?? 0;
+					const fresh = freshOf(a);
+					return (
+						<div class:list={["cache-row", { featured: a.isFreeCode }]}>
+							<span class="cache-label" style={`color: ${agentColor(a.id)}`}>{agentName(a.id)}</span>
+							<span class="cache-value">
+								{hasCache ? `${(a.cacheHitRate! * 100).toFixed(1)}% cached` : a.meteredTrials > 0 ? "no cache data" : "unmetered"}
+								<span class="cache-note">
+									{hasCache
+										? `~${tok(fresh)} fresh of ${tok(input)}/trial${(a.meanCacheWrite ?? 0) > 0 ? ` · ${tok(a.meanCacheWrite!)} writes` : ""}`
+										: a.meteredTrials > 0
+											? "proxy recorded no cache columns"
+											: "proxy saw no traffic"}
+								</span>
+							</span>
+							<div class="cache-track" aria-hidden="true">
+								{hasCache && input > 0 && (
+									<div class="cache-fill" style={`width: ${(input / maxInput) * 100}%`}>
+										<span style={`width: ${(cached / input) * 100}%; background: ${agentColor(a.id)}; opacity: 0.3`}></span>
+										<span style={`width: ${(fresh / input) * 100}%; background: ${agentColor(a.id)}`}></span>
+									</div>
+								)}
+							</div>
+						</div>
+					);
+				})}
+			</div>
+			<p class="extra-legend">
+				<span><i class="key pale"></i> read from cache (discounted)</span>
+				<span><i class="key solid"></i> fresh input (billed in full)</span>
+			</p>
+			<p class="card-footnote">
+				{freeCache && rivalCache
+					? `A high hit rate means the harness keeps its prompt stable enough for the provider to reuse it. What each trial actually pays full price for is the solid segment: Histh ~${tok(freshOf(freeCache))} fresh input tokens per trial vs ${agentName(rivalCache.id)} ~${tok(freshOf(rivalCache))} — the hit rate is where a token gap becomes a cost gap.`
+					: "A high hit rate means the harness keeps its prompt stable enough for the provider to reuse it — the solid segment is what each trial actually pays full price for."}
+			</p>
+		</article>
+	)}
+
+	<BenchmarkCard
+		title="Median patch size"
+		detail="Bytes of diff produced. A fact about each harness's style, not a score — a bigger patch is not a better fix, and a smaller one is not automatically surgical."
+		rows={sizeRows}
+	>
+		<div class="card-extra">
+			<h4>New files created</h4>
+			{noNewFiles ? (
+				<p class="extra-copy">
+					None — across all {totalTrials} trials, every patch edited existing code only. That is what a
+					bug-fix task set should look like: a harness that scaffolds new files here would be a smell, not a
+					feature.
+				</p>
+			) : (
+				view.agents.map((a) => (
+					<p class="split-row">
+						<span class="strip-name" style={`color: ${agentColor(a.id)}`}>{agentName(a.id)}</span>
+						<span>
+							{a.newFilesTotal === 0
+								? "none — edits only"
+								: `${a.newFilesTotal} new file${a.newFilesTotal === 1 ? "" : "s"} across ${a.newFileTrials} of ${a.trials} trials`}
+						</span>
+					</p>
+				))
+			)}
+		</div>
+	</BenchmarkCard>
+</div>
+
+<style>
+	.compare-grid {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 1rem;
+		margin-top: 1rem;
+	}
+
+	.compare-grid > :global(*) { min-width: 0; }
+
+	.card-extra {
+		margin-top: 1.5rem;
+		padding-top: 1.25rem;
+		border-top: 1px solid var(--line);
+	}
+
+	.card-extra h4 { margin: 0 0 0.75rem; font-size: 0.95rem; font-weight: 650; }
+
+	.trial-strip,
+	.split-row {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		margin: 0 0 0.6rem;
+		font-family: var(--mono);
+		font-size: 0.88rem;
+	}
+
+	.strip-name { flex: 0 0 7.5rem; font-weight: 700; }
+	.strip-cells { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+	.strip-count { margin-left: auto; color: var(--muted); }
+	.dim { color: var(--muted); }
+
+	.strip-cell {
+		display: inline-block;
+		width: 0.9rem;
+		height: 0.9rem;
+		border: 1px solid var(--line);
+		border-radius: 3px;
+		background: var(--track);
+	}
+
+	.strip-cell.ok { background: var(--series-us); border-color: var(--series-us); }
+	.strip-cell.patched { background: rgb(194 65 45 / 12%); border-color: rgb(194 65 45 / 60%); }
+
+	.extra-legend {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.4rem 1.25rem;
+		margin: 0.9rem 0 0;
+		color: var(--muted-strong);
+		font-family: var(--mono);
+		font-size: 0.8rem;
+	}
+
+	.extra-legend span { display: inline-flex; align-items: center; gap: 0.45rem; }
+	.extra-legend .strip-cell { width: 0.75rem; height: 0.75rem; }
+
+	.extra-copy { margin: 0.5rem 0 0; color: var(--muted-strong); font-size: 0.92rem; line-height: 1.6; }
+
+	/* Prompt cache: a two-segment bar the generic card does not draw. */
+	.cache-card {
+		padding: clamp(1.35rem, 3vw, 2rem);
+		border: 1px solid var(--line);
+		border-radius: var(--radius-lg);
+		background: var(--surface);
+		box-shadow: var(--shadow-sm);
+	}
+
+	.cache-card header { margin-bottom: 1.75rem; }
+	.cache-card h3 { margin: 0; font-size: 1.125rem; font-weight: 650; letter-spacing: -0.025em; }
+	.cache-card header p { margin: 0.5rem 0 0; color: var(--muted-strong); font-size: 0.9rem; line-height: 1.55; }
+	.cache-list { display: grid; gap: 0.95rem; }
+
+	.cache-row {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
+		gap: 0.45rem 1rem;
+		font-family: var(--mono);
+		font-size: 0.86rem;
+	}
+
+	.cache-row.featured .cache-label,
+	.cache-row.featured .cache-value { font-weight: 700; }
+	.cache-value { display: inline-flex; gap: 0.75rem; align-items: baseline; color: var(--muted-strong); }
+	.cache-note { color: var(--muted); font-size: 0.74rem; }
+
+	.cache-track {
+		grid-column: 1 / -1;
+		height: 0.4rem;
+		overflow: hidden;
+		border-radius: 999px;
+		background: var(--track);
+	}
+
+	.cache-fill { display: flex; height: 100%; }
+	.cache-fill span { display: block; height: 100%; }
+	.key { display: inline-block; width: 0.75rem; height: 0.75rem; border-radius: 2px; background: var(--ink); }
+	.key.pale { opacity: 0.25; }
+	.key.solid { opacity: 0.8; }
+
+	.cache-card .card-footnote {
+		margin: 1.5rem 0 0;
+		padding: 0.85rem 1rem;
+		border-radius: var(--radius-sm);
+		background: var(--surface-muted);
+		color: var(--muted-strong);
+		font-size: 0.82rem;
+		line-height: 1.6;
+	}
+
+	@media (max-width: 900px) {
+		.compare-grid { grid-template-columns: 1fr; }
+	}
+
+	@media (max-width: 680px) {
+		.strip-name { flex-basis: 5.5rem; }
+		.cache-note { display: none; }
+	}
+</style>

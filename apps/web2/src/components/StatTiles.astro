@@ -1,0 +1,72 @@
+---
+// A row of hero numbers. A null value renders as "—" with its note, never as zero.
+import type { StatTile } from "./types";
+
+interface Props {
+	tiles: StatTile[];
+}
+
+const { tiles } = Astro.props;
+---
+
+{tiles.length > 0 && (
+	<dl class="stat-tiles">
+		{tiles.map((t) => (
+			<div class="stat-tile">
+				<dd class:list={[t.tone, { empty: t.value === null }]}>{t.value ?? "—"}</dd>
+				<dt>{t.label}</dt>
+				{t.note && <p>{t.note}</p>}
+			</div>
+		))}
+	</dl>
+)}
+
+<style>
+	.stat-tiles {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+		gap: 0.75rem;
+		margin: 0 0 1.25rem;
+	}
+
+	.stat-tile {
+		display: flex;
+		flex-direction: column;
+		padding: 1.1rem 1.2rem;
+		border: 1px solid var(--line);
+		border-radius: var(--radius-md);
+		background: var(--surface);
+	}
+
+	dd {
+		order: 1;
+		margin: 0;
+		font-size: clamp(1.6rem, 3vw, 2.1rem);
+		font-weight: 600;
+		letter-spacing: -0.05em;
+		line-height: 1.1;
+		font-variant-numeric: tabular-nums;
+	}
+
+	dd.good { color: var(--accent-strong); }
+	dd.bad { color: var(--danger); }
+	dd.empty { color: var(--muted); }
+
+	dt {
+		order: 2;
+		margin-top: 0.45rem;
+		color: var(--muted);
+		font-family: var(--mono);
+		font-size: 0.62rem;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+	}
+
+	p {
+		order: 3;
+		margin: 0.35rem 0 0;
+		color: var(--muted-strong);
+		font-size: 0.74rem;
+		line-height: 1.45;
+	}
+</style>

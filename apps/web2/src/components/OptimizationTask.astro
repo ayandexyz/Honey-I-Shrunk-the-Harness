@@ -1,0 +1,255 @@
+---
+// jcode bench, drawn the way jcode.sh draws it: running best score against
+// active time, one step line per run, then the leaderboard ranked by the
+// OFFICIAL final grade. `best` is shown but never ranks.
+import { agentColor } from "../data/agent-bench";
+import type { OptTaskView } from "../data/jcode-bench";
+import { displayName } from "../data/home";
+
+interface Props {
+	task: OptTaskView;
+}
+
+const { task } = Astro.props;
+
+const fmtScore = (s: number | null) => (s === null ? "—" : `${s >= 0 ? "+" : ""}${s.toFixed(2)}`);
+const fmtX = (s: number | null) => (s === null ? "—" : `${(2 ** s).toFixed(1)}×`);
+const fmtDur = (ms: number) => {
+	const m = Math.round(ms / 60_000);
+	return m >= 90 ? `${(m / 60).toFixed(1)}h` : `${m}m`;
+};
+
+const rows = task.rows.filter((r) => r.curve.length > 0);
+const W = 1080;
+const H = 320;
+const padL = 44;
+const padR = 16;
+const padT = 12;
+const padB = 32;
+const plotW = W - padL - padR;
+const plotH = H - padT - padB;
+const maxT = Math.max(task.maxActiveMs, 60_000);
+const minY = Math.min(0, ...rows.flatMap((r) => r.curve.map((p) => p.best)));
+const maxY = Math.max(task.maxBest, 0.5) * 1.08;
+const xFor = (t: number) => padL + (t / maxT) * plotW;
+const yFor = (v: number) => padT + plotH - ((v - minY) / (maxY - minY)) * plotH;
+
+const yStep = maxY - minY > 4 ? 1 : 0.5;
+const yVals: number[] = [];
+for (let v = Math.ceil(minY / yStep) * yStep; v <= maxY; v += yStep) yVals.push(v);
+const minutes = maxT / 60_000;
+const xStepMin = [5, 10, 15, 30, 60, 120, 180, 240, 360].find((m) => minutes / m <= 6) ?? 480;
+const xVals: number[] = [];
+for (let m = 0; m * 60_000 <= maxT; m += xStepMin) xVals.push(m * 60_000);
+
+// Step path: best holds until the next grade moves it.
+const pathFor = (curve: OptTaskView["rows"][number]["curve"]) => {
+	let d = `M ${xFor(0)} ${yFor(0)}`;
+	let lastY = yFor(0);
+	for (const p of curve) {
+		d += ` L ${xFor(p.t)} ${lastY} L ${xFor(p.t)} ${yFor(p.best)}`;
+		lastY = yFor(p.best);
+	}
+	return d;
+};
+
+// The hover readout needs the curves client-side; nothing else does.
+const hoverData = JSON.stringify({
+	maxT,
+	padL,
+	plotW,
+	W,
+	rows: rows.map((r) => ({ key: r.key, name: displayName(r.agent), color: agentColor(r.agent), curve: r.curve.map((p) => [p.t, p.best]) })),
+});
+---
+
+<article class="chart-card opt-task" data-opt-task data-reveal>
+	<header class="chart-head">
+		<div>
+			<h3 class="mono-title">{task.task}</h3>
+			{task.oneLiner && <p>{task.oneLiner}</p>}
+		</div>
+		{task.headline && (
+			<p class="opt-headline">
+				<strong>histh {fmtScore(task.headline.free.final)}</strong>
+				{task.headline.rival && (
+					<span style={`color: ${agentColor(task.headline.rival.agent)}`}>
+						{displayName(task.headline.rival.agent)} {fmtScore(task.headline.rival.final)}
+					</span>
+				)}
+			</p>
+		)}
+	</header>
+
+	<div class="opt-plot" data-hover={hoverData}>
+		<svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`${task.task}: running best score against active time`}>
+			{yVals.map((v) => (
+				<g>
+					<line class="grid" x1={padL} x2={W - padR} y1={yFor(v)} y2={yFor(v)} />
+					<text class="axis" x={padL - 8} y={yFor(v) + 3} text-anchor="end">{fmtScore(v)}</text>
+				</g>
+			))}
+			{xVals.map((t) => (
+				<text class="axis" x={xFor(t)} y={H - padB + 16} text-anchor="middle">{fmtDur(t)}</text>
+			))}
+			{rows.map((r) => (
+				<path
+					data-series={r.key}
+					d={pathFor(r.curve)}
+					fill="none"
+					stroke={agentColor(r.agent)}
+					stroke-width={r.isFreeCode ? 2.5 : 2}
+					stroke-dasharray={r.gates.length ? "6 3" : undefined}
+					stroke-linejoin="round"
+				/>
+			))}
+			{rows.slice(0, 4).map((r) => {
+				const last = r.curve[r.curve.length - 1]!;
+				const nearEdge = xFor(last.t) > W - padR - 110;
+				return (
+					<text
+						data-series={r.key}
+						class="series-label"
+						x={nearEdge ? xFor(last.t) - 4 : xFor(last.t) + 6}
+						y={yFor(last.best) - 5}
+						text-anchor={nearEdge ? "end" : "start"}
+					>
+						{displayName(r.agent)} {fmtScore(last.best)}
+					</text>
+				);
+			})}
+			<line class="crosshair" data-crosshair x1="0" x2="0" y1={padT} y2={H - padB} hidden />
+		</svg>
+		<div class="chart-tooltip" data-tooltip hidden></div>
+	</div>
+	<p class="chart-caption">Running best vs active time. Dashed = a harness gate was on for that run.</p>
+
+	<div class="legend" role="group" aria-label="Toggle runs">
+		{rows.map((r) => (
+			<button type="button" class="chip" aria-pressed="true" data-toggle={r.key}>
+				<span class="swatch" style={`background: ${agentColor(r.agent)}`}></span>
+				{displayName(r.agent)} · {r.model}
+				{r.gates.length > 0 && <span class="chip-dim">({r.gates.join(", ")})</span>}
+				<span class="chip-dim">{fmtScore(r.best)}</span>
+			</button>
+		))}
+	</div>
+
+	<div class="table-scroll">
+		<table class="data-table">
+			<thead>
+				<tr>
+					<th>#</th>
+					<th>harness</th>
+					<th>model</th>
+					<th class="num">final</th>
+					<th class="num">speedup</th>
+					<th class="num">best</th>
+					<th class="num">grades</th>
+					<th class="num">active</th>
+					<th class="num">date</th>
+					<th>gate</th>
+				</tr>
+			</thead>
+			<tbody>
+				{task.rows.map((r) => (
+					<tr class:list={{ unverified: !r.verified }}>
+						<td class="dim">{r.rank ?? "—"}</td>
+						<td>
+							<span class:list={{ strong: r.isFreeCode }} style={`color: ${agentColor(r.agent)}`}>{displayName(r.agent)}</span>
+							{r.gates.length > 0 && <span class="dim"> {r.gates.join(", ")}</span>}
+						</td>
+						<td>{r.model}</td>
+						<td class="num strong">{r.verified ? fmtScore(r.final) : "no score"}</td>
+						<td class="num">{fmtX(r.final)}</td>
+						<td class="num dim">{fmtScore(r.best)}</td>
+						<td class="num">{r.grades}</td>
+						<td class="num">{fmtDur(r.activeMs)}{r.timedOut && <span class="bad"> †</span>}</td>
+						<td class="num dim">{r.date.slice(0, 10)}</td>
+						<td class="dim">{r.verified ? (r.fullGate ? "full" : r.fullGateTimedOut ? "sampled ‡" : "sampled") : "failed"}</td>
+					</tr>
+				))}
+			</tbody>
+		</table>
+		{task.rows.some((r) => r.timedOut) && <p class="table-note">† hit the runner’s wall-clock cap; the submission as left was still graded.</p>}
+		{task.rows.some((r) => r.fullGateTimedOut) && (
+			<p class="table-note">‡ the full exhaustive gate ran past the grading cap, so this is the sampled gate’s score until a regrade finishes it.</p>
+		)}
+	</div>
+</article>
+
+<script>
+	interface Hover {
+		maxT: number;
+		padL: number;
+		plotW: number;
+		W: number;
+		rows: { key: string; name: string; color: string; curve: [number, number][] }[];
+	}
+
+	const fmtScore = (s: number | null) => (s === null ? "—" : `${s >= 0 ? "+" : ""}${s.toFixed(2)}`);
+	const fmtDur = (ms: number) => {
+		const m = Math.round(ms / 60_000);
+		return m >= 90 ? `${(m / 60).toFixed(1)}h` : `${m}m`;
+	};
+
+	for (const card of document.querySelectorAll<HTMLElement>("[data-opt-task]")) {
+		const hidden = new Set<string>();
+
+		// Legend doubles as the run toggle; colour follows the agent, so hiding
+		// one line never repaints the others.
+		for (const chip of card.querySelectorAll<HTMLButtonElement>("[data-toggle]")) {
+			chip.addEventListener("click", () => {
+				const key = chip.dataset.toggle!;
+				if (hidden.has(key)) hidden.delete(key);
+				else hidden.add(key);
+				chip.setAttribute("aria-pressed", String(!hidden.has(key)));
+				for (const el of card.querySelectorAll<SVGElement>(`[data-series="${CSS.escape(key)}"]`)) {
+					el.style.display = hidden.has(key) ? "none" : "";
+				}
+			});
+		}
+
+		const plot = card.querySelector<HTMLElement>("[data-hover]");
+		const svg = plot?.querySelector("svg");
+		const line = card.querySelector<SVGLineElement>("[data-crosshair]");
+		const tip = card.querySelector<HTMLElement>("[data-tooltip]");
+		if (!plot || !svg || !line || !tip) continue;
+		const data = JSON.parse(plot.dataset.hover!) as Hover;
+
+		svg.addEventListener("mousemove", (e) => {
+			const rect = svg.getBoundingClientRect();
+			const x = ((e.clientX - rect.left) / rect.width) * data.W;
+			if (x < data.padL || x > data.padL + data.plotW) {
+				line.setAttribute("hidden", "");
+				tip.hidden = true;
+				return;
+			}
+			const t = ((x - data.padL) / data.plotW) * data.maxT;
+			line.setAttribute("x1", String(x));
+			line.setAttribute("x2", String(x));
+			line.removeAttribute("hidden");
+			tip.replaceChildren();
+			const time = document.createElement("span");
+			time.className = "tip-dim";
+			time.textContent = fmtDur(t);
+			tip.append(time);
+			for (const r of data.rows) {
+				if (hidden.has(r.key)) continue;
+				let best: number | null = null;
+				for (const [pt, pb] of r.curve) if (pt <= t) best = pb;
+				const item = document.createElement("span");
+				const name = document.createElement("span");
+				name.style.color = r.color;
+				name.textContent = r.name;
+				item.append(name, ` ${fmtScore(best)}`);
+				tip.append(item);
+			}
+			tip.hidden = false;
+		});
+		svg.addEventListener("mouseleave", () => {
+			line.setAttribute("hidden", "");
+			tip.hidden = true;
+		});
+	}
+</script>

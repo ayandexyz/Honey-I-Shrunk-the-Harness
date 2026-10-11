@@ -1,0 +1,96 @@
+---
+// jcode's confidence study: one line per todo item, from the confidence at
+// assignment to the confidence at completion. A +40 jump in one step is a
+// spike — the claim jcode found not to be evidence.
+import type { SignalsReport } from "../data/harness-signals";
+import StatTiles from "./StatTiles.astro";
+import type { StatTile } from "./types";
+
+interface Props {
+	report: SignalsReport;
+}
+
+const c = Astro.props.report.confidence;
+const pct = (n: number | null) => (n === null ? null : `${Math.round(n * 100)}%`);
+const num = (n: number | null) => (n === null ? null : n.toFixed(0));
+
+const tiles: StatTile[] = [
+	{ value: String(c.n), label: "items", note: "assigned with a number, then completed" },
+	{ value: num(c.assignedMean), label: "mean at assignment", note: "the honest number" },
+	{ value: num(c.completedMean), label: "mean at completion", note: "the claim" },
+	{
+		value: pct(c.n ? c.spikes.n / c.n : null),
+		label: "spiked",
+		note: `${c.spikes.n} rose 40+ in one step · ${c.spikes.gated} sent back to verify`,
+		tone: c.spikes.n > 0 ? "bad" : undefined,
+	},
+	{
+		value: String(c.ratedOnlyAtCompletion ?? 0),
+		label: "rated only at completion",
+		note: "no prior assessment — a claim, not a step; excluded from the lines",
+		tone: (c.ratedOnlyAtCompletion ?? 0) > 0 ? "bad" : undefined,
+	},
+];
+
+const W = 1080;
+const H = 340;
+const padX = 160;
+const padY = 20;
+const plotH = H - padY * 2;
+const xL = padX;
+const xR = W - padX;
+const yFor = (v: number) => padY + plotH - (v / 100) * plotH;
+---
+
+{c.n === 0 ? (
+	<div class="empty-state">
+		No confidence trajectories yet. Once sessions carry a <code>confidence</code> per todo item,
+		<code>pnpm bench:signals</code> folds every assignment → completion pair into this chart.
+	</div>
+) : (
+	<div>
+		<StatTiles tiles={tiles} />
+		<article class="chart-card" data-reveal>
+			<header class="chart-head">
+				<div>
+					<h3>Assignment → completion, per item</h3>
+					<p>Each line is one todo item. Ideally confidence rises in steps as checks pass; a line that jumps straight to the top is the pattern the gate sends back.</p>
+				</div>
+			</header>
+			<svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Confidence at assignment versus at completion">
+				{[0, 25, 50, 75, 100].map((v) => (
+					<g>
+						<line class="grid" x1={xL} x2={xR} y1={yFor(v)} y2={yFor(v)} />
+						<text class="axis" x={xL - 10} y={yFor(v) + 3} text-anchor="end">{v}</text>
+						<text class="axis" x={xR + 10} y={yFor(v) + 3} text-anchor="start">{v}</text>
+					</g>
+				))}
+				<text class="axis caps" x={xL} y={H - 2} text-anchor="middle">assignment</text>
+				<text class="axis caps" x={xR} y={H - 2} text-anchor="middle">completion</text>
+				{c.trajectories.map((t) => {
+					const spike = t.completed - t.assigned >= 40;
+					return (
+						<line
+							x1={xL}
+							x2={xR}
+							y1={yFor(t.assigned)}
+							y2={yFor(t.completed)}
+							stroke={spike ? "var(--danger)" : "var(--series-us)"}
+							stroke-width={spike ? 1.5 : 1}
+							stroke-opacity={spike ? 0.75 : 0.22}
+							stroke-dasharray={t.gated ? "4 3" : undefined}
+						>
+							<title>{`${t.assigned} → ${t.completed}${spike ? " · spike" : ""}${t.gated ? " · sent back to verify" : ""}`}</title>
+						</line>
+					);
+				})}
+			</svg>
+			<div class="chart-legend">
+				<span><i class="key-line" style="background: var(--series-us)"></i> stepped</span>
+				<span><i class="key-line" style="background: var(--danger)"></i> spike (+40 in one step)</span>
+				<span><i class="key-line dashed"></i> gate sent it back</span>
+				{c.trajectories.length < c.n && <span>showing the latest {c.trajectories.length} of {c.n}</span>}
+			</div>
+		</article>
+	</div>
+)}
