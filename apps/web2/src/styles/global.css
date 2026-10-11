@@ -192,14 +192,75 @@ button { font: inherit; }
 
 .hero-eyebrow { color: rgb(255 255 255 / 68%); }
 
-.hero h1 {
-	max-width: 9ch;
+.poster-title {
+	width: fit-content;
+	max-width: 100%;
 	margin: 0;
-	font-size: clamp(4rem, 9.8vw, 9rem);
-	font-weight: 600;
-	letter-spacing: -0.075em;
-	line-height: 0.84;
-	text-wrap: balance;
+	font-family: Impact, Haettenschweiler, "Arial Narrow Bold", "Arial Black", sans-serif;
+	font-size: clamp(3.8rem, 8.2vw, 7.8rem);
+	font-weight: 900;
+	font-stretch: condensed;
+	letter-spacing: -0.055em;
+	line-height: 0.74;
+	text-transform: uppercase;
+}
+
+.poster-title-art {
+	display: grid;
+	gap: 0.12em;
+}
+
+.poster-title-line {
+	display: block;
+	color: #ed001c;
+	filter: drop-shadow(0.075em 0.055em 0 #050505);
+	white-space: nowrap;
+}
+
+.poster-title-lead {
+	display: flex;
+	justify-content: space-between;
+	gap: 0.22em;
+	font-size: 1em;
+	letter-spacing: -0.03em;
+}
+
+.poster-title-bridge {
+	display: grid;
+	grid-template-columns: minmax(2.5rem, 1fr) auto minmax(2.5rem, 1fr);
+	gap: 0.16em;
+	align-items: center;
+	font-size: 0.55em;
+}
+
+.poster-title-base {
+	font-size: 0.94em;
+	letter-spacing: -0.065em;
+}
+
+.poster-rule {
+	display: block;
+	height: 0.34em;
+	background: rgb(27 31 30 / 88%);
+	box-shadow: 0.045em 0.035em 0 rgb(0 0 0 / 75%);
+}
+
+.poster-rule-top {
+	height: 0.24em;
+	margin-bottom: 0.12em;
+	background:
+		linear-gradient(
+			90deg,
+			rgb(27 31 30 / 88%) 0 41%,
+			transparent 41% 61%,
+			rgb(27 31 30 / 88%) 61% 100%
+		);
+	box-shadow: none;
+}
+
+.poster-rule-bottom {
+	height: 0.21em;
+	margin-top: 0.08em;
 }
 
 .hero-copy {
@@ -702,7 +763,17 @@ h2 {
 	}
 	.hero-media img { object-position: 61% center; }
 	.hero-content { padding-bottom: 12.5rem; }
-	.hero h1 { font-size: clamp(3.7rem, 18vw, 5.7rem); }
+	.poster-title {
+		font-size: clamp(3.15rem, 16vw, 5.5rem);
+		letter-spacing: -0.06em;
+	}
+	.poster-title-art { gap: 0.16em; }
+	.poster-title-line { filter: drop-shadow(0.06em 0.045em 0 #050505); }
+	.poster-title-bridge {
+		grid-template-columns: minmax(1rem, 1fr) auto minmax(1rem, 1fr);
+		gap: 0.14em;
+		font-size: 0.47em;
+	}
 	.hero-copy { max-width: 31rem; font-size: 0.95rem; }
 	.hero-stats { grid-template-columns: 1fr; padding-block: 0.7rem; }
 	.hero-stats > div,
