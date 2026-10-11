@@ -1,6 +1,7 @@
 import {
   SelectList,
   decodeKittyPrintable,
+  fuzzyFilter,
   getKeybindings,
   type Component,
   type SelectItem,
@@ -11,8 +12,8 @@ import chalk from "chalk";
 /**
  * A SelectList with a type-to-search line above it.
  *
- * Printable characters build a query that substring-matches item labels and
- * values; arrows/enter/escape are forwarded to the underlying list.
+ * Printable characters build a query that fuzzy-matches item labels and
+ * values, best match first; arrows/enter/escape are forwarded to the list.
  */
 export class SearchableSelectList implements Component {
   private allItems: SelectItem[];
@@ -39,14 +40,11 @@ export class SearchableSelectList implements Component {
   }
 
   private applyQuery(): void {
-    const q = this.query.toLowerCase();
-    const matched = q
-      ? this.allItems.filter(
-          (item) =>
-            item.label.toLowerCase().includes(q) ||
-            item.value.toLowerCase().includes(q),
-        )
-      : this.allItems;
+    const matched = fuzzyFilter(
+      this.allItems,
+      this.query,
+      (item) => `${item.label} ${item.value}`,
+    );
     this.list = this.buildList(matched);
   }
 

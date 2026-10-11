@@ -5,35 +5,22 @@
 This compares everything pi-tui exports (`dist/index.d.ts`) with what
 `apps/tui/src` imports. FreeCode already uses `Editor`, `Markdown`,
 `SelectList`, `Input`, `Loader`, `Box`, overlays, keybindings, autocomplete,
-`Image` (since `7d9c56e2`) and `hyperlink` (clickable file paths in tool
-headers). Below are the parts it doesn't use, in the order
-they're worth building.
+`Image` (since `7d9c56e2`), `hyperlink` (clickable file paths in tool
+headers) and `fuzzyFilter` (model/provider pickers, `/mcp`, `/tree`,
+`/rewind`; the `/` command menu keeps its own ranking). Below are the parts
+it doesn't use, in the order they're worth building.
 
 | # | Feature | Effort | Verdict |
 |---|---|---|---|
-| 1 | `fuzzyFilter` / `fuzzyMatch` | Small, TUI only | **Do** |
-| 2 | Terminal light/dark detection | Medium | Worth doing |
-| 3 | `SettingsList` | Medium, + one IPC method | Worth doing |
-| 4 | `KeybindingsManager` / `setKeybindings` | Small–medium | Worth doing |
-| 5 | `CancellableLoader` | — | Skip |
-| 6 | `TruncatedText` | — | Skip |
+| 1 | Terminal light/dark detection | Medium | Worth doing |
+| 2 | `SettingsList` | Medium, + one IPC method | Worth doing |
+| 3 | `KeybindingsManager` / `setKeybindings` | Small–medium | Worth doing |
+| 4 | `CancellableLoader` | — | Skip |
+| 5 | `TruncatedText` | — | Skip |
 
 ---
 
-## 1. `fuzzyFilter` / `fuzzyMatch`: fuzzy search in pickers
-
-**What it is.** pi-tui ranks matches with gaps allowed, so `opus55` matches
-`claude-opus-5-5`.
-
-**Where it goes.** `components/searchable-select-list.ts:44` filters with
-`label.toLowerCase().includes(q)`. That list is behind the model picker,
-`/resume` and the MCP picker, so replacing the filter there fixes all of
-them.
-
-**Watch for.** Sort by match score, not by the list's original order, or the
-best match ends up off screen.
-
-## 2. Terminal light/dark detection
+## 1. Terminal light/dark detection
 
 **What it is.** `TUI.onTerminalColorSchemeChange(listener)` +
 `setTerminalColorSchemeNotifications(true)` (mode `?2031`), plus
@@ -48,7 +35,7 @@ colours on a light background.
 **Watch for.** Many terminals never answer either query. Keep the current
 theme when there's no reply, and never wait on one at startup.
 
-## 3. `SettingsList`: a `/settings` panel
+## 2. `SettingsList`: a `/settings` panel
 
 **What it is.** A list of settings, each with a label on the left and its
 current value on the right. `values` makes Enter/Space cycle through choices,
@@ -64,7 +51,7 @@ changes; core reads and writes the settings files. That needs a
 `config.set` IPC method, since only `config.get` exists today. Loop gates that
 are off by default should be labelled as experimental.
 
-## 4. `KeybindingsManager` / `setKeybindings`: user keybindings
+## 3. `KeybindingsManager` / `setKeybindings`: user keybindings
 
 **What it is.** A keybinding registry that reports conflicts, with
 `TUI_KEYBINDINGS` as the defaults.
@@ -77,13 +64,13 @@ and `getKeybindings()` is read by `menu-card.ts`,
 **Watch for.** Report conflicts as a notice at startup instead of silently
 letting one binding win.
 
-## 5. `CancellableLoader`: skip
+## 4. `CancellableLoader`: skip
 
 A spinner that Esc can cancel. FreeCode's own in-progress row
 (`createInProgressMessage`) already shows token counts and context use and
 handles Esc. Switching would remove features.
 
-## 6. `TruncatedText`: skip
+## 5. `TruncatedText`: skip
 
 Single-line text cut to fit the width. `WidthBounded` and
 `truncateToWidth` already do this throughout `message-row.ts`.

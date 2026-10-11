@@ -1,6 +1,7 @@
 import {
   Key,
   decodeKittyPrintable,
+  fuzzyFilter,
   getKeybindings,
   matchesKey,
   truncateToWidth,
@@ -29,7 +30,11 @@ export interface MenuSource<R extends MenuRow> {
   search(query: string): R[];
 }
 
-/** A flat list with a label/description/id substring search. */
+/**
+ * A flat list with a fuzzy label/id search (`opus55` finds `claude-opus-5-5`),
+ * best match first. Descriptions only substring-match, after those: a
+ * subsequence of a long sentence matches nearly anything.
+ */
 export class ListSource<R extends MenuRow> implements MenuSource<R> {
   constructor(
     private readonly heading: string,
@@ -45,10 +50,13 @@ export class ListSource<R extends MenuRow> implements MenuSource<R> {
   }
 
   search(query: string): R[] {
+    const fuzzy = fuzzyFilter(this.items, query, (r) => `${r.label} ${r.id}`);
     const q = query.trim().toLowerCase();
-    return this.items.filter((r) =>
-      [r.label, r.id, r.description ?? ""].some((s) => s.toLowerCase().includes(q)),
+    const seen = new Set(fuzzy);
+    const described = this.items.filter(
+      (r) => !seen.has(r) && (r.description ?? "").toLowerCase().includes(q),
     );
+    return [...fuzzy, ...described];
   }
 }
 
