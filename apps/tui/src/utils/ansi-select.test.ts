@@ -43,3 +43,10 @@ test("highlightRange handles wide characters without splitting a cell", () => {
   assert.equal(plainText(result), "你好");
   assert.ok(result.includes("你"));
 });
+
+test("highlightRange skips an OSC 8 link's URL when counting columns", () => {
+  const line = "ab\x1b]8;;file:///x/y\x1b\\cd\x1b]8;;\x1b\\ef";
+  const out = highlightRange(line, 2, 4);
+  assert.equal(plainText(out), "abcdef");
+  assert.ok(out.includes("\x1b]8;;file:///x/y\x1b\\\x1b[7mcd"), "reverse starts on the link text, not inside the URL");
+});

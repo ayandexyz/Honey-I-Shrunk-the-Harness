@@ -12,7 +12,10 @@ import { ToolResultMessage } from "./tool-result-message.js";
  * on — so assert on the plain text and the test holds either way.
  */
 function plain(lines: string[]): string {
-  return lines.join("|").replace(/\x1b\[[0-9;]*m/g, "");
+  // OSC too: on a hyperlink-capable terminal file paths carry OSC 8 links.
+  return lines
+    .join("|")
+    .replace(/\x1b\[[0-9;]*m|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "");
 }
 
 test("createToolProgressMessage adds a renderable tool message", () => {

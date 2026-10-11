@@ -1,4 +1,13 @@
-import { Component, Text, Box, truncateToWidth } from "@earendil-works/pi-tui";
+import {
+  Component,
+  Text,
+  Box,
+  getCapabilities,
+  hyperlink,
+  truncateToWidth,
+} from "@earendil-works/pi-tui";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import chalk from "chalk";
 import { palette } from "../palette.js";
 import { renderDiff, looksLikeDiff, getDiffStats, getLanguageFromFilename } from "./diff-view.js";
@@ -24,6 +33,16 @@ export const FILE_UPDATE_TOOLS = new Set([
   "replace_file_content",
   "multi_replace_file_content",
 ]);
+
+/**
+ * The path as a clickable OSC 8 `file://` link, on terminals pi-tui knows show
+ * them; plain text elsewhere. While the TUI holds the mouse, most terminals
+ * want Shift (+ Ctrl/Cmd) held for the click to reach the link.
+ */
+function linkFile(display: string, filename: string): string {
+  if (!getCapabilities().hyperlinks) return display;
+  return hyperlink(display, pathToFileURL(path.resolve(filename)).href);
+}
 
 // Color mapping for different tools
 const TOOL_COLORS: Record<string, (text: string) => string> = {
@@ -156,7 +175,7 @@ export class ToolResultMessage implements Component {
       headerAction = isFileUpdate ? "Update" : "Read";
       const cwd = process.cwd();
       const displayFile = filename.startsWith(cwd) ? filename.slice(cwd.length + 1) : filename;
-      headerTarget = `(${displayFile}${formatLineRange(this.args)})`;
+      headerTarget = `(${linkFile(displayFile, filename)}${formatLineRange(this.args)})`;
     } else if (isRun && this.args) {
       const cmdArg = (this.args.CommandLine || this.args.command || "") as string;
       if (cmdArg) {
