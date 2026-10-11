@@ -12,6 +12,35 @@ be "fixed" → `docs/DECISIONS.md`.
 
 ## Small known limitations
 
+### Web-app shows no text until the turn's final snapshot (found 2026-10-11)
+
+**Status:** confirmed in source, not yet measured in a browser run. Affects
+`freecode web` and the Tauri desktop app.
+
+Core streams `text_delta` / `thinking_delta` while the provider is still
+generating, then sends the full `text` / `thinking` snapshot. The web-app
+transport forwards both, but `handleStreamEvent` (`apps/web-app/src/App.tsx:237`)
+only handles `text` and `thinking`, so the deltas are dropped and the reply
+appears all at once at the end.
+
+Fix: append deltas to the active text/reasoning part and let the snapshot
+replace that part, never append both. Keep separate parts around tool calls and
+model iterations. Batch deltas per animation frame and flush them on done,
+error, interrupt and session switch. Details and acceptance criteria are in
+`docs/2026-10-11-performance-recommendations.md` §2. Pair it with §4: smooth
+`scrollIntoView` on every update (`chat/MessageList.tsx:11`) and un-memoized
+`marked.parse` in `TextPart.tsx` will be hit far more often once deltas render.
+
+### TUI holds the progress row for 500ms after every reply (found 2026-10-11)
+
+**Status:** confirmed, presentation delay only.
+
+`submitPrompt` (`apps/tui/src/index.ts:2354`) sleeps 500ms after the final
+token stats arrive so the user can read them, then removes the in-progress row.
+The working state ends half a second after the backend has finished, on every
+turn. Fix: keep the final stats in a settled row and end the working indicator
+immediately. See `docs/2026-10-11-performance-recommendations.md` §1.
+
 ### `freecode eval` does not exit after printing its results (found 2026-09-24)
 
 **Status:** confirmed, wastes wall-clock only, not money. Pre-dates the

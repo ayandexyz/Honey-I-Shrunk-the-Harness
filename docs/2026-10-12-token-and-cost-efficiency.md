@@ -168,7 +168,7 @@ Shortening a cached prompt saves its cold input/write cost and subsequent cache-
 
 **Acceptance:** compare coding outcomes, parallel-batch behavior, citation quality, scope discipline, and successful stopping. Include small questions where the correct answer needs no tools and difficult changes where planning and verification are necessary.
 
-The existing system prompt has an uncommitted edit. Preserve it, capture its exact contents as the baseline, and record the working-tree provenance. Do not compare against an assumed clean prompt.
+The system-prompt edit that was uncommitted when this was written landed in `a13f0c70`. Capture the exact `system.md` at the commit you test from as the baseline, and record that commit. Do not compare against an older prompt.
 
 ## 7. Send more useful tool results with fewer tokens
 
