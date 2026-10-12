@@ -3,6 +3,9 @@
 // at build time keeps this site on the same numbers instead of a hand-copied
 // snapshot. When apps/web is retired, move the directory and repoint DATA_DIR
 // here and in the publishers — nothing else reads the path.
+// Vercel cannot see this cross-directory read: a commit touching only
+// apps/web/app/data is skipped as "no changes to the root directory", so
+// redeploy by hand (or set the Ignored Build Step to also diff ../web/app/data).
 import type { RawBenchmark } from "./agent-bench";
 import type { RawOptTask } from "./jcode-bench";
 import { EMPTY_SIGNALS, type SignalsReport } from "./harness-signals";
