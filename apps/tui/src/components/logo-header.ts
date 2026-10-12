@@ -1,8 +1,10 @@
 import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
 import chalk, { Chalk } from "chalk";
+import { GLYPH_WIDTH, glyphLines } from "../assets/glyph.js";
 import { PORTRAIT_WIDTH, portraitLines } from "../assets/portrait.js";
 import { getDisplayDirectory, getVersion } from "../utils/display.js";
 import { palette } from "../palette.js";
+import { omarchyPalette } from "../utils/omarchy-theme.js";
 
 // The portrait carries its own truecolour per run, so paint it at level 3
 // (same as palette.ts) rather than through the theme's accent pair.
@@ -22,18 +24,30 @@ const coloredLogoLines = portraitLines.map((runs) =>
     .join(""),
 );
 
-const LOGO_WIDTH = PORTRAIT_WIDTH;
+// Block-letter ASCII painted to the right of the portrait. The bright half
+// follows the theme's `accent`; the dim half stays `accentDim` on Omarchy
+// and goes red off Omarchy, per the user's explicit override of the
+// chalk-yellow fallback.
+const dimHalf = omarchyPalette ? palette.accentDim : chalk.red;
+const coloredGlyphLines = glyphLines.map((line) => {
+  const mid = Math.floor(line.length / 2);
+  return palette.accent(line.slice(0, mid)) + dimHalf(line.slice(mid));
+});
 
-/** Blank rows rendered above the logo. */
-const TOP_PADDING = 4;
+/** Portrait + 1 space + glyph; the actual visible width of a side-by-side row. */
+const COMBINED_WIDTH = PORTRAIT_WIDTH + 1 + GLYPH_WIDTH;
 
 /** "-1" sentinel from the index.ts cache means "not loaded yet". */
 const PENDING = "…";
 
 /**
- * Pinned top-of-TUI logo header. Renders the ASCII portrait logo (centered,
- * truecolour) with the `>_ Histh! (vX.Y.Z)` subtitle, a compact stats line
- * (tools/MCP/skills/plugins counts) and a directory line — all centered and in yellow.
+ * Pinned top-of-TUI logo header. Renders the Omarchy-style ASCII portrait
+ * logo (truecolour) on the left and the half-block ASCII mark on the
+ * right, both centered horizontally in the terminal, with the
+ * `>_ Histh! (vX.Y.Z)` subtitle, a compact stats line (tools/MCP/skills/
+ * plugins counts) and a directory line below — also centered. When the
+ * caller passes a `height` ≥ the block's own row count, the whole thing
+ * is vertically centered in the terminal.
  *
  * The counts come from accessor functions so the parent can cache them
  * once at startup and the header stays synchronous.
@@ -42,16 +56,21 @@ export class LogoHeader implements Component {
   /**
    * Rendered every frame as the message list's first entry (even in follow
    * mode, where the window slice usually discards it), so the lines are
-   * cached on everything they actually depend on: width and the counts
-   * (version and cwd are fixed for the process).
+   * cached on everything they actually depend on: width, height, the
+   * counts, and the Omarchy accent (so a live theme switch repaints the
+   * half-block mark).
    */
   private cache?: {
     width: number;
+    height: number;
     tools: number;
     mcp: number;
     skills: number;
     plugins: number;
     update: string | null;
+    /** Omarchy source palette; `null` off Omarchy. Bump so a live theme switch
+     *  invalidates the cached glyph paint without invalidating the rest. */
+    themeFingerprint: string | null;
     lines: string[];
   };
 
@@ -85,9 +104,10 @@ export class LogoHeader implements Component {
     return n < 0 ? PENDING : String(n);
   }
 
-  render(width: number): string[] {
-    if (width < LOGO_WIDTH) {
-      // Too narrow for the portrait; skip the overlay rather than truncating it.
+  render(width: number, height: number = 0): string[] {
+    if (width < COMBINED_WIDTH) {
+      // Too narrow for the side-by-side layout; skip the overlay rather than
+      // truncating it.
       return [];
     }
 
@@ -96,20 +116,26 @@ export class LogoHeader implements Component {
     const skillCount = this.getSkillCount();
     const pluginCount = this.getPluginCount();
     const updateVersion = this.getUpdateVersion();
+    // `accent` is the single key the glyph's bright half reads, and the dim
+    // half only branches on Omarchy's existence; that's all the fingerprint
+    // needs to invalidate a cached render when the theme flips.
+    const themeFingerprint = omarchyPalette ? omarchyPalette.accent : null;
     if (
       this.cache &&
       this.cache.width === width &&
+      this.cache.height === height &&
       this.cache.tools === toolCount &&
       this.cache.mcp === mcpCount &&
       this.cache.skills === skillCount &&
       this.cache.plugins === pluginCount &&
-      this.cache.update === updateVersion
+      this.cache.update === updateVersion &&
+      this.cache.themeFingerprint === themeFingerprint
     ) {
       return this.cache.lines;
     }
 
-    const padLeft = Math.max(0, Math.floor((width - LOGO_WIDTH) / 2));
-    const padRight = Math.max(0, width - LOGO_WIDTH - padLeft);
+    const padLeft = Math.max(0, Math.floor((width - COMBINED_WIDTH) / 2));
+    const padRight = Math.max(0, width - COMBINED_WIDTH - padLeft);
     const indent = " ".repeat(padLeft);
     const rightPad = " ".repeat(padRight);
 
@@ -157,26 +183,85 @@ export class LogoHeader implements Component {
     const dirStyled = chalk.dim("Directory:") + ` ${cwd}`;
     const dirLine = this.centerLine(width, dirPlain.length, dirStyled);
 
-    // Breathing room above the logo so it does not sit flush against the
-    // status bar.
-    const topPad = Array.from({ length: TOP_PADDING }, () => "");
+    // Side-by-side: portrait on the left, half-block ASCII mark on the
+    // right. The portrait is taller than the glyph's content rows; trailing
+    // empty rows in `glyphLines` keep the subtitle from crowding the mark.
+    // The styled glyph is built from each plain line individually, so its
+    // visible width is `glyphPlain.length`; we pad the **visible** tail
+    // out to `GLYPH_WIDTH` so the right edge of the row lines up with
+    // every other row regardless of which glyph line is in play. Without
+    // that, a short glyph row (trailing blanks, narrow tops) leaves the
+    // row short of `width` and pi-tui's truncator trims + `…`'s it,
+    // producing the vertical column of dots on the right edge.
+    //
+    // We do NOT run these rows through `truncateToWidth`: the styled
+    // portrait's per-pixel chalk escape codes push `string-width` one
+    // column past the plain portrait, so the truncator measures the row
+    // as 1 col over `width` and lops the last visible char, appending
+    // `…` to every row (the right-edge dot column). The rows are already
+    // at most `width` visible cols by construction; `rightPad` is a single
+    // dim-space chalk call so the row's string length still passes the
+    // "≤ width" test invariant.
+    // The glyph is shorter than the portrait (8 content rows vs 29),
+    // so the trailing empty rows in `glyphLines` no longer sit at the
+    // bottom — they're split: some go above, some below, so the content
+    // rows land around mid-face. `GLYPH_TOP_BLANKS` = blank rows to
+    // leave above the content; the rest fall below automatically because
+    // the portrait is taller than the glyph.
+    const GLYPH_TOP_BLANKS = 10;
+    const sideBySide = coloredLogoLines.map((portraitLine, i) => {
+      const glyphIndex = i - GLYPH_TOP_BLANKS;
+      const glyphStyled =
+        glyphIndex >= 0 && glyphIndex < coloredGlyphLines.length
+          ? (coloredGlyphLines[glyphIndex] ?? "")
+          : "";
+      const glyphPlain =
+        glyphIndex >= 0 && glyphIndex < glyphLines.length
+          ? (glyphLines[glyphIndex] ?? "")
+          : "";
+      const glyphPad = " ".repeat(Math.max(0, GLYPH_WIDTH - glyphPlain.length));
+      // The right margin is plain spaces, not chalk-painted, so the row's
+      // `rightPad` count and the test's `line.length <= WIDTH` invariant
+      // stay in sync. (`rightPad` is itself a string — see above — so
+      // pad with `rightPad` directly, no second `.repeat`.)
+      return `${indent}${portraitLine} ${glyphStyled}${glyphPad}${rightPad}`;
+    });
 
-    const lines = [
-      ...topPad,
-      ...coloredLogoLines.map((logoLine) => `${indent}${logoLine}${rightPad}`),
+    // Side-by-side rows are already at most `width` visible cols by
+    // construction (padLeft + PORTRAIT_WIDTH + 1 + GLYPH_WIDTH + rightPad);
+    // running them through `truncateToWidth` makes pi-tui's `string-width`
+    // see them as 1 col over `width` (the per-pixel chalk escape codes
+    // around the portrait's half-block chars round up) and append `…` to
+    // every row — the right-edge column of dots the user saw. Skip the
+    // truncator on those rows; apply it only to the plain-text subtitle /
+    // stats / dir lines, whose `visibleWidth` matches their `.length`.
+    const blockLines = [
+      ...sideBySide,
       "", // gap between the logo and its subtitle
-      subtitleLine,
-      ...updateLines,
-      statsLine,
-      dirLine,
-    ].map((line) => truncateToWidth(line, width));
+      ...[subtitleLine, ...updateLines, statsLine, dirLine].map((line) =>
+        truncateToWidth(line, width),
+      ),
+    ];
+
+    // Vertical centering: half the empty space goes above the block, the
+    // other half below. `height === 0` (the renderer passed no height)
+    // pins the block to the top — the legacy behaviour the test suite
+    // exercises, since it calls `render(WIDTH)` with no height.
+    const topPadCount = height > 0
+      ? Math.max(0, Math.floor((height - blockLines.length) / 2))
+      : 0;
+    const topPad = Array.from({ length: topPadCount }, () => "");
+
+    const lines = [...topPad, ...blockLines].slice(0, Math.max(height, blockLines.length));
     this.cache = {
       width,
+      height,
       tools: toolCount,
       mcp: mcpCount,
       skills: skillCount,
       plugins: pluginCount,
       update: updateVersion,
+      themeFingerprint,
       lines,
     };
     return lines;

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import stringWidth from "string-width";
 import { LogoHeader } from "./logo-header.js";
 
 const WIDTH = 100;
@@ -39,7 +40,11 @@ test("update notice renders directly under the subtitle", () => {
 
 test("every rendered line stays within the terminal width", () => {
   for (const line of render("0.39.0")) {
-    assert.ok(line.length <= WIDTH, `line too wide: ${JSON.stringify(line)}`);
+    // Use visible width, not raw string length — the side-by-side header
+    // rows carry per-pixel chalk escape codes around the portrait, so
+    // their `line.length` (ANSI bytes included) is intentionally larger
+    // than their visible width.
+    assert.ok(stringWidth(line) <= WIDTH, `line too wide: ${JSON.stringify(line)}`);
   }
 });
 
