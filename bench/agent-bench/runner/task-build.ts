@@ -49,7 +49,11 @@ export interface JudgedTaskFile {
 export const REPO_URL = "https://github.com/ayandexyz/omacode";
 // --prefer-offline, not --offline: a parent commit may pin a version the local
 // store no longer holds, and --offline turns that into a failed trial.
-export const INIT_COMMAND = "pnpm install --frozen-lockfile --prefer-offline";
+// packages/shared resolves to its dist/, which install does not build: without
+// it every `tsc` final check fails on "Cannot find module ...freecode-shared"
+// whatever the agent did, and the agent burns its first minutes on that noise
+// (found 2026-10-12: one trial built it by chance and passed, the next did not).
+export const INIT_COMMAND = "pnpm install --frozen-lockfile --prefer-offline && pnpm -C packages/shared build";
 
 /**
  * By directory, not `--filter <name>`: the packages are named

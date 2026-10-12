@@ -485,6 +485,43 @@ spike. What is left is measurement, not code:
       that completed them** — a claim with no prior assessment, which the fold's
       own comment calls the number jcode trusts least. Nothing acts on it.
 
+## Run pathology — first pass (2026-10-12)
+
+From the first `pnpm bench:pathology` over 12,370 runs (HARNESS-BENCH.md §3b):
+
+- [ ] **37 zero-edit runs reread the same file range 30–56% of the time**
+      (e.g. `ea531879`: `eval/match.ts` read in full 18 times in 7 minutes).
+      Unknown whether the model is forgetting, or the read output is
+      truncated/unclear and it retries. Open a few with `freecode trace`
+      before deciding whether this is a tool-output fix or a prompt fix.
+- [ ] **Three core tests fail in an offline container on every commit**:
+      `modelSupportsImages` (×2) and `providers.list only offers providers the
+      registry can construct`. Found by running the judged set's final checks on
+      untouched parent commits in the bench image (`--network none`): 3 fail on
+      all three parents. They likely read the models.dev catalogue, which the
+      offline container cannot reach or has not cached. Until fixed, a judged
+      trial's real test failures are the ones beyond these three.
+- [ ] **Stuck-on-one-error is the main long-task time sink, not dryness.**
+      `implement-night-morning` v2 t1 (41.8 min vs 16–22 for other trials) saw
+      the same 4 tsc parse errors 8 times over ~10 min while editing steadily,
+      so it never looked dry. User session `6d4b1c74` run 7 did the same at
+      small scale (one TS2345 four times in ~1.5 min). Shared moves: re-running
+      `tsc` with different greps instead of reading the reported line,
+      byte-dumping with `od -c`/awk, and `/tmp` probe scripts that cannot
+      resolve the repo's `node_modules`. `bench:pathology` flags it
+      (`stuck_error`). Candidate fix: a loop-health signal on a repeated error
+      fingerprint feeding the (off by default) redirect. That is an `eval ab`
+      decision.
+- [ ] **Compaction makes it reread.** On long tasks almost every reread follows
+      a compaction (24 of 25 in v2 t1, 5 compactions). Cheap per read, but it
+      grows with every compaction. Candidate: carry the read-file list in the
+      compaction summary.
+- [ ] **Measured input shrink per compaction is ~5% and sometimes negative**
+      on the `compaction-boundary` eval case. Those thresholds are tiny by
+      design, so this needs checking on a real long session before calling it
+      a bug, but a compaction that leaves the next request larger than before
+      did nothing except invalidate the cache.
+
 ## Spec findings (eval harness — 2026-08-23)
 
 From writing `docs/specs/2026-08-23-eval-harness.md`. Details in that

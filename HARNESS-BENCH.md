@@ -17,6 +17,7 @@
 | Does it fix real bugs vs Claude Code / OpenCode? | `pnpm bench:agents` | paid | `AGENT-BENCH.md` |
 | **How far can it climb an optimisation task?** | **`pnpm bench:jcode`** | paid | **§2** |
 | **Does the model step its confidence, rate its goals, finish its lists?** | **`pnpm bench:signals`** | free | **§3** |
+| **Where did a run waste its time (no edits, rereads, compaction loops, hangs)?** | **`pnpm bench:pathology`** | free | **§3b** |
 | Did my last change make *our* agent worse? | `pnpm eval` | paid | `EVAL.md` |
 
 Everything on this page publishes into `apps/web/app/data/` and appears on
@@ -149,11 +150,66 @@ predates the gate. That is the number auto-poke exists to move.
 
 ---
 
+## 3b. Run pathology — `pnpm bench:pathology`
+
+Pass/fail cannot see a run that passes after forty minutes of reading. This
+folds the same rollout logs into *how* each run spent its time. The unit is one
+user prompt (a **run**), and idle time between prompts and time waiting on a
+`question` answer are excluded. Free and offline. It writes nothing and is never
+published, and it **does** print session ids so you can open the bad ones with
+`freecode trace <id>`.
+
+```bash
+pnpm bench:pathology                  # summary + the 15 worst runs
+pnpm bench:pathology --top 40 --since 7
+pnpm bench:pathology --session <id>   # every run of one session
+pnpm bench:pathology --rollout-dir D  # searched recursively, e.g. bench/agent-bench/results/<run>
+pnpm bench:pathology --json           # every run, every field
+```
+
+| Column / flag | Meaning |
+| --- | --- |
+| `1st-edit` | time from the prompt to the first `edit`/`write` (or a bash command that writes — a heuristic, `bashWrites` in `--json`) |
+| `dry(calls)` | longest stretch with no progress, minutes and tool calls |
+| `reads/re` | reads, and rereads of the same path+range with no edit to it in between (`rereadsAfterCompact`: the first read was before a compaction) |
+| `cmp/loop` | compactions, and those with no progress since the previous one |
+| `long_dry` | dry ≥ 15 min **and** ≥ 30 calls |
+| `reread_heavy` | ≥ 30% of ≥ 10 reads were rereads |
+| `compact_loop` | any compaction with no progress since the last |
+| `search_circles` | ≥ 5 byte-identical grep/glob calls with no progress between |
+| `repeat_commands` | ≥ 5 byte-identical non-writing bash commands with no progress between |
+| `stuck_error` | the same set of error lines (TS errors, `not ok`, FAIL, `XError: msg`) in bash output ≥ 4 times, counted across edits |
+| `hung_call` | one model request waited ≥ 5 min for its first token — the provider or fetch layer, not the model getting lost |
+
+Summary numbers are over runs with ≥ 10 tool calls; shorter runs are chat.
+A zero-edit run is not by itself a failure (the user may have asked a
+question), so treat flags as a list of things to look at, not a score.
+Thresholds are `THRESHOLDS` in `bench/harness-signals/pathology.ts`.
+
+First run (2026-10-12, 12,370 runs, 758 substantive): first edit p50 0.4 min /
+p90 2.3 min, dry stretch p90 3.1 min, reread share 8%. **37 runs are
+`reread_heavy`**, all zero-edit read-only runs of 3–8 min; the worst read one
+file in full 18 times in 7 minutes. All 18 `compact_loop` hits are the
+`compaction-boundary` eval case (tiny thresholds by design), where the measured
+input shrink per compaction is ~5% and sometimes negative. No `long_dry` in the
+host logs, because **isolated agent-bench trials discard their rollout logs**
+along with their throwaway HOME (see TODO.md), so the long trials are not in
+this data yet. Fixed the same day (`keepRollout`): an isolated trial's HOME is
+now a per-trial host dir and `<trial>/rollout/` is kept, so
+`pnpm bench:pathology --rollout-dir bench/agent-bench/results/<run>` works.
+
+Two more flags came out of the first long-task run: `stuck_error` (the same set
+of error lines in bash output ≥ 4 times, counted across edits, because a run
+that keeps editing and keeps getting the same tsc error is not dry, it is stuck)
+and `repeat_commands` (a non-writing bash command repeated with no progress).
+
+---
+
 ## 4. Free, no model — unit tests
 
 ```bash
 pnpm test:jcode-bench        # typechecks the harness (incl. the agent-bench code it imports), then curve/publish tests
-pnpm test:harness-signals    # typechecks, then the fold tests
+pnpm test:harness-signals    # typechecks, then the fold tests (signals + pathology)
 cd apps/core && pnpm test    # signals/*.test.ts: settings, diff, poke decisions, and a real-loop poke test
 ```
 
@@ -165,6 +221,7 @@ cd apps/core && pnpm test    # signals/*.test.ts: settings, diff, poke decisions
 | --- | --- | --- |
 | Changed a gate, the fold, or the todo tool | the tests above | free |
 | Want the page's signal sections current | `pnpm bench:signals` | free |
+| A run felt slow or lost | `pnpm bench:pathology`, then `freecode trace <id>` | free |
 | Is the optimisation harness still working? | `pnpm bench:jcode --tasks utf16-transcode --agents freecode --trials 1 --no-full-gate` | 1 climb |
 | A comparable number | `pnpm bench:jcode --agents freecode,claude-code --trials 3` | 3 × 3 × 2 climbs (hours) |
 | Show the effect of a gate on the climb | same, once plain and once with `FREECODE_AUTO_POKE=1` — the page labels the gated run | double |

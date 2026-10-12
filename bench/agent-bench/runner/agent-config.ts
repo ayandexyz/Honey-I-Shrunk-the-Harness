@@ -121,3 +121,15 @@ export function writeAgentConfig(
 export function cleanAgentConfig(dir: string | undefined): void {
   if (dir) fs.rmSync(dir, { recursive: true, force: true });
 }
+
+/**
+ * An isolated trial's HOME → keep `<artifactDir>/rollout/` (freecode's
+ * `~/.freecode/rollout/sessions`, the input to `bench:pathology`), drop the
+ * rest. Other agents leave no rollout and lose nothing they kept before.
+ */
+export function keepRollout(homeDir: string | undefined, artifactDir: string): void {
+  if (!homeDir) return;
+  const sessions = path.join(homeDir, ".freecode", "rollout", "sessions");
+  if (fs.existsSync(sessions)) fs.renameSync(sessions, path.join(artifactDir, "rollout"));
+  fs.rmSync(homeDir, { recursive: true, force: true });
+}

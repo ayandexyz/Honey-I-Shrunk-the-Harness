@@ -3,7 +3,7 @@ import { test } from "node:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { cleanAgentConfig, renderConfig, writeAgentConfig } from "./agent-config.js";
+import { cleanAgentConfig, keepRollout, renderConfig, writeAgentConfig } from "./agent-config.js";
 import { loadAgent } from "./agents.js";
 import type { AgentSpec } from "./types.js";
 
@@ -119,4 +119,21 @@ test("a config seed is copied in, then the rendered config is written over it", 
 
 test("the shipped opencode adapter declares a seed — it cannot install offline", () => {
   assert.ok(loadAgent("opencode").configSeed, "opencode must declare configSeed");
+});
+
+test("keepRollout: lifts freecode's rollout sessions into the artifact dir and drops the HOME", () => {
+  const art = fs.mkdtempSync(path.join(os.tmpdir(), "keep-rollout-"));
+  const home = path.join(art, "home");
+  fs.mkdirSync(path.join(home, ".freecode", "rollout", "sessions", "s1"), { recursive: true });
+  fs.writeFileSync(path.join(home, ".freecode", "rollout", "sessions", "s1", "events.jsonl"), "{}\n");
+  fs.writeFileSync(path.join(home, ".claude.json"), "{}");
+  keepRollout(home, art);
+  assert.ok(fs.existsSync(path.join(art, "rollout", "s1", "events.jsonl")));
+  assert.ok(!fs.existsSync(home));
+  // Nothing to keep (another agent): the HOME still goes.
+  fs.mkdirSync(home);
+  keepRollout(home, art);
+  assert.ok(!fs.existsSync(home));
+  keepRollout(undefined, art); // non-isolated: a no-op
+  fs.rmSync(art, { recursive: true, force: true });
 });

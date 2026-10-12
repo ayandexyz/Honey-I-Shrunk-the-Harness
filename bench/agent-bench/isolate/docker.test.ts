@@ -72,3 +72,12 @@ test("checkArgv: final checks run in the same image with no network and no store
   assert.equal(argv.some((a) => a.includes("pnpm-store")), false);
   assert.deepEqual(argv.slice(-4), ["agent-bench", "sh", "-c", "pnpm -C apps/core test"]);
 });
+
+test("dockerArgv: a homeDir is mounted as HOME, so the trial's rollout log outlives the container", () => {
+  const base = { image: "agent-bench", network: "n", name: "t", wsDir: "/ws", envNames: [], uid: 1000, gid: 1000 };
+  assert.ok(!dockerArgv(base, ["x"]).some((a) => a.endsWith(":/tmp/agent-home")));
+  const argv = dockerArgv({ ...base, homeDir: "/r/trial/home" }, ["x"]);
+  const i = argv.indexOf("/r/trial/home:/tmp/agent-home");
+  assert.ok(i > 0 && argv[i - 1] === "-v");
+  assert.ok(argv.includes("HOME=/tmp/agent-home"));
+});

@@ -33,7 +33,7 @@ import {
 import { meterEnv, upstreamFor } from "../proxy/env.js";
 import { persistTrialMeter } from "../proxy/fold.js";
 import { startProxy } from "../proxy/server.js";
-import { cleanAgentConfig, writeAgentConfig } from "./agent-config.js";
+import { cleanAgentConfig, keepRollout, writeAgentConfig } from "./agent-config.js";
 import type { Report, TrialRecord } from "./types.js";
 
 const ROOT = path.join(import.meta.dirname, "..");
@@ -147,6 +147,9 @@ async function main() {
         let closeProxy: (() => void | Promise<void>) | undefined;
         // Hoisted so the finally can drop it even if the trial threw.
         let configDir: string | undefined;
+        // Isolated trials only: the container's HOME, kept until its rollout
+        // log has been lifted out (keepRollout), then dropped.
+        let homeDir: string | undefined;
         // DNS-safe name (container names are hostnames on user networks; the
         // instance id's `__` is not valid there).
         const safe = `${inst.instanceId}-t${trial}-${spec.id}`
@@ -194,6 +197,10 @@ async function main() {
           // opencode has no base-URL env var, so the meter reaches it only
           // through a config file carrying this trial's proxy address.
           configDir = writeAgentConfig(spec, artifactDir, proxyOrigin, ROOT);
+          if (isolate) {
+            homeDir = path.join(artifactDir, "home");
+            fs.mkdirSync(homeDir, { recursive: true });
+          }
           const containerize = isolate
             ? {
                 image: IMAGE,
@@ -202,6 +209,7 @@ async function main() {
                 wsDir: ws.dir,
                 envNames: forwardedEnvNames(spec.env, extraEnv),
                 configDir,
+                homeDir,
                 uid: process.getuid?.() ?? 1000,
                 gid: process.getgid?.() ?? 1000,
               }
@@ -291,6 +299,7 @@ async function main() {
         } finally {
           await closeProxy?.();
           cleanAgentConfig(configDir);
+          keepRollout(homeDir, artifactDir);
           ws.cleanup();
         }
 

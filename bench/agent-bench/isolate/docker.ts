@@ -31,6 +31,8 @@ export const PROXY_PORT = 8080;
 /** Where the workspace lands in the agent container, and the bench dir in the proxy's. */
 export const WORKSPACE = "/workspace";
 export const BENCH_MOUNT = "/bench";
+/** The agent container's HOME; baked writable in the Dockerfile. */
+export const AGENT_HOME = "/tmp/agent-home";
 
 export interface Containerize {
   image: string;
@@ -55,6 +57,15 @@ export interface Containerize {
    * survives to the next trial.
    */
   configDir?: string;
+  /**
+   * Host dir mounted rw as the container's HOME (`/tmp/agent-home`). Still a
+   * per-trial throwaway, so nothing carries between trials (§6.3), but the
+   * trial's rollout log survives the container and `bench:pathology` can fold
+   * it. The whole HOME is mounted, not just `~/.freecode/rollout`: docker would
+   * create the mount's parents root-owned, and an agent running as `--user`
+   * could then not write its own config next to it.
+   */
+  homeDir?: string;
   uid: number;
   gid: number;
 }
@@ -68,9 +79,10 @@ export function dockerArgv(c: Containerize, argv: string[]): string[] {
     "--user", `${c.uid}:${c.gid}`,
     "-v", `${c.wsDir}:${WORKSPACE}`,
     ...(c.configDir ? ["-v", `${c.configDir}:${CONFIG_MOUNT}`] : []),
+    ...(c.homeDir ? ["-v", `${c.homeDir}:${AGENT_HOME}`] : []),
     "-w", WORKSPACE,
     // Writable HOME for CLIs that insist on one; --user means /root is not it.
-    "-e", "HOME=/tmp/agent-home",
+    "-e", `HOME=${AGENT_HOME}`,
     ...c.envNames.flatMap((n) => ["-e", n]),
     c.image,
     ...argv,
