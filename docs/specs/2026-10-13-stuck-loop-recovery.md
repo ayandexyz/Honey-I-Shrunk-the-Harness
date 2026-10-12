@@ -144,7 +144,17 @@ the error-looking lines of one **bash** tool output (`error TS\d+`, `not ok`,
 `read` output is never fingerprinted: it is file content, not a result (the
 scorer's `except ValueError:` false positive).
 
-**State.** `SessionState.loopHealth.repeatedErrors`: per fingerprint, how many
+**Per line, not per output.** A full test run repeats every pre-existing
+failure (the three offline `modelSupportsImages` / `providers.list` tests,
+TODO.md) on every run. Counted as one fingerprint per output, any long task
+that runs the whole suite would trip the detector on errors the agent neither
+caused nor can fix (`add-agent-control` v2 t1: `not ok 976 - modelSupportsImages`
+on every run, next to a real 5-time `not ok 709`). So count **error lines**,
+and drop a line from consideration once it is known to be **baseline**: present
+in the run's first output of that command, before the run's first edit. Only
+lines that appeared after the agent started changing things can be "stuck".
+
+**State.** `SessionState.loopHealth.repeatedErrors`: per error line, how many
 times it has appeared this run. Unlike A–C it is **not** reset by edits or file
 changes: an edit that leaves the same error is exactly the case. It resets on
 a run boundary, and a fingerprint's count drops to zero once an output for the
@@ -229,6 +239,12 @@ classify them by hand (sample if many): **stuck** (same error, no change in
 approach) vs **legitimate** (a hill-climb verifier failing while the solution
 genuinely improves, a pre-existing failure the task did not touch). Ship the
 lowest threshold with **zero legitimate hits in the sample**, as oh-my-pi did.
+
+Calibration set from the long-task run (`pathology-commits-v2`): **should
+fire**: `implement-night-morning` t1 (same tsc parse errors ×8),
+`add-agent-control` t1 (`not ok 709` ×5 in two minutes). **Should stay
+quiet**: `fix-night-envelope` t1 (errors keep *changing* — slow progress, not a
+loop) and every trial's repeats of the 3 baseline test failures (§4.1).
 
 Known legitimate shape to exclude: jcode-bench climbs (`3e5f45bf`, `401d8104`)
 repeat `grade: FAIL (verification)` while the score improves. Candidate
