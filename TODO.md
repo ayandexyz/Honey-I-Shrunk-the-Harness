@@ -512,6 +512,41 @@ From the first `pnpm bench:pathology` over 12,370 runs (HARNESS-BENCH.md §3b):
       (`stuck_error`). Candidate fix: a loop-health signal on a repeated error
       fingerprint feeding the (off by default) redirect. That is an `eval ab`
       decision.
+- [ ] **Finishing without a full test run lets regressions through.**
+      `add-agent-control` v2 t2 and t3 ran only the test files they touched
+      (`server.test.ts`, `registry.test.ts`, `agent-control.test.ts`) and
+      never `pnpm -C apps/core test`. Three real regressions shipped in other
+      files: an eval case naming a parameter the renamed tool no longer has
+      (`eval/dataset.test.ts`), a new IPC method with no param contract
+      (`ipc/validate-params.test.ts`), and `agents.stop` dropping the
+      caller-is-parent check. Measurable from the log (was the project's full
+      test command run after the last edit?); candidate `bench:pathology`
+      flag `unverified_finish`, and possibly a finish-time reminder. Note the
+      bench keeps only the last 20K chars of a check's output, which drops
+      every failing test's name; `final-checks.json` should keep the
+      `not ok` lines in full.
+- [ ] **"Built but never wired" is the main quality failure on long tasks.**
+      `bench:judge` on the nine v2 trials (GPT judge only, see next item):
+      3.5–6.8 / 10, mean 4.8, although every trial passes `tsc` and every
+      trial's tests match the parent commit's baseline. The judge's top
+      weakness in most trials is a feature whose parts exist and are unit
+      tested but are not connected to the path that runs: `attachLoop` never
+      called from `tools/agent.ts`; `night stop` writing `cancelRequested`
+      that the orchestrator's `stopRequested` never reads (two trials);
+      `--push` calling a method that is never supplied; `--worktree` creating
+      a worktree and then working in the original checkout. Unit tests pass
+      because each part is tested alone. Not a stuck-loop problem; candidate
+      fix is a finish-time check ("trace the user-facing entry point to your
+      new code") and an end-to-end test per feature. Needs its own spec.
+- [ ] **The judge counts the baseline's failing tests against every trial.**
+      Each verdict cites "3 failing tests" as a merge blocker, but those three
+      fail on the untouched parent commit in the offline container (item
+      above). `judge-prompt.ts` should receive the parent commit's check
+      results so only failures the agent introduced count.
+- [ ] **The configured Gemini judge key is invalid** ("API key not valid"),
+      so the v2 run was scored by the GPT fallback alone: 0 audited, 9
+      fallback, unpublishable. Fix the key, then `pnpm bench:judge --rejudge`
+      on `results/pathology-commits-v2`.
 - [ ] **Compaction makes it reread.** On long tasks almost every reread follows
       a compaction (24 of 25 in v2 t1, 5 compactions). Cheap per read, but it
       grows with every compaction. Candidate: carry the read-file list in the
