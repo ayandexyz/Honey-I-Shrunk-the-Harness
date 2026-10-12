@@ -192,6 +192,24 @@ export function agentColor(id: string): string {
   }
 }
 
+/**
+ * Per-agent logo path for the section 01 panels. freecode uses the wide
+ * logoText asset; rivals get their dashboardicons SVG. Unknown agents have
+ * no logo, so callers must guard the return.
+ */
+export function agentLogo(id: string): string | null {
+  switch (id) {
+    case "freecode":
+      return "/logoText.png";
+    case "claude-code":
+      return "/claude-code.svg";
+    case "opencode":
+      return "/opencode.svg";
+    default:
+      return null;
+  }
+}
+
 const median = (xs: number[]) => {
   if (xs.length === 0) return 0;
   const s = [...xs].sort((a, b) => a - b);

@@ -306,6 +306,23 @@
 	align-items: flex-start;
 }
 
+.agent-title-name {
+	display: flex;
+	align-items: center;
+	gap: 0.85rem;
+}
+
+.agent-logo {
+	height: 2.75rem;
+	width: auto;
+	border-radius: 0.25rem;
+	object-fit: contain;
+}
+
+.agent-panel-freecode .agent-logo {
+	height: 2.5rem;
+}
+
 .agent-title span,
 .autonomy span { color: var(--muted-strong); font-family: var(--mono); font-size: 0.85rem; letter-spacing: 0.06em; text-transform: uppercase; }
 .agent-title h4 { margin: 0.35rem 0 0; font-size: 2rem; letter-spacing: -0.035em; }

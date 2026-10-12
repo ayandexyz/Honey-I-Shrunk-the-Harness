@@ -1,5 +1,5 @@
 ---
-import { agentColor, type BenchView, type MatrixCell } from "../data/agent-bench";
+import { agentColor, agentLogo, type BenchView, type MatrixCell } from "../data/agent-bench";
 import ComparisonCards from "../components/ComparisonCards.astro";
 import PerBugCost from "../components/PerBugCost.astro";
 import { agentName, models, runs, totals } from "../data/agent-bench-page";
@@ -212,9 +212,21 @@ const shortId = (id: string) => id.replace(/^[a-z]+__[a-z]+-/, "#");
 											{view.agents.map((agent) => (
 												<section class:list={["agent-panel", agent.isFreeCode && "agent-panel-freecode"]}>
 													<div class="agent-title">
-														<div>
-															<span>{agent.isFreeCode ? "This harness" : "Comparison harness"}</span>
-															<h4 style={agent.isFreeCode ? undefined : `color: ${agentColor(agent.id)}`}>{agentName(agent.id)}</h4>
+														<div class="agent-title-name">
+															{agentLogo(agent.id) && (
+																<img
+																	class="agent-logo"
+																	src={agentLogo(agent.id)!}
+																	alt=""
+																	width="48"
+																	height="48"
+																	loading="lazy"
+																/>
+															)}
+															<div>
+																<span>{agent.isFreeCode ? "This harness" : "Comparison harness"}</span>
+																<h4 style={agent.isFreeCode ? undefined : `color: ${agentColor(agent.id)}`}>{agentName(agent.id)}</h4>
+															</div>
 														</div>
 														<code>v{agent.version}</code>
 													</div>
