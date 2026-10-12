@@ -1,7 +1,7 @@
 {
   "repoUrl": "https://github.com/ayandexyz/omacode",
   "generationDate": "2026-09-29T07:34:17.581Z",
-  "initCommand": "pnpm install --frozen-lockfile --prefer-offline",
+  "initCommand": "pnpm install --frozen-lockfile --prefer-offline && pnpm -C packages/shared build",
   "evalCommits": [
     {
       "id": "fix-night-run",
