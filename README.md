@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="apps/web2/public/logo2.png" alt="FreeCode Logo" width="400" />
+<img src="apps/web2/public/logo2.png" alt="Histh! Logo" width="400" />
 
 **An open-source CLI coding agent that runs on whichever model you already pay for**
 
@@ -11,7 +11,7 @@
 
 </div>
 
-**FreeCode** is a terminal coding agent. You give it a task in plain language; it
+**Histh!** is a terminal coding agent. You give it a task in plain language; it
 reads your repository, runs commands, edits files, and reports back — driving the
 work itself through a single agentic tool-use loop rather than asking you which
 files it needs.
@@ -46,7 +46,7 @@ freecode
 ```
 
 Pick a model with `/model` before your first prompt — a fresh install has no
-provider selected, and FreeCode refuses to guess one rather than sending your
+provider selected, and Histh! refuses to guess one rather than sending your
 prompt somewhere you never chose. Full walkthrough:
 [Quickstart](https://freecode.website/getting-started/quickstart).
 
@@ -57,7 +57,7 @@ freecode auth login anthropic
 ```
 
 > **Read what that does before you run it.** Subscription inference is only
-> reachable by presenting FreeCode to Anthropic **as Claude Code** — its OAuth
+> reachable by presenting Histh! to Anthropic **as Claude Code** — its OAuth
 > client id, its headers, its identity line. Anthropic reserves that inference
 > for its own surfaces and has acted against tools doing this, and the account
 > at risk is yours. It is opt-in, off by default, and one `freecode auth logout`
@@ -74,7 +74,7 @@ Using a web session instead of a key at all: `/web` in the TUI lists
 own endpoint — anonymously by default; a cookie from a signed-in tab in
 `config.json`'s `web` block buys the Pro model. No token accounting exists on
 that path, so the budget is **requests, not tokens**: the session throttles by
-returning empty replies, and FreeCode spaces tool-loop requests, retries an
+returning empty replies, and Histh! spaces tool-loop requests, retries an
 empty reply on a 20 s clock, and caps `@file` inlining at 45 KB because history
 is re-sent every turn. Tool use rides a text protocol (`[TOOL_CALLS]` / `FINAL:`)
 that can be switched off with `FREECODE_GEMINI_WEB_TOOLS=0`. It is not browser
