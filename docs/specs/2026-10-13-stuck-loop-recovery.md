@@ -316,6 +316,25 @@ with a TS parse error whose obvious fix is on the reported line, `verify` =
 `tsc` passes. Today's behaviour should show repeated fingerprints; the case
 scores the outcome, the trace shows whether the nudge fired.
 
+### 5.2.1 Result (2026-10-13)
+
+`pnpm eval ab coding`, `FREECODE_REPEATED_ERROR=0` vs `1`, 5 trials, all 14
+cases incl. the new `fix-the-reported-parse-error`, MiniMax-M3, commit
+`aead5844`. Ledger `2026-10-13-coding-1..4`, all **kept**.
+
+- **14/14 cases pass with E on; no regression.** Run first as 3 parallel
+  shards: every trial that completed passed on both sides, but running three
+  at once hit MiniMax's Token Plan rate limit twice ("rate limit reached
+  (2062)", 12:45 and 12:57), leaving 7 cases inconclusive. Rerun one at a time
+  (`coding-4`): 7/7 unchanged-pass, 0 infrastructure failures. **Do not shard
+  `eval ab` on this plan.**
+- **E fired in 0 of 210 trials** (`loop.warned` folded from every trial's
+  rollout): no false alarm. It also never fired on the new case — the model
+  read the reported line and fixed it in under 5 tries — so these short cases
+  prove safety, not benefit. Benefit is Phase 4's question.
+- Cost: rerun comparable pairs tokens −5.3%, cost −1.0%, turns 231 → 221
+  (noise level). Whole A/B ≈ $1.4.
+
 ### 5.3 Long-task rerun
 
 Same three tasks × 3 trials, same model, after a release + `pnpm bench:image`.
