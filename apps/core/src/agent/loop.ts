@@ -120,7 +120,7 @@ import type { ToolOrchestrator } from "../tools/orchestrator.js";
 import { getToolDefs, unattendedToolDefs } from "../tools/defs-cache.js";
 import type { UnattendedContext } from "../autonomous/types.js";
 import { planToolBatches } from "../tools/batching.js";
-import { markReadPruned } from "../tools/read-state.js";
+import { markAllReadsCompacted, markReadPruned } from "../tools/read-state.js";
 import {
   PruneState,
   getPruneState,
@@ -1612,6 +1612,7 @@ export class AgentLoop {
       const compacted = result.success && !!result.summary;
       if (compacted) {
         this.history = this.history.slice(-result.preservedMessageIds.length);
+        markAllReadsCompacted(this.state.sessionId);
       }
       outcome = {
         compacted,

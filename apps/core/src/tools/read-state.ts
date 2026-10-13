@@ -90,3 +90,16 @@ export function markReadPruned(sessionId: string, filePath: string): void {
   const record = states.get(sessionId)?.get(filePath);
   if (record) record.inContext = false;
 }
+
+/**
+ * Compaction replaced the transcript with a summary: no read result survives
+ * whole, so none may be deduped against. claude-code clears its readFileState
+ * at compaction for the same reason. Before this, 89 of 100 "unchanged —
+ * scroll up" stubs in the 2026-10-12 long-task run pointed at a read that had
+ * been summarised away; the model then re-read via bash, asked again (and got
+ * the stub again), or went on without the file. Records are kept, not
+ * deleted, so `edit`'s staleness check still has their mtimes.
+ */
+export function markAllReadsCompacted(sessionId: string): void {
+  for (const record of states.get(sessionId)?.values() ?? []) record.inContext = false;
+}

@@ -55,3 +55,24 @@ test("keepLastNUserTurns falls back to the last N assistant turns on a single-pr
   // Nothing before the tail to drop → untouched.
   assert.equal(keepLastNUserTurns(messages.slice(0, 3), 2).length, 3);
 });
+
+test("compaction forgets which reads are in context, so the next read is real", async () => {
+  // Long-task run 2026-10-12: 89 of 100 "unchanged — scroll up" stubs pointed
+  // at a read that compaction had already summarised away.
+  const { applyCompaction } = await import("./compact-apply.js");
+  const { canDedup, getReadState } = await import("../tools/read-state.js");
+  const shown = { mtimeMs: 1, size: 10, offset: 0, limit: 2000 };
+  const run = async (summary: string | undefined) => {
+    const sessionId = `compact-reads-${summary ?? "none"}`;
+    getReadState(sessionId).set("/p/a.ts", { ...shown, inContext: true });
+    await applyCompaction({
+      memory: { compact: async () => ({ success: true, summary, tokenCountBefore: 9, tokenCountAfter: 1 }) } as never,
+      store: { getMessages: async () => [], replaceMessages: async () => {} } as never,
+      sessionId,
+      projectPath: "/p",
+    });
+    return canDedup(getReadState(sessionId).get("/p/a.ts"), shown);
+  };
+  assert.equal(await run("summary"), false, "compacted: the stub would point at nothing");
+  assert.equal(await run(undefined), true, "nothing compacted: the earlier read is still there");
+});

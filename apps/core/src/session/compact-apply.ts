@@ -6,6 +6,7 @@ import type { SessionStore, SerializedMessage } from "./store.js";
 import type { MemoryService } from "../compaction/service.js";
 import type { CompactOptions } from "../compaction/service.js";
 import { DEFAULT_COMPACTION_CONFIG } from "../compaction/types.js";
+import { markAllReadsCompacted } from "../tools/read-state.js";
 
 export interface ApplyCompactionResult {
   compacted: boolean;
@@ -86,6 +87,7 @@ export async function applyCompaction(opts: {
     );
   }
 
+  markAllReadsCompacted(opts.sessionId);
   return {
     compacted: true,
     tokensBefore: result.tokenCountBefore,
