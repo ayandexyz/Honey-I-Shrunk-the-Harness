@@ -98,3 +98,19 @@ test("a comment that names a function is not a caller; a string still is", () =>
   const viaString = () => [...commentsOnly(), "src/dispatch.ts:3:  handlers[\"attachLoop\"](id);"];
   assert.deepEqual(findUncalled([decl], viaString), []);
 });
+
+test("one batched git grep answers many names, whole words only", async () => {
+  const { gitGrepMany } = await import("./unwired.js");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "freecode-unwired-many-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: dir });
+    fs.writeFileSync(path.join(dir, "a.ts"), "add(1);\naddAll([1]);\nremove(2);\n");
+    const hits = gitGrepMany(dir, ["add", "remove", "absent"])!;
+    assert.deepEqual(hits.get("add"), ["a.ts:1:add(1);"], "addAll is not a reference to add");
+    assert.deepEqual(hits.get("remove"), ["a.ts:3:remove(2);"]);
+    assert.deepEqual(hits.get("absent") ?? [], []);
+    assert.equal(gitGrepMany(os.tmpdir() + "/definitely-not-a-repo-" + process.pid, ["x"]), undefined);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

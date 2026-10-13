@@ -74,3 +74,22 @@ test("verifyFailureReminder embeds label and output in a system-reminder", () =>
   assert.match(r, /typecheck/);
   assert.match(r, /TS2322: nope/);
 });
+
+test("a timed-out command is killed with its children, so a test runner that leaves a process holding stdout cannot hang the gate", { timeout: 15_000 }, async () => {
+  // `pnpm -C dir test` → sh → node workers: SIGTERM to the top shell alone
+  // left the grandchild holding stdout, and "close" never fired.
+  const started = Date.now();
+  const r = await runVerify("sleep 30 & wait", process.cwd(), new AbortController().signal, 300);
+  assert.equal(r.ok, false);
+  assert.match(r.output, /timed out/);
+  assert.ok(Date.now() - started < 5_000, `took ${Date.now() - started} ms`);
+});
+
+test("an abort stops the whole process group too", { timeout: 15_000 }, async () => {
+  const ac = new AbortController();
+  setTimeout(() => ac.abort(), 200);
+  const started = Date.now();
+  const r = await runVerify("sleep 30 & wait", process.cwd(), ac.signal, 60_000);
+  assert.equal(r.ok, false);
+  assert.ok(Date.now() - started < 5_000, `took ${Date.now() - started} ms`);
+});

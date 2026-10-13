@@ -99,6 +99,7 @@ import {
   loadVerifySettings,
   MAX_TEST_ATTEMPTS,
   resolveTestCommands,
+  shouldRunTestGate,
   testFailureReminder,
   TEST_TIMEOUT_MS,
 } from "./verify-tests.js";
@@ -314,6 +315,13 @@ export interface AgentLoopConfig {
    */
   autoPoke?: boolean;
   /**
+   * Run the finish-time test gate (spec 2026-10-13-finish-time-verification.md
+   * §2.1). Defaults to true; subagents pass false — their parent runs the
+   * suite at its own finish, and a background subagent running it too would
+   * collide with the parent's run.
+   */
+  finishTests?: boolean;
+  /**
    * Keep the prompt cache warm between turns (spec 2026-09-20-pi-parity-plan
    * Phase 2). Defaults to true and is still gated by the off-by-default
    * `cache.warming` setting; subagents pass false — their contexts die with
@@ -453,6 +461,7 @@ export class AgentLoop {
     redirect: boolean;
     budgetMaxRedirects?: number;
     autoPoke: boolean;
+    finishTests: boolean;
     cacheWarming: boolean;
     autoApproveAsks: boolean;
   };
@@ -619,6 +628,7 @@ export class AgentLoop {
       redirect: config?.redirect ?? true,
       budgetMaxRedirects: config?.budgetMaxRedirects,
       autoPoke: config?.autoPoke ?? true,
+      finishTests: config?.finishTests ?? true,
       cacheWarming: config?.cacheWarming ?? true,
       autoApproveAsks: config?.autoApproveAsks ?? false,
     };
@@ -1421,8 +1431,12 @@ export class AgentLoop {
           // regressions in files they never opened. Own cap, so a suite that
           // was red before the run still terminates.
           if (
-            this.mutatedFiles.size >= VERIFIER_MIN_FILES &&
-            this.testAttempts < MAX_TEST_ATTEMPTS
+            shouldRunTestGate({
+              filesChanged: this.mutatedFiles.size,
+              attempts: this.testAttempts,
+              enabled: this.config.finishTests,
+              unattended: this.unattended !== undefined,
+            })
           ) {
             const settings = loadVerifySettings(this.state.projectPath);
             const commands = settings.tests
@@ -4351,6 +4365,7 @@ export const createAgentLoopEffect = (
     | "sessionGrants"
     | "sessionDenies"
     | "unattended"
+    | "finishTests"
   >,
 ): Effect.Effect<
   AgentLoop,

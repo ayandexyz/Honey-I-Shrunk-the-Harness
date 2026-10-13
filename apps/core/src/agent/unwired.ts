@@ -87,18 +87,35 @@ export function findUncalled(decls: Declaration[], grep: Grep): Declaration[] {
   });
 }
 
-export function gitGrep(projectRoot: string): Grep | undefined {
+// One batched `git grep` per chunk of names, with a timeout: one synchronous
+// grep per declaration blocked the daemon (every frontend) on a big new module.
+const GREP_CHUNK = 100;
+const GREP_TIMEOUT_MS = 15_000;
+/** Declarations scanned per run at most; only UNWIRED_MAX are ever reported. */
+export const UNWIRED_SCAN_MAX = 200;
+
+/** Hits per name (`path:line:text`, whole-word); undefined outside a repo or on timeout. */
+export function gitGrepMany(projectRoot: string, names: string[]): Map<string, string[]> | undefined {
   const probe = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], { cwd: projectRoot, encoding: "utf-8" });
   if (probe.status !== 0) return undefined;
-  return (name) => {
-    // -F: the name is literal; exit 1 means "no match", not an error.
-    const r = spawnSync("git", ["grep", "-n", "-w", "-F", "--untracked", "-e", name], {
+  const hits = new Map<string, string[]>();
+  for (let i = 0; i < names.length; i += GREP_CHUNK) {
+    const chunk = names.slice(i, i + GREP_CHUNK);
+    const r = spawnSync("git", ["grep", "-n", "-w", "-F", "--untracked", ...chunk.flatMap((n) => ["-e", n])], {
       cwd: projectRoot,
       encoding: "utf-8",
-      maxBuffer: 16 << 20,
+      maxBuffer: 64 << 20,
+      timeout: GREP_TIMEOUT_MS,
     });
-    return r.status === 0 ? r.stdout.split("\n").filter(Boolean) : [];
-  };
+    if (r.error) return undefined;
+    const words = chunk.map((n) => [n, new RegExp(`(?<![\\w$])${n.replace(/[$]/g, "\\$")}(?![\\w$])`)] as const);
+    for (const line of r.status === 0 ? r.stdout.split("\n").filter(Boolean) : []) {
+      const m = line.match(/^[^:]*:\d+:/);
+      const text = m ? line.slice(m[0].length) : line;
+      for (const [n, re] of words) if (re.test(text)) (hits.get(n) ?? hits.set(n, []).get(n)!).push(line);
+    }
+  }
+  return hits;
 }
 
 /**
@@ -114,8 +131,9 @@ export function checkUnwired(projectRoot: string, before: Map<string, string | n
     decls.push(...newDeclarations(old ?? "", fs.readFileSync(abs, "utf-8"), rel));
   }
   if (decls.length === 0) return [];
-  const grep = gitGrep(projectRoot);
-  return grep ? findUncalled(decls, grep).slice(0, UNWIRED_MAX) : [];
+  const scanned = decls.slice(0, UNWIRED_SCAN_MAX);
+  const hits = gitGrepMany(projectRoot, [...new Set(scanned.map((d) => d.name))]);
+  return hits ? findUncalled(scanned, (n) => hits.get(n) ?? []).slice(0, UNWIRED_MAX) : [];
 }
 
 export function unwiredReminder(items: Declaration[]): string {

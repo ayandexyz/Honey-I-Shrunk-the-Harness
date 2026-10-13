@@ -76,6 +76,9 @@ export interface VerifyResult {
   raw: string;
 }
 const RAW_OUTPUT_CHARS = 2_000_000;
+// After SIGTERM to the group, wait this long before SIGKILL, and at most this
+// long after the command exits for its pipes to close.
+const KILL_GRACE_MS = 2_000;
 
 // Run the verify command, capturing combined stdout/stderr. Aborts with the
 // provided signal; a non-zero exit (or timeout) is a failure.
@@ -88,20 +91,39 @@ export function runVerify(
   return new Promise((resolve) => {
     if (signal.aborted) return resolve({ ok: false, output: "(aborted)", raw: "" });
 
+    // Own process group, like tools/shells/spawn.ts: `pnpm -C dir test` → sh →
+    // node workers, and a SIGTERM to the top shell alone leaves a grandchild
+    // holding stdout open, so "close" never fires and the gate hangs.
+    const isWindows = process.platform === "win32";
     const child = spawn("/bin/bash", ["-c", command], {
       cwd: projectPath,
       env: { ...process.env },
       stdio: "pipe",
+      detached: !isWindows,
     });
 
     let out = "";
     let timedOut = false;
+    let settled = false;
+    let killTimer: NodeJS.Timeout | undefined;
+    const killGroup = () => {
+      const signal = (s: NodeJS.Signals) => {
+        try {
+          if (isWindows || !child.pid) child.kill(s);
+          else process.kill(-child.pid, s);
+        } catch {
+          // Already gone.
+        }
+      };
+      signal("SIGTERM");
+      killTimer ??= setTimeout(() => signal("SIGKILL"), KILL_GRACE_MS);
+    };
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGTERM");
+      killGroup();
     }, timeoutMs);
 
-    const onAbort = () => child.kill("SIGTERM");
+    const onAbort = () => killGroup();
     signal.addEventListener("abort", onAbort, { once: true });
 
     // Keep the whole output (capped) — failing test names are printed where
@@ -113,8 +135,11 @@ export function runVerify(
     child.stdout?.on("data", add);
     child.stderr?.on("data", add);
 
-    child.on("close", (code) => {
+    const finish = (code: number | null) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
       signal.removeEventListener("abort", onAbort);
       const clipped =
         out.length > MAX_OUTPUT_CHARS
@@ -122,9 +147,15 @@ export function runVerify(
           : out || "(no output)";
       const suffix = timedOut ? "\n(verification timed out)" : "";
       resolve({ ok: code === 0 && !timedOut, output: clipped + suffix, raw: out + suffix });
-    });
+    };
+    child.on("close", finish);
+    // A survivor that ignored the kill can still hold the pipes open; once the
+    // command itself has exited, stop waiting for them.
+    child.on("exit", (code) => setTimeout(() => finish(code), KILL_GRACE_MS).unref());
 
     child.on("error", (err) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
       signal.removeEventListener("abort", onAbort);
       resolve({ ok: false, output: `Failed to run verify command: ${err.message}`, raw: "" });

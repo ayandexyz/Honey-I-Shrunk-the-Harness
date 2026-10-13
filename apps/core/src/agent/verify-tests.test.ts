@@ -65,3 +65,17 @@ test("failing lines come from the whole output, not the clipped tail", () => {
   assert.match(r, /not ok 709 - every handler is declared/);
   assert.match(r, /already failing before your change, say so/);
 });
+
+test("the test gate runs only for a top-level, attended run of ≥3 files with attempts left", async () => {
+  const { shouldRunTestGate } = await import("./verify-tests.js");
+  const ok = { filesChanged: 3, attempts: 0, enabled: true, unattended: false };
+  assert.equal(shouldRunTestGate(ok), true);
+  assert.equal(shouldRunTestGate({ ...ok, filesChanged: 2 }), false, "small edits stay fast");
+  assert.equal(shouldRunTestGate({ ...ok, attempts: 2 }), false, "own cap of 2");
+  // A subagent's tests are its parent's to run: a background subagent and its
+  // parent would otherwise run the same suite at once.
+  assert.equal(shouldRunTestGate({ ...ok, enabled: false }), false);
+  // A night run's bash is sandboxed and its commits gated by --verify; the
+  // gate would run a model-written test file outside the sandbox.
+  assert.equal(shouldRunTestGate({ ...ok, unattended: true }), false);
+});

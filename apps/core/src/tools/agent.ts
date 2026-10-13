@@ -360,6 +360,7 @@ async function executeSubagent(
         memoryExtraction: false,
         redirect: false,
         autoPoke: false,
+        finishTests: false,
         cacheWarming: false,
         // A subagent's edits belong to the parent turn, which is already
         // checkpointed; snapshotting again would add a tree per delegation.

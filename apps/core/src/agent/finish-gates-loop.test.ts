@@ -47,7 +47,7 @@ registerProvider("finish-fake" as ProviderId, {
   }),
 });
 
-async function run(projectPath: string, steps: Step[]) {
+async function run(projectPath: string, steps: Step[], config: { finishTests?: boolean } = {}) {
   script = steps;
   tails.length = 0;
   const sessionId = `finish-${Math.random().toString(36).slice(2)}`;
@@ -63,7 +63,7 @@ async function run(projectPath: string, steps: Step[]) {
   try {
     const store = await runtime.runPromise(SessionStoreTag);
     await store.createSession({ title: "t", projectPath, provider: "finish-fake" }, sessionId);
-    const loop = await runtime.runPromise(createAgentLoopEffect(sessionId, { maxIterations: 20 }));
+    const loop = await runtime.runPromise(createAgentLoopEffect(sessionId, { maxIterations: 20, ...config }));
     await loop.run({ prompt: "change it", sessionId, provider: "finish-fake", projectPath, agentMode: "danger" });
     const f = join(rolloutDir, "events.jsonl");
     return existsSync(f) ? readFileSync(f, "utf-8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
@@ -138,3 +138,24 @@ test("a new function nobody calls gets one reminder naming it, and an answer end
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a subagent-style loop (finishTests: false) leaves the suite to its parent", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "freecode-finish-sub-"));
+  try {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { test: "node -e \"process.exit(1)\"" } }));
+    const events = await run(
+      dir,
+      [
+        { write: [join(dir, "a.txt"), "a"] },
+        { write: [join(dir, "b.txt"), "b"] },
+        { write: [join(dir, "c.txt"), "c"] },
+        { say: "done" },
+      ],
+      { finishTests: false },
+    );
+    assert.equal(events.filter((e) => e.type === "verify.ran" && e.kind === "tests").length, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+

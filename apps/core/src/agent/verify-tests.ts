@@ -22,6 +22,22 @@ const FAILING_LINE = /^\s*not ok\b|^\s*✖ |\bFAIL\b|error TS\d+/;
 const MAX_FAILING_LINES = 30;
 const TAIL_CHARS = 2_000;
 
+/**
+ * Whether the finish-time test gate runs. Not in a subagent (`enabled` is
+ * false there — its parent runs the suite; a background subagent and its
+ * parent would otherwise run the same suite at once), and not in an
+ * unattended night run (its bash is sandboxed and its commits gated by
+ * `--verify`; this gate would run a model-written test file outside bwrap).
+ */
+export function shouldRunTestGate(o: {
+  filesChanged: number;
+  attempts: number;
+  enabled: boolean;
+  unattended: boolean;
+}): boolean {
+  return o.enabled && !o.unattended && o.filesChanged >= 3 && o.attempts < MAX_TEST_ATTEMPTS;
+}
+
 export interface VerifySettings {
   tests: boolean;
   testCommand?: string;
