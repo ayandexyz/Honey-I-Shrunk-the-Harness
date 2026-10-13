@@ -58,6 +58,13 @@ export interface FinalCheckOutput {
   stderr: string;
 }
 
+/** A failing test (node TAP) or a tsc error — what a check's verdict names. */
+export const FAILURE_LINE = /^\s*not ok\b|error TS\d+/;
+
+export function failureLines(text: string): string[] {
+  return text.split("\n").filter((l) => FAILURE_LINE.test(l));
+}
+
 export interface JudgeInput {
   prompt: string;
   /** path → content at the parent commit */
@@ -66,6 +73,26 @@ export interface JudgeInput {
   agentDiff: string;
   error?: string;
   finalCheckOutputs?: FinalCheckOutput[];
+  /** The same checks on the untouched parent commit (`baseline-checks.json`). */
+  baselineCheckOutputs?: FinalCheckOutput[];
+}
+
+/**
+ * Ours, not BuffBench's: their checks pass on the parent commit, ours may not
+ * (three core tests fail offline). Without this every verdict cited those as
+ * the agent's merge blockers. Failure lines only — the full output would add
+ * another ~25K characters per check to a ~118K-token prompt.
+ */
+function formatBaseline(outputs: FinalCheckOutput[]): string {
+  const body = outputs
+    .map((o) => {
+      if (o.exitCode === 0) return `### ${o.command}\nExit code: 0`;
+      const lines = failureLines(`${o.stdout}\n${o.stderr}`);
+      const detail = lines.length > 0 ? lines.join("\n") : (o.stderr || o.stdout).slice(-1000);
+      return `### ${o.command}\nExit code: ${o.exitCode}\n\`\`\`\n${detail}\n\`\`\``;
+    })
+    .join("\n\n");
+  return `These are the final checks run on the parent commit, before the agent changed anything. A failure listed here already existed: do not count it against the agent. Only failures in the agent's run that are not listed here were introduced by the agent.\n\n${body}`;
 }
 
 function formatFinalChecks(outputs: FinalCheckOutput[]): string {
@@ -105,6 +132,7 @@ ${input.agentDiff || "(No changes made)"}
 \`\`\`
 ${input.error ? `\n## Error Encountered\n${input.error}` : ""}
 ${finalChecks ? `\n## Final Check Command Outputs\n${finalChecks}` : ""}
+${input.baselineCheckOutputs?.length ? `\n## Final Checks Before the Agent's Changes\n${formatBaseline(input.baselineCheckOutputs)}` : ""}
 
 ${OUTPUT_FORMAT}`;
 }

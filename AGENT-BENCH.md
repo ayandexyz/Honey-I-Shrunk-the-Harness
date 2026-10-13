@@ -151,6 +151,7 @@ Read this file before you spend.
 | `--agents` | `freecode,claude-code` | comma-separated adapter ids from `bench/agent-bench/agents/` |
 | `--instances` | every id in `instances/django-lite.txt` (10 django bugs) | comma-separated SWE-bench instance ids |
 | `--trials` | `1` | trials per (agent, instance). Phase 2 onward: **3**, and publish the spread. Never merge into best-of |
+| `--baseline-only` | off | judged set: write each task's `baseline-checks.json` into `--out` and stop — no agent runs, `report.json` untouched |
 | `--first-trial` | `1` | number the trials from N. Extends an earlier run (`--trials 2 --first-trial 2` adds trials 2–3) instead of overwriting its trial 1 — publish keys rows by (agent, instance, trial) |
 | `--timeout` | `900000` (15 min) | per-trial wall-clock cap, ms. Timeout SIGKILLs the agent |
 | `--out` | `bench/agent-bench/results/<timestamp>` | artifact root |
@@ -356,6 +357,20 @@ built for the image's Node, not your host's. The install goes on the egress
 network into a pnpm store at `.cache/pnpm-store`, a plain directory you own (a
 docker volume would be root-owned). The checks run with `--network none`.
 Without `--isolate` both run on the host and the run is unpublishable.
+
+**Baseline checks.** Before the trials, each task's final checks run once on
+the untouched parent commit in a fresh workspace (same image, same setup) and
+land in `<run>/<task>/baseline-checks.json`; `bench:judge` adds their failure
+lines to the prompt as "already broken, do not count against the agent". Our
+parents do not always pass (three core tests fail offline), and before this
+every verdict cited them as the agent's merge blockers. A run with the file
+already present reuses it. To add baselines to an older run and rejudge it:
+
+```sh
+pnpm bench:agents --set freecode-commits --isolate --baseline-only \
+  --contamination-unchecked --out bench/agent-bench/results/<run>
+pnpm bench:judge bench/agent-bench/results/<run> --rejudge
+```
 
 **Contamination check (spec §4.8).** Before any spend, a judged run checks
 that every agent's pinned model was released *before* the window's first day,

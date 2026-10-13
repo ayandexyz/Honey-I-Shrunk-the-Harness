@@ -16,7 +16,7 @@ import { agentVersion, loadAgent, runAgent } from "./agents.js";
 import { CACHE_DIR, loadInstances, readIdList } from "./instances.js";
 import { checkContamination, readReleases } from "./contamination.js";
 import { loadJudgedInstances, loadJudgedWindow } from "./judged-instances.js";
-import { JUDGED_TIMEOUT_MS, runFinalChecks, runSetup, type InContainer } from "./judged-trial.js";
+import { JUDGED_TIMEOUT_MS, runBaselineChecks, runFinalChecks, runSetup, type InContainer } from "./judged-trial.js";
 import { publish } from "./publish.js";
 import { taskPrompt } from "./prompt.js";
 import { createWorkspace, extractPatch, verifyWorkspace } from "./workspace.js";
@@ -68,6 +68,23 @@ const runId = new Date().toISOString().replace(/[:.]/g, "-");
 const outDir = path.resolve(arg("out", path.join(ROOT, "results", runId)) as string);
 const meter = !process.argv.includes("--no-meter");
 const isolate = process.argv.includes("--isolate");
+// Judged set: only write each task's baseline-checks.json into --out (an
+// existing run, to rejudge it) — no agent runs, report.json is untouched.
+const baselineOnly = process.argv.includes("--baseline-only");
+
+/** Isolated: setup and checks run in the agent's image (spec §4.7). */
+function inContainerFor(wsDir: string, name: string): InContainer {
+  return {
+    tool: {
+      image: IMAGE,
+      name: name.slice(0, 60),
+      wsDir,
+      uid: process.getuid?.() ?? 1000,
+      gid: process.getgid?.() ?? 1000,
+    },
+    storeDir: PNPM_STORE_DIR,
+  };
+}
 
 async function main() {
   // Isolation implies metering: the agent's only route out is the sidecar
@@ -119,6 +136,21 @@ async function main() {
     : await loadInstances(requestedIds ?? readIdList(path.join(ROOT, "instances", "django-lite.txt")));
 
   fs.mkdirSync(outDir, { recursive: true });
+  if (judged) {
+    for (const inst of instances) {
+      const safe = inst.instanceId.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+      try {
+        runBaselineChecks(inst, outDir, isolate ? (ws) => inContainerFor(ws, `bench-base-${safe}`) : undefined);
+      } catch (err) {
+        // The trials still run; the judge just cannot tell old failures from new.
+        console.warn(`baseline checks for ${inst.instanceId} failed: ${(err as Error).message}`);
+      }
+    }
+    if (baselineOnly) {
+      console.log(`baselines written under ${outDir}; next: pnpm bench:judge ${path.relative(process.cwd(), outDir)} --rejudge`);
+      return;
+    }
+  }
   console.log(`run ${runId}`);
   for (const a of agents) {
     console.log(`  ${a.id.padEnd(12)} ${versions.get(a.id)}  model=${a.model}`);
@@ -164,19 +196,7 @@ async function main() {
           if (!verifyWorkspace(ws.dir, inst.baseCommit)) {
             throw new Error(`checkout is not at ${inst.baseCommit}`);
           }
-          // Isolated: setup and checks run in the agent's image (spec §4.7).
-          const inContainer: InContainer | undefined = isolate
-            ? {
-                tool: {
-                  image: IMAGE,
-                  name: `bench-setup-${safe}`.slice(0, 60),
-                  wsDir: ws.dir,
-                  uid: process.getuid?.() ?? 1000,
-                  gid: process.getgid?.() ?? 1000,
-                },
-                storeDir: PNPM_STORE_DIR,
-              }
-            : undefined;
+          const inContainer = isolate ? inContainerFor(ws.dir, `bench-setup-${safe}`) : undefined;
           if (inst.initCommand) runSetup(inst.initCommand, ws.dir, inContainer);
           const prompt = taskPrompt(inst);
           fs.writeFileSync(path.join(artifactDir, "prompt.txt"), prompt);

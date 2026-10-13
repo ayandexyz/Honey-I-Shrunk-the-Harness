@@ -194,7 +194,15 @@ Their judge prompt, verbatim in structure:
 ```diff <agent diff or "(No changes made)"> ```
 ## Error Encountered            (only if the trial errored)
 ## Final Check Command Outputs  (only if any ran)
+## Final Checks Before the Agent's Changes  (ours, 2026-10-13: only if a baseline exists)
 ```
+
+The last section is our one addition to their layout. BuffBench's parent
+commits pass their checks; ours need not (three core tests fail offline), and
+without it every verdict counted those as the agent's failures. It carries only
+the failure lines (`not ok`, `error TS`) of the checks run on the untouched
+parent (`baseline-checks.json`, once per task), with an instruction not to count
+them against the agent.
 
 Their **system prompt, verbatim** ("You are an expert software engineer evaluating
 AI-generated code changes with empathy for the task given… The ground truth shows ONE

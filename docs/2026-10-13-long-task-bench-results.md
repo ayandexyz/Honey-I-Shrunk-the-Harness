@@ -154,7 +154,7 @@ calibrated thinking-loop detector; grok-build does it server-side and resamples.
 - Gemini key in `~/.freecode/config.json` is invalid ("API key not valid") →
   judge ran GPT-fallback only (0 audited, 9 fallback).
 - The judge counts the 3 baseline failures against every trial → scores are
-  low by a bit.
+  low by a bit. (Fixed 2026-10-13: the judge now sees the parent's failures.)
 - `final-checks.json` keeps only the last 20K chars of a check's output, which
   drops the `not ok` test names (fixed 2026-10-13: those lines now survive the
   cut; the v2 files are already cut and keep only `# fail N`).
@@ -181,8 +181,11 @@ In suggested order. Each is also a TODO.md entry or a spec phase.
        is gone, the 12K-run local history is unchanged).
 1. [ ] **Fix the Gemini judge key**, then
        `pnpm bench:judge --rejudge bench/agent-bench/results/pathology-commits-v2`.
-2. [ ] **Judge gets the baseline**: pass the parent commit's check results into
-       `judge-prompt.ts` so only agent-introduced failures count.
+2. [x] **Judge gets the baseline** (2026-10-13): `bench:agents` runs each
+       task's checks once on the untouched parent (`<run>/<task>/baseline-checks.json`)
+       and the judge prompt lists those failures as already broken. For v2:
+       `pnpm bench:agents --set freecode-commits --isolate --baseline-only
+       --contamination-unchecked --out <v2 dir>`, then item 1's `--rejudge`.
 3. [x] **Keep `not ok` lines in full** in `final-checks.json` — `tail()` in
        `runner/judged-trial.ts` keeps `not ok` / `error TS` lines from the
        cut part (≤5K), 2026-10-13. Applies to new runs only.

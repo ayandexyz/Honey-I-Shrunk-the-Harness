@@ -6,13 +6,17 @@
 // =============================================================================
 
 import { spawnSync } from "child_process";
+import * as fs from "fs";
+import * as path from "path";
 import {
   checkArgv,
   removeContainer,
   setupArgv,
   type ToolContainer,
 } from "../isolate/docker.js";
-import type { FinalCheckOutput } from "./judge-prompt.js";
+import { FAILURE_LINE, type FinalCheckOutput } from "./judge-prompt.js";
+import type { Instance } from "./types.js";
+import { createWorkspace } from "./workspace.js";
 
 /** Set on an --isolate run: setup and checks then run in the agent's image (§4.7). */
 export interface InContainer {
@@ -36,7 +40,6 @@ export const CHECK_OUTPUT_CHARS = 20_000;
  * `not ok N - name` where the test ran, and a full core run is far longer than
  * the tail. Those lines (and tsc errors) survive the cut, capped.
  */
-const FAILURE_LINE = /^\s*not ok\b|error TS\d+/;
 const FAILURE_CHARS = 5_000;
 
 export function tail(text: string, max = CHECK_OUTPUT_CHARS): string {
@@ -98,4 +101,33 @@ export function runFinalChecks(commands: string[], cwd: string, container?: InCo
       stderr: tail((r.stderr ?? "") + (r.error ? `\n${r.error.message}` : "")),
     };
   });
+}
+
+/** Per task, beside its trials: `<run>/<instanceId>/baseline-checks.json`. */
+export const BASELINE_FILE = "baseline-checks.json";
+
+/**
+ * The task's final checks on the untouched parent commit, once per task, so
+ * the judge can tell what the agent broke from what was already broken (the
+ * v2 run: three core tests fail offline on every parent). A fresh workspace,
+ * never a trial's — anything the checks write would land in the agent's patch.
+ * Kept if already present, so `--first-trial` and `--baseline-only` reuse it.
+ */
+export function runBaselineChecks(
+  inst: Instance,
+  outDir: string,
+  container?: (wsDir: string) => InContainer,
+): void {
+  const file = path.join(outDir, inst.instanceId, BASELINE_FILE);
+  if (!inst.finalCheckCommands?.length || fs.existsSync(file)) return;
+  const ws = createWorkspace(inst);
+  try {
+    const c = container?.(ws.dir);
+    if (inst.initCommand) runSetup(inst.initCommand, ws.dir, c);
+    const checks = runFinalChecks(inst.finalCheckCommands, ws.dir, c);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(checks, null, 2));
+  } finally {
+    ws.cleanup();
+  }
 }

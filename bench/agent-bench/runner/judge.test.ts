@@ -147,3 +147,20 @@ test("renderJudgePrompt keeps BuffBench's sections and fallbacks", () => {
   assert.match(p, /## Error Encountered\nboom/);
   assert.doesNotMatch(p, /Final Check Command Outputs/);
 });
+
+test("the parent commit's failures reach the judge as already broken, names only", () => {
+  const tap = "ok 1 - fine\nnot ok 2 - modelSupportsImages\n" + "x".repeat(3000) + "\n# fail 1";
+  const p = renderJudgePrompt({
+    ...input,
+    baselineCheckOutputs: [
+      { command: "tsc --noEmit", exitCode: 0, stdout: "", stderr: "" },
+      { command: "pnpm test", exitCode: 1, stdout: tap, stderr: "" },
+    ],
+  });
+  assert.match(p, /## Final Checks Before the Agent's Changes\n/);
+  assert.match(p, /do not count it against the agent/);
+  assert.match(p, /### pnpm test\nExit code: 1\n```\nnot ok 2 - modelSupportsImages\n```/);
+  assert.doesNotMatch(p, /ok 1 - fine|xxxx/);
+  // Old runs have no baseline: no section.
+  assert.doesNotMatch(renderJudgePrompt(input), /Before the Agent's Changes/);
+});

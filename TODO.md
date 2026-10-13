@@ -539,11 +539,6 @@ From the first `pnpm bench:pathology` over 12,370 runs (HARNESS-BENCH.md §3b):
       because each part is tested alone. Not a stuck-loop problem; candidate
       fix is a finish-time check ("trace the user-facing entry point to your
       new code") and an end-to-end test per feature. Needs its own spec.
-- [ ] **The judge counts the baseline's failing tests against every trial.**
-      Each verdict cites "3 failing tests" as a merge blocker, but those three
-      fail on the untouched parent commit in the offline container (item
-      above). `judge-prompt.ts` should receive the parent commit's check
-      results so only failures the agent introduced count.
 - [ ] **The configured Gemini judge key is invalid** ("API key not valid"),
       so the v2 run was scored by the GPT fallback alone: 0 audited, 9
       fallback, unpublishable. Fix the key, then `pnpm bench:judge --rejudge`

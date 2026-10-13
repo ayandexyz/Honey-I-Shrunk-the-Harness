@@ -20,6 +20,7 @@ import { auditAgreement, judgeAudited, MAX_AUDIT_GAP, MIN_AUDITS } from "./judge
 import { JUDGES, assertNoCollision, judgePanel } from "./judge.js";
 import type { FinalCheckOutput, JudgeInput } from "./judge-prompt.js";
 import { INSTANCE_PREFIX, REPO_DIR, loadJudgedTasks } from "./judged-instances.js";
+import { BASELINE_FILE } from "./judged-trial.js";
 import { MAX_ONE_JUDGE_SHARE, panelVerdict, summarize, type JudgedRow } from "./judged-metrics.js";
 import type { JudgedTask } from "./task-build.js";
 import type { Report, TrialJudging, TrialRecord } from "./types.js";
@@ -59,6 +60,7 @@ function judgeInput(task: JudgedTask, trial: TrialRecord): JudgeInput {
   const dir = path.join(ROOT, trial.artifactDir);
   const read = (f: string) => (fs.existsSync(path.join(dir, f)) ? fs.readFileSync(path.join(dir, f), "utf-8") : "");
   const checks = read("final-checks.json");
+  const baselineFile = path.join(ROOT, path.dirname(path.dirname(trial.artifactDir)), BASELINE_FILE);
   return {
     // The judge sees the task as the user typed it, not our wrapper template.
     prompt: task.prompt,
@@ -67,6 +69,9 @@ function judgeInput(task: JudgedTask, trial: TrialRecord): JudgeInput {
     agentDiff: read("patch.diff"),
     error: errored(trial) ? trial.reason : undefined,
     finalCheckOutputs: checks ? (JSON.parse(checks) as FinalCheckOutput[]) : undefined,
+    baselineCheckOutputs: fs.existsSync(baselineFile)
+      ? (JSON.parse(fs.readFileSync(baselineFile, "utf-8")) as FinalCheckOutput[])
+      : undefined,
   };
 }
 
