@@ -106,12 +106,6 @@ export class LogoHeader implements Component {
   }
 
   render(width: number, height: number = 0): string[] {
-    if (width < COMBINED_WIDTH) {
-      // Too narrow for the side-by-side layout; skip the overlay rather than
-      // truncating it.
-      return [];
-    }
-
     const toolCount = this.getToolCount();
     const mcpCount = this.getMcpCount();
     const skillCount = this.getSkillCount();
@@ -133,6 +127,57 @@ export class LogoHeader implements Component {
       this.cache.themeFingerprint === themeFingerprint
     ) {
       return this.cache.lines;
+    }
+
+    // Fallback to glyph-only if too narrow for side-by-side layout
+    if (width < COMBINED_WIDTH) {
+      // Show just the glyph centered if it fits
+      if (width >= GLYPH_WIDTH) {
+        const padLeft = Math.max(0, Math.floor((width - GLYPH_WIDTH) / 2));
+        const padRight = Math.max(0, width - GLYPH_WIDTH - padLeft);
+        const indent = " ".repeat(padLeft);
+        const rightPad = " ".repeat(padRight);
+
+        const glyphOnlyLines = coloredGlyphLines.map((glyphLine, i) => {
+          const glyphPlain = glyphLines[i] ?? "";
+          const glyphPad = " ".repeat(Math.max(0, GLYPH_WIDTH - glyphPlain.length));
+          return `${indent}${glyphLine}${glyphPad}${rightPad}`;
+        });
+
+        const version = getVersion();
+        const subtitlePlain = `>_ Histh! (v${version})`;
+        const subtitleStyled =
+          `>_ ${chalk.bold(palette.accent("Histh!"))} ` +
+          chalk.dim(`(v${version})`);
+        const subtitleLine = this.centerLine(width, subtitlePlain.length, subtitleStyled);
+
+        const blockLines = [
+          ...glyphOnlyLines,
+          "", // gap between the logo and its subtitle
+          truncateToWidth(subtitleLine, width),
+        ];
+
+        const topPadCount = height > 0
+          ? Math.max(0, Math.floor((height - blockLines.length) / 2))
+          : 0;
+        const topPad = Array.from({ length: topPadCount }, () => "");
+
+        const lines = [...topPad, ...blockLines].slice(0, Math.max(height, blockLines.length));
+        this.cache = {
+          width,
+          height,
+          tools: toolCount,
+          mcp: mcpCount,
+          skills: skillCount,
+          plugins: pluginCount,
+          update: updateVersion,
+          themeFingerprint,
+          lines,
+        };
+        return lines;
+      }
+      // Too narrow even for glyph alone; return empty
+      return [];
     }
 
     const padLeft = Math.max(0, Math.floor((width - COMBINED_WIDTH) / 2));
