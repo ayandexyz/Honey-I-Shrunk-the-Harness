@@ -64,7 +64,9 @@ export function claudeCliArgs(model: string, system: string, jsonSchema?: object
 
 /** The reply and usage from `--output-format json`, or throws with why there is none. */
 export function parseClaudeCliResult(stdout: string, structured: boolean): ClaudeCliReply {
-  const r = JSON.parse(stdout);
+  // The result is the last line: a version-manager shim (mise) can print its
+  // own lines to stdout before exec-ing the CLI.
+  const r = JSON.parse(stdout.trim().split("\n").pop() ?? "");
   const body = structured ? r.structured_output : r.result;
   if (r.is_error || body === undefined || body === null) {
     throw new Error(`claude -p returned no reply: ${String(r.result ?? r.subtype ?? "").slice(0, 300)}`);

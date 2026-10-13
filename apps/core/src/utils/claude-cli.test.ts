@@ -31,6 +31,8 @@ test("parse: plain text from `result`, JSON from `structured_output`, cached inp
   assert.equal(plain.outputTokens, 7);
   const structured = parseClaudeCliResult(JSON.stringify({ result: "ignored", structured_output: { a: 1 }, usage }), true);
   assert.equal(structured.text, '{"a":1}');
+  const shimmed = parseClaudeCliResult(`mise ~/.config/mise/config.toml tools: claude@2.1.296\n${JSON.stringify({ result: "ok", usage })}\n`, false);
+  assert.equal(shimmed.text, "ok", "a shim's own stdout lines before the result are skipped");
   assert.throws(() => parseClaudeCliResult(JSON.stringify({ is_error: true, result: "rate limited" }), false), /rate limited/);
   assert.throws(() => parseClaudeCliResult(JSON.stringify({ result: "prose" }), true), /no reply/);
 });
