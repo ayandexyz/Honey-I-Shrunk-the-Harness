@@ -351,8 +351,9 @@ pnpm bench:agents                                                     # vs other
 ## Environment
 
 ```bash
-FREECODE_JUDGE_PROVIDER=gemini   # REQUIRED for the judged suite and for eval:gate
-                                 # or claude-cli: Haiku on your Claude subscription (below)
+FREECODE_JUDGE_PROVIDER=claude-cli  # the judged suite's grader; `pnpm eval:gate` defaults to
+                                    # claude-cli (Haiku on your Claude subscription, below)
+                                    # when unset — set it to override (e.g. gemini)
 FREECODE_JUDGE_MODEL=...         # must NOT be the model under test
 FREECODE_EVAL_MODEL=...          # what CI pins as the model under test
 ```
@@ -374,7 +375,12 @@ FREECODE_EVAL_MODEL=...          # what CI pins as the model under test
   four sentences where the prompt asked for exactly three, the wrong command
   (`pnpm eval:gate` for `freecode eval --gate`), claims about directories the
   agent never looked at. Under Haiku that gate would have closed (one case at
-  1/5). Flash-Lite is not discriminating on this suite; prefer `claude-cli`.
+  1/5). Flash-Lite is not discriminating on this suite, so **since 2026-10-13
+  `pnpm eval:gate` grades with `claude-cli` by default**. Expect the first
+  Haiku-graded gates to close: on these replies the agent states repo facts
+  without reading them about 45% of the time (a MiniMax-M3 behaviour, not a
+  harness regression). CI (`.github/workflows/eval.yml`) still takes the judge
+  from repo variables: a GitHub runner has no Claude login.
 - A judge that collides with the model under test **throws before any case runs**.
 - An unconfigured judge does *not* throw — the deterministic expectations still
   run — but it **closes the gate** (`judgeSkipped`).
