@@ -347,7 +347,8 @@ reads. Every record there carries `promptReview.by`, and the loader refuses one
 that does not. A trial clones the local repo at the parent commit, runs
 `pnpm install --frozen-lockfile --prefer-offline`, runs the agent, takes the
 patch, then runs the task's typecheck and tests (last 20K characters of output
-kept, `final-checks.json`). A judged run is not published to `/benchmark`.
+kept, plus every `not ok` / `error TS` line from the part cut off — capped at
+5K — so failing test names survive; `final-checks.json`). A judged run is not published to `/benchmark`.
 
 **With `--isolate`, the install and the checks run inside the agent's image**,
 because this repo's native modules (tree-sitter, sharp, onnxruntime) must be

@@ -523,10 +523,9 @@ From the first `pnpm bench:pathology` over 12,370 runs (HARNESS-BENCH.md §3b):
       (`ipc/validate-params.test.ts`), and `agents.stop` dropping the
       caller-is-parent check. Measurable from the log (was the project's full
       test command run after the last edit?); candidate `bench:pathology`
-      flag `unverified_finish`, and possibly a finish-time reminder. Note the
-      bench keeps only the last 20K chars of a check's output, which drops
-      every failing test's name; `final-checks.json` should keep the
-      `not ok` lines in full.
+      flag `unverified_finish`, and possibly a finish-time reminder.
+      (`final-checks.json` now keeps the `not ok` / `error TS` lines from
+      the part of a check's output the 20K tail cuts, since 2026-10-13.)
 - [ ] **"Built but never wired" is the main quality failure on long tasks.**
       `bench:judge` on the nine v2 trials (GPT judge only, see next item):
       3.5–6.8 / 10, mean 4.8, although every trial passes `tsc` and every

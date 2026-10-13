@@ -156,7 +156,8 @@ calibrated thinking-loop detector; grok-build does it server-side and resamples.
 - The judge counts the 3 baseline failures against every trial → scores are
   low by a bit.
 - `final-checks.json` keeps only the last 20K chars of a check's output, which
-  drops the `not ok` test names.
+  drops the `not ok` test names (fixed 2026-10-13: those lines now survive the
+  cut; the v2 files are already cut and keep only `# fail N`).
 - The 3 core tests that fail offline need fixing or a cached catalogue.
 - The global pre-commit malware-scan hook (`~/.git-hooks`) false-flags task
   JSONs; disabled for this repo only with `git config --local core.hooksPath
@@ -182,7 +183,9 @@ In suggested order. Each is also a TODO.md entry or a spec phase.
        `pnpm bench:judge --rejudge bench/agent-bench/results/pathology-commits-v2`.
 2. [ ] **Judge gets the baseline**: pass the parent commit's check results into
        `judge-prompt.ts` so only agent-introduced failures count.
-3. [ ] **Keep `not ok` lines in full** in `final-checks.json`.
+3. [x] **Keep `not ok` lines in full** in `final-checks.json` — `tail()` in
+       `runner/judged-trial.ts` keeps `not ok` / `error TS` lines from the
+       cut part (≤5K), 2026-10-13. Applies to new runs only.
 4. [ ] **Fix the 3 offline-failing core tests** (`modelSupportsImages` ×2,
        `providers.list…`).
 5. [ ] **Spec: finish-time checks** — "built but never wired" + unverified

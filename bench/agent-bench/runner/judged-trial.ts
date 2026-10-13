@@ -31,9 +31,27 @@ const CHECK_TIMEOUT_MS = 10 * 60 * 1000;
  * test runners and tsc put the verdict.
  */
 export const CHECK_OUTPUT_CHARS = 20_000;
+/**
+ * The tail alone dropped every failing test's name: node's TAP output puts
+ * `not ok N - name` where the test ran, and a full core run is far longer than
+ * the tail. Those lines (and tsc errors) survive the cut, capped.
+ */
+const FAILURE_LINE = /^\s*not ok\b|error TS\d+/;
+const FAILURE_CHARS = 5_000;
 
 export function tail(text: string, max = CHECK_OUTPUT_CHARS): string {
-  return text.length <= max ? text : `[… ${text.length - max} earlier characters dropped]\n${text.slice(-max)}`;
+  if (text.length <= max) return text;
+  const dropped = text.length - max;
+  let failures = text
+    .slice(0, dropped)
+    .split("\n")
+    .filter((l) => FAILURE_LINE.test(l))
+    .join("\n");
+  if (failures.length > FAILURE_CHARS) failures = `${failures.slice(0, FAILURE_CHARS)}\n[… more failure lines dropped]`;
+  const head = failures
+    ? `[… ${dropped} earlier characters dropped; their failure lines:]\n${failures}\n[… end of failure lines]`
+    : `[… ${dropped} earlier characters dropped]`;
+  return `${head}\n${text.slice(-max)}`;
 }
 
 function exec(argv: string[], cwd: string, timeoutMs: number, container?: string) {
