@@ -126,6 +126,10 @@ export const THRESHOLDS = {
 
 const EDIT_TOOLS = new Set(["edit", "write", "notebookedit"]);
 const SEARCH_TOOLS = new Set(["grep", "glob"]);
+// A search that errored is a broken tool, not a circle. Before 2026-10-13 the
+// grep tool logged its errors as `failed: false` with the error as output (the
+// v2 long-task image had no `rg`), so old logs are matched by text.
+const SEARCH_ERROR = /^(Executable not found in \$PATH|spawn \S+ ENOENT|rg: |regex parse error)/;
 // Redirects to a file, in-place edits, file moves. Errs on missing things (e.g.
 // `python -c "open(...,'w')"`) rather than inventing progress. Redirects to
 // /dev and to log-shaped files are dropped first: `cmd > /tmp/lint.txt 2>&1`
@@ -232,6 +236,7 @@ export function foldRuns(events: PathEvent[]): RunPathology[] {
   let lastEditEpoch = new Map<string, number>(); // path → event index of last edit
   let readAt = new Map<string, number>(); // read key → event index of last read
   let searchSeen = new Map<string, number>(); // args → progress count when last seen
+  let repeatPending = new Set<string>(); // callIds of repeated searches awaiting output
   let progressCount = 0;
   let errorSeen = new Map<string, number>(); // error fingerprint → appearances
   const questionAt = new Map<string, number>(); // callId → when the question was asked
@@ -285,6 +290,7 @@ export function foldRuns(events: PathEvent[]): RunPathology[] {
       lastEditEpoch = new Map();
       readAt = new Map();
       searchSeen = new Map();
+      repeatPending = new Set();
       errorSeen = new Map();
       progressCount = 0;
     }
@@ -310,6 +316,10 @@ export function foldRuns(events: PathEvent[]): RunPathology[] {
         break;
       case "function.output": {
         if (e.failed === true) cur.failedCalls++;
+        if (e.callId && repeatPending.delete(e.callId)) {
+          const errored = e.failed === true || (typeof e.output === "string" && SEARCH_ERROR.test(e.output));
+          if (!errored) cur.repeatSearches++;
+        }
         // Commands only: a `read` shows file content, not a result.
         const fp = e.tool === "bash" && typeof e.output === "string" ? errorFingerprint(e.output) : undefined;
         if (fp) {
@@ -373,7 +383,12 @@ export function foldRuns(events: PathEvent[]): RunPathology[] {
           readAt.set(key, i);
         } else if (SEARCH_TOOLS.has(tool)) {
           const key = `${tool}\0${JSON.stringify(e.args ?? {})}`;
-          if (searchSeen.get(key) === progressCount) cur.repeatSearches++;
+          // Scored when the output arrives (it may be an error); logs from
+          // before callIds existed are scored here, as before.
+          if (searchSeen.get(key) === progressCount) {
+            if (e.callId) repeatPending.add(e.callId);
+            else cur.repeatSearches++;
+          }
           searchSeen.set(key, progressCount);
         } else if (tool === "bash" && typeof e.args?.command === "string") {
           const key = `bash\0${e.args.command}`;

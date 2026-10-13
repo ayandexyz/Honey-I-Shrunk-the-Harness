@@ -553,12 +553,10 @@ From the first `pnpm bench:pathology` over 12,370 runs (HARNESS-BENCH.md §3b):
       a compaction (24 of 25 in v2 t1, 5 compactions). Cheap per read, but it
       grows with every compaction. Candidate: carry the read-file list in the
       compaction summary.
-- [ ] **`bench:pathology` counts a failed repeated search as a search circle.**
-      The `search_circles` flag on fix-night-envelope t1 was the same failing
-      `grep` call resent (no `rg` in the image; tool and image both fixed
-      2026-10-13). A search that *failed* is a tool problem, not a circle.
-      **All 88 `grep` calls in the v2 long-task trials failed** — every v2
-      number was measured with this handicap, rerun after the fix.
+- [ ] **Rerun the v2 long-task trials with a working `grep` tool.** All 88
+      `grep` calls in them failed (no `rg` in the image; tool, image and
+      `bench:pathology` fixed 2026-10-13), so every v2 number carries that
+      handicap. Rebuild with `pnpm bench:image` first.
 - [x] ~~**Measured input shrink per compaction is ~5% and sometimes negative**~~
       Checked on real long sessions (v2 long-task trials): 61–70% shrink per
       compaction, no compaction loops. The ~5% is the `compaction-boundary`

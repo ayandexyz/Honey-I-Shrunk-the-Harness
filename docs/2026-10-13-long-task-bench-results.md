@@ -54,7 +54,7 @@ Active minutes exclude setup (wall clock including setup is ~1–1.5 min more).
 | implement-night-morning t1 | **41.8** | 460 | 27.6M (98%) | $1.96 | 78 | 5 | 24/25 | `stuck_error` ×8 | ok | 4.0 |
 | implement-night-morning t2 | 17.9 | 206 | 11.3M (96%) | $0.88 | 41 | 3 | 18/18 | — | ok | 3.5 |
 | implement-night-morning t3 | 19.8 | 191 | 11.0M (97%) | $0.84 | 46 | 2 | 10/14 | — | ok | 5.0 |
-| fix-night-envelope t1 | **32.3** | 368 | 20.7M (97%) | $1.54 | 78 | 5 | 14/14 | `stuck_error` ×4, `search_circles` (= missing `rg`, §3.4) | ok | 4.5 |
+| fix-night-envelope t1 | **32.3** | 368 | 20.7M (97%) | $1.54 | 78 | 5 | 14/14 | `stuck_error` ×4 (`search_circles` before the scorer fix = missing `rg`, §3.4) | ok | 4.5 |
 | fix-night-envelope t2 | 11.8 | 128 | 6.4M (96%) | $0.50 | 24 | — | — | — | ok | 5.2 |
 | fix-night-envelope t3 | 10.8 | 152 | 8.6M (96%) | $0.65 | 29 | — | — | — | ok | 5.5 |
 | add-agent-control t1 | 19.7 | 194 | 11.6M (97%) | $0.85 | 31 | — | — | `stuck_error` ×4 (`not ok 709` ×5) | ok | 5.0 |
@@ -175,8 +175,9 @@ In suggested order. Each is also a TODO.md entry or a spec phase.
        does it: release archives ship `rg` beside the binary
        (`release.yml`, `tools/grep.ts` `ripgrepPath`), and a missing `rg` is
        `success: false` with "use bash `grep -rn`" instead of a silent "no
-       matches". Still open: `bench:pathology` should not count a *failed*
-       repeated search as a search circle.
+       matches". `bench:pathology` no longer counts a repeated search that
+       *errored* as a search circle (re-scored: the flag on fix-envelope t1
+       is gone, the 12K-run local history is unchanged).
 1. [ ] **Fix the Gemini judge key**, then
        `pnpm bench:judge --rejudge bench/agent-bench/results/pathology-commits-v2`.
 2. [ ] **Judge gets the baseline**: pass the parent commit's check results into

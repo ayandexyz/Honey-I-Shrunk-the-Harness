@@ -176,7 +176,7 @@ pnpm bench:pathology --json           # every run, every field
 | `long_dry` | dry ≥ 15 min **and** ≥ 30 calls |
 | `reread_heavy` | ≥ 30% of ≥ 10 reads were rereads |
 | `compact_loop` | any compaction with no progress since the last |
-| `search_circles` | ≥ 5 byte-identical grep/glob calls with no progress between |
+| `search_circles` | ≥ 5 byte-identical grep/glob calls with no progress between; a call whose output was an error (tool missing, bad regex) does not count — that is a broken tool, not a circle |
 | `repeat_commands` | ≥ 5 byte-identical non-writing bash commands with no progress between |
 | `stuck_error` | the same set of error lines (TS errors, `not ok`, FAIL, `XError: msg`) in bash output ≥ 4 times, counted across edits |
 | `hung_call` | one model request waited ≥ 5 min for its first token — the provider or fetch layer, not the model getting lost |
