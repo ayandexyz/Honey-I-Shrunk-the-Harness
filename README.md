@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="logo.svg" alt="FreeCode Logo" width="286" height="60" />
+<img src="apps/web2/public/logo2.png" alt="FreeCode Logo" width="400" />
 
 **An open-source CLI coding agent that runs on whichever model you already pay for**
 
