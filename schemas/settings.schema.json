@@ -240,6 +240,22 @@
           "description": "Refresh the Anthropic prompt cache before its TTL ends, when the expected saving is worth it."
         }
       }
+    },
+    "verify": {
+      "description": "Finish-time verification: run the affected packages' tests before finishing a change of 3 or more files. See specs/2026-10-13-finish-time-verification.md.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tests": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run the tests at finish."
+        },
+        "testCommand": {
+          "type": "string",
+          "description": "Run this instead of discovering each changed file's package `test` script."
+        }
+      }
     }
   },
   "$defs": {

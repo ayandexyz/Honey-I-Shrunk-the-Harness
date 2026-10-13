@@ -48,6 +48,8 @@ export const KNOWN_SETTINGS: Readonly<
   tasks: ["notify"],
   // `providers/cache-warmer.ts` — off | streaming | idle.
   cache: ["warming"],
+  // `agent/verify-tests.ts` — the finish-time test run (≥3 changed files).
+  verify: ["tests", "testCommand"],
 };
 
 /**

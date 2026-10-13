@@ -36,7 +36,7 @@ export interface VerifyCommand {
   label: string;
 }
 
-function detectPackageManager(projectPath: string): string {
+export function detectPackageManager(projectPath: string): string {
   const has = (f: string) => fs.existsSync(path.join(projectPath, f));
   if (has("pnpm-lock.yaml")) return "pnpm";
   if (has("yarn.lock")) return "yarn";
@@ -70,8 +70,12 @@ export function resolveVerifyCommand(
 
 export interface VerifyResult {
   ok: boolean;
+  /** Last MAX_OUTPUT_CHARS — what a reminder shows. */
   output: string;
+  /** Everything (≤ RAW_OUTPUT_CHARS), for extracting failing test names. */
+  raw: string;
 }
+const RAW_OUTPUT_CHARS = 2_000_000;
 
 // Run the verify command, capturing combined stdout/stderr. Aborts with the
 // provided signal; a non-zero exit (or timeout) is a failure.
@@ -79,9 +83,10 @@ export function runVerify(
   command: string,
   projectPath: string,
   signal: AbortSignal,
+  timeoutMs: number = VERIFY_TIMEOUT_MS,
 ): Promise<VerifyResult> {
   return new Promise((resolve) => {
-    if (signal.aborted) return resolve({ ok: false, output: "(aborted)" });
+    if (signal.aborted) return resolve({ ok: false, output: "(aborted)", raw: "" });
 
     const child = spawn("/bin/bash", ["-c", command], {
       cwd: projectPath,
@@ -94,13 +99,19 @@ export function runVerify(
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill("SIGTERM");
-    }, VERIFY_TIMEOUT_MS);
+    }, timeoutMs);
 
     const onAbort = () => child.kill("SIGTERM");
     signal.addEventListener("abort", onAbort, { once: true });
 
-    child.stdout?.on("data", (d) => (out += d.toString()));
-    child.stderr?.on("data", (d) => (out += d.toString()));
+    // Keep the whole output (capped) — failing test names are printed where
+    // each test ran, long before the tail a reminder shows.
+    const add = (d: Buffer) => {
+      out += d.toString();
+      if (out.length > RAW_OUTPUT_CHARS) out = out.slice(-RAW_OUTPUT_CHARS);
+    };
+    child.stdout?.on("data", add);
+    child.stderr?.on("data", add);
 
     child.on("close", (code) => {
       clearTimeout(timer);
@@ -110,13 +121,13 @@ export function runVerify(
           ? "...(truncated)...\n" + out.slice(-MAX_OUTPUT_CHARS)
           : out || "(no output)";
       const suffix = timedOut ? "\n(verification timed out)" : "";
-      resolve({ ok: code === 0 && !timedOut, output: clipped + suffix });
+      resolve({ ok: code === 0 && !timedOut, output: clipped + suffix, raw: out + suffix });
     });
 
     child.on("error", (err) => {
       clearTimeout(timer);
       signal.removeEventListener("abort", onAbort);
-      resolve({ ok: false, output: `Failed to run verify command: ${err.message}` });
+      resolve({ ok: false, output: `Failed to run verify command: ${err.message}`, raw: "" });
     });
   });
 }
