@@ -147,7 +147,26 @@ investigation first), non-JS languages in 2.2, any hard block.
 
 | Phase | Content | Pass bar |
 |---|---|---|
-| 1 | **Offline calibration (free).** Run 2.2 on the nine v2 patches (on their parent commits) and on this repo's last ~50 real `apps/core` commits. Measure, from rollout history, how often a ≥3-file run ran a full test command after its last edit. | Flags `attachLoop` in t1; **≤1 false flag per real commit on average**, else tighten 2.2 first. |
+| 1 ✅ | **Offline calibration (free)** — done 2026-10-13, §4.1. Run 2.2 on the nine v2 patches (on their parent commits) and on this repo's last ~50 real `apps/core` commits. Measure, from rollout history, how often a ≥3-file run ran a full test command after its last edit. | Flags `attachLoop` in t1; **≤1 false flag per real commit on average**, else tighten 2.2 first. |
 | 2 | **2.1 + 2.2** in the loop, unit tests, logging, off switches. New coding eval case: a multi-file feature whose checker goes only through the entry point. | `eval ab coding`, new case included, no regression. |
 | 3 | **2.3** verifier prompt. | `eval ab` on the new case (the verifier only runs on ≥3-file changes, so short evals show little). |
 | 4 | **Release + long-task rerun** (shared with the stuck-loop spec): same nine trials, Haiku judge with the parent-commit baseline. | No regressions beyond the baseline; fewer "never wired" weaknesses; judge mean up. Report the minutes 2.1 adds per long run (expect ~2–3). |
+
+### 4.1 Phase 1 result (2026-10-13)
+
+`pnpm bench:unwired --commits 50 --v2 <pathology-commits-v2>`
+(`bench/harness-signals/unwired-calibrate.ts`):
+
+| Set | Result | Bar |
+|---|---|---|
+| Last 50 real `apps/core` commits | 6 flags, **0.12 per commit** | ≤ 1.00 ✅ |
+| v2 add-agent t1 | **`attachLoop` (registry.ts:243)** + `parentOf` | flags `attachLoop` ✅ |
+| v2 implement-night-morning t1–t3 | 2–5 new functions each with no non-test caller (`writeHeartbeat`, `readNightManifest`-style readers) — consistent with the judge's "never wired" verdicts on those trials | — |
+| v2 fix-night-envelope, add-agent t2–t3 | none | — |
+| Rollout history: ≥3-file runs that ran a test command after their last edit | **7 of 132 (5%)** | baseline for Phase 4 |
+
+The first run **missed `attachLoop`**: its only non-test mentions were its own
+doc comments, which `git grep` counted as callers. Comment lines (`//`, `/*`,
+` *`) no longer count as references; string literals still do (string-keyed
+dispatch). The real-commit false-flag rate did not change (0.12 both runs).
+

@@ -37,7 +37,8 @@
     "bench:pathology": "tsx bench/harness-signals/pathology-run.ts",
     "test:jcode-bench": "tsc -p bench/jcode-bench/tsconfig.json && tsx --test bench/jcode-bench/runner/*.test.ts",
     "test:harness-signals": "tsc -p bench/harness-signals/tsconfig.json && tsx --test bench/harness-signals/*.test.ts",
-    "bench:jcode:regrade": "tsx bench/jcode-bench/runner/regrade.ts"
+    "bench:jcode:regrade": "tsx bench/jcode-bench/runner/regrade.ts",
+    "bench:unwired": "tsx bench/harness-signals/unwired-calibrate.ts"
   },
   "devDependencies": {
     "@changesets/cli": "^2.31.0",

@@ -69,11 +69,18 @@ export function newDeclarations(before: string, after: string, file: string): De
 /** `path:line:text` lines for a whole-word match, paths relative to the root. */
 export type Grep = (name: string) => string[];
 
+// A comment naming a function is documentation, not a caller: the first
+// calibration missed attachLoop because its only non-test mentions were its
+// own doc comments. A string literal still counts (string-keyed dispatch).
+const COMMENT_LINE = /^\s*(?:\/\/|\/\*|\*)/;
+
 export function findUncalled(decls: Declaration[], grep: Grep): Declaration[] {
   return decls.filter((d) => {
     const refs = grep(d.name).filter((hit) => {
       const [file, line] = hit.split(":", 2);
       if (!file || isTestPath(file)) return false;
+      const text = hit.slice(file.length + 1 + String(line).length + 1);
+      if (COMMENT_LINE.test(text)) return false;
       return !(file === d.file && Number(line) === d.line);
     });
     return refs.length === 0;

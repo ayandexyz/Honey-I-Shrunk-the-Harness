@@ -84,3 +84,17 @@ test("checkUnwired outside a git repo is skipped, not an error", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a comment that names a function is not a caller; a string still is", () => {
+  // add-agent-control v2 t1: attachLoop's only non-test "references" were its
+  // own doc comments, so the first calibration missed it.
+  const decl = { name: "attachLoop", file: "src/registry.ts", line: 40 };
+  const commentsOnly = () => [
+    "src/registry.ts:12:   * Steers queued before `attachLoop` could deliver them.",
+    "src/registry.ts:55:    // and `attachLoop`), but pinning the rule in one place",
+    "src/registry.ts:60:  /* attachLoop replays them */",
+  ];
+  assert.deepEqual(findUncalled([decl], commentsOnly), [decl]);
+  const viaString = () => [...commentsOnly(), "src/dispatch.ts:3:  handlers[\"attachLoop\"](id);"];
+  assert.deepEqual(findUncalled([decl], viaString), []);
+});
