@@ -201,7 +201,8 @@ In suggested order. Each is also a TODO.md entry or a spec phase.
        command run after the last edit?), a finish-time reminder ("trace the
        user-facing entry point to your new code; run the full suite"), an
        end-to-end test per feature. Not written yet.
-6. [ ] **Stuck-loop recovery** (spec `2026-10-13-stuck-loop-recovery.md`):
+6. [ ] **Stuck-loop recovery** (spec `2026-10-13-stuck-loop-recovery.md`) —
+       **Phases 1, 2, 3 and 5 built 2026-10-13; only Phase 4 (release + rerun) left**:
    - Phase 1: offline calibration of signal E on recorded logs — must fire on
      implement t1 and add-agent t1, stay quiet on fix-envelope t1 and on
      baseline repeats, exclude jcode climbs `3e5f45bf`/`401d8104`; zero
