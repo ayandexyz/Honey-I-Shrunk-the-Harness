@@ -11,6 +11,7 @@
 //   - Model decides which tools to use via function calling
 // =============================================================================
 
+import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { randomUUID } from "crypto";
@@ -92,6 +93,15 @@ import {
   type TodoItem,
 } from "../tools/todo.js";
 import { createRepeatedErrors, errorLocation, isBashWrite } from "./repeated-error.js";
+import { checkUnwired, unwiredReminder, type Declaration } from "./unwired.js";
+import {
+  failingTestLines,
+  loadVerifySettings,
+  MAX_TEST_ATTEMPTS,
+  resolveTestCommands,
+  testFailureReminder,
+  TEST_TIMEOUT_MS,
+} from "./verify-tests.js";
 import {
   MAX_TRUNCATED_TOOL_RETRIES,
   repeatedCallReminder,
@@ -532,6 +542,17 @@ export class AgentLoop {
   // Distinct files edited/written this run + verifier-subagent attempt count,
   // driving the adversarial verification gate for non-trivial changes.
   private mutatedFiles = new Set<string>();
+  // Finish-time verification (spec 2026-10-13-finish-time-verification.md).
+  // Each edited file's content before the run's first edit to it (null: the
+  // run created it), keyed by absolute path — what "new this run" means for
+  // the no-callers check.
+  private preEditContent = new Map<string, string | null>();
+  private testAttempts = 0;
+  private unwiredChecked = false;
+  // Handed to the verifier: what the test gate saw, and what the no-callers
+  // check named.
+  private lastTestResult: string | undefined;
+  private lastUnwired: Declaration[] = [];
   private verifierAttempts = 0;
   // Harness signals (agent/signals): auto-poke state for this run, and the
   // settings resolved once per run so a mid-run settings edit cannot flip a
@@ -843,6 +864,11 @@ export class AgentLoop {
     this.filesMutatedThisRun = false;
     this.verifyAttempts = 0;
     this.mutatedFiles = new Set<string>();
+    this.preEditContent = new Map();
+    this.testAttempts = 0;
+    this.unwiredChecked = false;
+    this.lastTestResult = undefined;
+    this.lastUnwired = [];
     this.verifierAttempts = 0;
     // The poke CAP is per run, so one prompt's pokes never spend the next
     // prompt's. The FINGERPRINT is not: a user's "continue" on a list the
@@ -1357,10 +1383,17 @@ export class AgentLoop {
               console.log(
                 `[AgentLoop] Verification gate ${this.verifyAttempts}/${MAX_VERIFY_ATTEMPTS}: running \`${verifyCmd.command}\``,
               );
+              const startedAt = Date.now();
               const verify = await runVerify(
                 verifyCmd.command,
                 this.state.projectPath,
                 this.abort.signal,
+              );
+              this.recorder.recordVerifyRan(
+                "typecheck",
+                verify.ok,
+                Date.now() - startedAt,
+                failingTestLines(verify.raw).length,
               );
               if (this.abort.signal.aborted)
                 return await this.complete(
@@ -1380,6 +1413,61 @@ export class AgentLoop {
                 };
                 continue;
               }
+            }
+          }
+
+          // Test gate (spec §2.1): a change of ≥3 files runs the tests of the
+          // packages it touched. The typecheck alone let two v2 trials ship
+          // regressions in files they never opened. Own cap, so a suite that
+          // was red before the run still terminates.
+          if (
+            this.mutatedFiles.size >= VERIFIER_MIN_FILES &&
+            this.testAttempts < MAX_TEST_ATTEMPTS
+          ) {
+            const settings = loadVerifySettings(this.state.projectPath);
+            const commands = settings.tests
+              ? resolveTestCommands(this.state.projectPath, [...this.mutatedFiles], settings)
+              : [];
+            if (commands.length === 0) {
+              this.lastTestResult = settings.tests ? "skipped (no test script found)" : "skipped (turned off)";
+            } else {
+              this.testAttempts += 1;
+              const failures: { label: string; raw: string }[] = [];
+              for (const c of commands) {
+                console.log(`[AgentLoop] Test gate ${this.testAttempts}/${MAX_TEST_ATTEMPTS}: running \`${c.command}\``);
+                const startedAt = Date.now();
+                const r = await runVerify(c.command, this.state.projectPath, this.abort.signal, TEST_TIMEOUT_MS);
+                if (this.abort.signal.aborted)
+                  return await this.complete("Interrupted", undefined, undefined, usageSoFar());
+                const failing = failingTestLines(r.raw);
+                this.recorder.recordVerifyRan("tests", r.ok, Date.now() - startedAt, failing.length);
+                if (!r.ok) failures.push({ label: c.label, raw: r.raw });
+              }
+              this.lastTestResult = failures.length
+                ? `failed: ${failures.flatMap((f) => failingTestLines(f.raw)).slice(0, 10).join("; ") || "see output"}`
+                : `passed (${commands.map((c) => c.label).join(", ")})`;
+              if (failures.length) {
+                this.pendingReminders.push(testFailureReminder(failures));
+                this.state = { ...this.state, iterationCount: this.state.iterationCount + 1, turnCount: this.state.turnCount + 1 };
+                continue;
+              }
+            }
+          }
+
+          // No-callers gate (spec §2.2): once per run, name what this run
+          // added that nothing outside tests calls. A nudge, never a block.
+          if (
+            !this.unwiredChecked &&
+            this.preEditContent.size > 0 &&
+            process.env.FREECODE_UNWIRED_CHECK !== "0"
+          ) {
+            this.unwiredChecked = true;
+            this.lastUnwired = checkUnwired(this.state.projectPath, this.preEditContent);
+            this.recorder.recordUnwiredFlagged(this.lastUnwired.length);
+            if (this.lastUnwired.length > 0) {
+              this.pendingReminders.push(unwiredReminder(this.lastUnwired));
+              this.state = { ...this.state, iterationCount: this.state.iterationCount + 1, turnCount: this.state.turnCount + 1 };
+              continue;
             }
           }
 
@@ -2288,6 +2376,7 @@ export class AgentLoop {
       const batches = planToolBatches(toolCalls);
       for (const { start, end, parallel } of batches) {
         const batch = toolCalls.slice(start, end);
+        for (const tc of batch) this.capturePreEdit(tc);
         const batchResults = parallel
           ? await Promise.all(batch.map((tc) => this.executeTool(tc)))
           : [await this.executeTool(batch[0])];
@@ -3404,6 +3493,27 @@ export class AgentLoop {
     } catch (error) {
       return { success: false, error: String(error) };
     }
+  }
+
+  // ===========================================================================
+  // PRIVATE: capturePreEdit()
+  // The first time a run edits or writes a file, keep what it was, so the
+  // no-callers check can tell what THIS run added (agent/unwired.ts).
+  // ===========================================================================
+  private capturePreEdit(tc: ToolCall): void {
+    if (!EDIT_TOOL_IDS.has(tc.tool)) return;
+    const a = tc.args as { filePath?: unknown; path?: unknown } | undefined;
+    const fp = a?.filePath ?? a?.path;
+    if (typeof fp !== "string") return;
+    const abs = path.resolve(this.state.projectPath, fp);
+    if (this.preEditContent.has(abs)) return;
+    let content: string | null = null;
+    try {
+      content = fs.readFileSync(abs, "utf-8");
+    } catch {
+      // Created by this run.
+    }
+    this.preEditContent.set(abs, content);
   }
 
   // ===========================================================================
