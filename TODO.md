@@ -496,13 +496,6 @@ From the first `pnpm bench:pathology` over 12,370 runs (HARNESS-BENCH.md §3b):
       Unknown whether the model is forgetting, or the read output is
       truncated/unclear and it retries. Open a few with `freecode trace`
       before deciding whether this is a tool-output fix or a prompt fix.
-- [ ] **Three core tests fail in an offline container on every commit**:
-      `modelSupportsImages` (×2) and `providers.list only offers providers the
-      registry can construct`. Found by running the judged set's final checks on
-      untouched parent commits in the bench image (`--network none`): 3 fail on
-      all three parents. They likely read the models.dev catalogue, which the
-      offline container cannot reach or has not cached. Until fixed, a judged
-      trial's real test failures are the ones beyond these three.
 - [ ] **Stuck-on-one-error is the main long-task time sink, not dryness.**
       `implement-night-morning` v2 t1 (41.8 min vs 16–22 for other trials) saw
       the same 4 tsc parse errors 8 times over ~10 min while editing steadily,

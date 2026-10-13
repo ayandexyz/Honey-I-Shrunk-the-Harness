@@ -158,7 +158,7 @@ calibrated thinking-loop detector; grok-build does it server-side and resamples.
 - `final-checks.json` keeps only the last 20K chars of a check's output, which
   drops the `not ok` test names (fixed 2026-10-13: those lines now survive the
   cut; the v2 files are already cut and keep only `# fail N`).
-- The 3 core tests that fail offline need fixing or a cached catalogue.
+- The 3 core tests that fail offline need fixing or a cached catalogue. (Fixed 2026-10-13: fixture catalogues.)
 - The global pre-commit malware-scan hook (`~/.git-hooks`) false-flags task
   JSONs; disabled for this repo only with `git config --local core.hooksPath
   .git/hooks` (undo: `git config --local --unset core.hooksPath`).
@@ -189,8 +189,11 @@ In suggested order. Each is also a TODO.md entry or a spec phase.
 3. [x] **Keep `not ok` lines in full** in `final-checks.json` — `tail()` in
        `runner/judged-trial.ts` keeps `not ok` / `error TS` lines from the
        cut part (≤5K), 2026-10-13. Applies to new runs only.
-4. [ ] **Fix the 3 offline-failing core tests** (`modelSupportsImages` ×2,
-       `providers.list…`).
+4. [x] **Fix the 3 offline-failing core tests** (`modelSupportsImages` ×2,
+       `providers.list…`) — 2026-10-13: they read a fixture catalogue via
+       `FREECODE_MODELS_CACHE_FILE` instead of the developer's cache or the
+       network. Commits before the fix still fail them, so the baseline
+       (item 2) stays useful for older tasks.
 5. [ ] **Spec: finish-time checks** — "built but never wired" + unverified
        finish. `bench:pathology` flag `unverified_finish` (was the full test
        command run after the last edit?), a finish-time reminder ("trace the

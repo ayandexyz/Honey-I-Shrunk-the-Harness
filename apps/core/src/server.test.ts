@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { handleRequest } from "./server.js";
 import { askQuestion, bus } from "./bus/index.js";
 
@@ -55,7 +58,7 @@ test("askQuestion rejects immediately when no frontend is attached", async () =>
   );
 });
 
-test("providers.list only offers providers the registry can construct", async () => {
+test("providers.list only offers providers the registry can construct", async (t) => {
   // The regression: models.dev names 212 providers, freecode can build 198.
   // Listing the raw catalogue meant picking one of the other 14 wrote it into
   // config and then threw `Provider "x" not registered` on the first turn —
@@ -66,6 +69,25 @@ test("providers.list only offers providers the registry can construct", async ()
   // read an empty registry and filtered the whole catalogue away — which
   // presents as an empty model picker, not an error.
   const { listProviders } = await import("./providers/registry.js");
+  // The whole catalogue from the shipped snapshot rather than the developer's
+  // cache or the network: offline (the bench's `--network none` checks) the
+  // live list is empty, and `> 100` failed on every untouched commit.
+  const { CATALOGUE_SNAPSHOT } = await import("./providers/catalogue-snapshot.js");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "freecode-providers-"));
+  const previous = process.env.FREECODE_MODELS_CACHE_FILE;
+  process.env.FREECODE_MODELS_CACHE_FILE = path.join(dir, "models-dev.json");
+  t.after(() => {
+    if (previous === undefined) delete process.env.FREECODE_MODELS_CACHE_FILE;
+    else process.env.FREECODE_MODELS_CACHE_FILE = previous;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  fs.writeFileSync(
+    process.env.FREECODE_MODELS_CACHE_FILE,
+    JSON.stringify({
+      timestamp: Date.now(),
+      data: CATALOGUE_SNAPSHOT.map((e) => ({ id: e.id, name: e.name, npm: e.npm, api: e.baseURL, env: e.envKeys, models: [] })),
+    }),
+  );
 
   const res = (await handleRequest({
     jsonrpc: "2.0",
