@@ -21,6 +21,7 @@ This codebase follows `docs/specs/2026-05-25-architecture-v4.md` (supersedes v3)
 | MCP client          | `specs/2026-06-08-mcp-client-design.md`                 |
 | Observability       | `specs/2026-08-10-agent-observability.md`               |
 | **Trace (commands)** | **`TRACE.md`** — `freecode trace` flags, how to read the waterfall |
+| **Environment variables** | **`ENV.md`** — every `FREECODE_*` variable, its default and purpose, grouped by area; which ones `eval ab` can flip. Add a row there when you add a variable. |
 | **Backlog (three files)** | **`TODO.md`** = debt that must shrink to zero before 1.0 (bugs, dead code, stale docs) · **`ROADMAP.md`** = unbuilt features needing a spec · **`docs/DECISIONS.md`** = deliberate behaviour that must NOT be "fixed". File a finding in the right one; never fix something listed in DECISIONS without deleting its entry. |
 | Eval harness        | `specs/2026-08-23-eval-harness.md` (Phases 0–5, built) + `specs/2026-08-29-eval-case-registry.md` |
 | **Eval (commands)** | **`EVAL.md`** — which command, which flag, when to run it |
