@@ -88,6 +88,13 @@ Nothing ever hard-blocks; every new step is "fix it, or say why not".
   failing before your change, say so and stop"*; the 2-attempt cap means it
   cannot loop.
 - **Off:** `verify.tests: false` / `FREECODE_VERIFY_TESTS=0`.
+- **Not in subagents** (`finishTests: false`; the parent runs the suite at its
+  own finish, and a background subagent would collide with it) **nor in
+  unattended night runs** (their bash is sandboxed and commits are gated by
+  `--verify`; this gate would run a model-written test file outside bwrap).
+  Added after the final review, 2026-10-13.
+- **A hung suite is killed:** commands run in their own process group, and the
+  timeout or an abort signals the whole group (SIGTERM, SIGKILL after 2 s).
 
 ### 2.2 "No callers" check
 
