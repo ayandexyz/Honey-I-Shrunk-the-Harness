@@ -501,7 +501,8 @@ From the first `pnpm bench:pathology` over 12,370 runs (HARNESS-BENCH.md §3b):
       2026-10-13 (signal E, threshold 5, warn-only; compaction ends read
       dedup; post-compaction restore). Left: Phase 4 (release,
       `pnpm bench:image`, rerun the 9 long trials — the only test of whether
-      either saves time), Phase 5 (scratch-script prompt line). A stop tier
+      either saves time). Phase 5 is done as a failure-time bash hint
+      (`tools/scratch-hint.ts`), not a prompt line. A stop tier
       for E stays unbuilt until a recorded run shows where it would be right.
 - [ ] **Finishing without a full test run lets regressions through.**
       `add-agent-control` v2 t2 and t3 ran only the test files they touched

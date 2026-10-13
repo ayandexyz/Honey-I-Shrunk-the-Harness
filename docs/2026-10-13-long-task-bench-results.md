@@ -212,7 +212,10 @@ In suggested order. Each is also a TODO.md entry or a spec phase.
    - Phase 3: **unchanged-read stub + post-compaction file restore** (§3.2).
      `eval ab` incl. `compaction-boundary`; no new `harness:*` cache misses.
    - Phase 4: release, rebuild image, rerun these 9 trials, compare per trial.
-   - Phase 5: prompt line about scratch scripts outside the repo.
+   - Phase 5: ~~prompt line about scratch scripts outside the repo~~ done
+     2026-10-13 as a hint on the failing bash output only
+     (`tools/scratch-hint.ts`): it happens in ~0.3% of sessions, so an
+     always-on line was not worth its tokens.
 7. [ ] **`compact.occurred` under-reports** (records the estimated transcript,
        not the measured request) — existing TODO.md entry.
 8. [ ] **37 zero-edit runs with 30–56% reread share** in the 12,370-run history

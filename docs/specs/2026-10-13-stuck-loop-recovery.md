@@ -10,8 +10,9 @@
 > **Phase 3 built 2026-10-13** (§4.3.1): the unchanged-read stub already
 > existed (`tools/read-state.ts`, RC5) — the spec was wrong — but compaction
 > never ended it, so 89 of 100 stubs in the long-task run pointed at content
-> the summary had replaced. Fixed, plus the post-compaction restore. Phases 4–5
-> not built.
+> the summary had replaced. Fixed, plus the post-compaction restore. **Phase 5 built 2026-10-13** (§4.4) as a
+> failure-time bash hint, not a prompt line. Phase 4 (release + long-task
+> rerun) not run.
 > **Branch:** `fix/stuck-error-recovery`.
 > **Evidence:** `bench:pathology` (`bench/harness-signals/pathology.ts`,
 > HARNESS-BENCH.md §3b), the long-task run in
@@ -289,6 +290,22 @@ inside the project (or `cd` into it) so imports resolve; `/tmp` cannot see the
 project's `node_modules`. Measure before keeping it: it costs prompt tokens on
 every turn.
 
+**Built 2026-10-13 — as a targeted hint, not a prompt line.** Measured first:
+across 5,602 recorded bash outputs (~3,000 local sessions + the v2 long-task
+run), a `/tmp` script failing to resolve a module happened **10 times** (~0.3%
+of sessions, ~1 per 3 long trials). A prompt line would cost ~40 tokens on
+every request of every session for that. Instead `tools/scratch-hint.ts`
+appends one `<bash_metadata>` note to the bash result only when a `/tmp`
+script is *run* (`node`/`tsx`/`bun`/`deno`/`ts-node`, same command segment),
+outside the command's `cwd` (an eval sandbox is itself in `/tmp`), and the
+output says `Cannot find module|package` / `ERR_MODULE_NOT_FOUND`. Zero tokens
+otherwise. Replayed over the same 5,602 outputs it fires on exactly the 10
+real cases (the first draft also hit an eval sandbox and an already-copied
+script; both fixed). The note contains no error-shaped line, so signal E never
+counts it. No `eval ab`: no case runs a `/tmp` script, so an A/B could only
+measure noise; the replay is the measurement, and Phase 4's long trials show
+whether it shortens the detour.
+
 ### 4.5 Recording
 
 Today a loop-health warn leaves no event of its own: with redirect off it
@@ -420,7 +437,7 @@ offline failures, TODO.md). n=9 is small: report each trial, not a mean.
 | 2 | Signal E + reminder (§4.1–4.2), unit tests next to `loop-health.ts` | `eval ab` §5.2, no regression — **built 2026-10-13, warn-only** |
 | 3 | Unchanged-read stub + post-compaction restore (§4.3) | `eval ab` incl. `compaction-boundary`; cache-miss detector shows no new `harness:*` misses — **built 2026-10-13 (§4.3.1)**, A/B pending |
 | 4 | Release, rebuild image, §5.3 rerun | numbers in this spec |
-| 5 | §4.4 scratch-script line | `eval ab` |
+| 5 | §4.4 scratch-script line | `eval ab` — **built 2026-10-13 as a failure-time hint instead** (§4.4); replayed, not A/B'd |
 
 ---
 
