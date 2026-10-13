@@ -25,13 +25,14 @@ const coloredLogoLines = portraitLines.map((runs) =>
 );
 
 // Block-letter ASCII painted to the right of the portrait. The bright half
-// follows the theme's `accent`; the dim half stays `accentDim` on Omarchy
-// and goes red off Omarchy, per the user's explicit override of the
-// chalk-yellow fallback.
+// (Histh) follows the theme's `accent`; the dim half (!) stays `accentDim`
+// on Omarchy and goes red off Omarchy, per the user's explicit override of
+// the chalk-yellow fallback. The split is at column 39, which is the visual
+// seam between the "Histh" letters and the "!" mark.
+const GLYPH_SPLIT_COL = 49;
 const dimHalf = omarchyPalette ? palette.accentDim : chalk.red;
 const coloredGlyphLines = glyphLines.map((line) => {
-  const mid = Math.floor(line.length / 2);
-  return palette.accent(line.slice(0, mid)) + dimHalf(line.slice(mid));
+  return palette.accent(line.slice(0, GLYPH_SPLIT_COL)) + dimHalf(line.slice(GLYPH_SPLIT_COL));
 });
 
 /** Portrait + 1 space + glyph; the actual visible width of a side-by-side row. */
