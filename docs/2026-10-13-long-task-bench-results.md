@@ -179,7 +179,9 @@ In suggested order. Each is also a TODO.md entry or a spec phase.
        matches". `bench:pathology` no longer counts a repeated search that
        *errored* as a search circle (re-scored: the flag on fix-envelope t1
        is gone, the 12K-run local history is unchanged).
-1. [ ] **Fix the Gemini judge key**, then
+1. [x] **Fix the judge** — 2026-10-13: Gemini replaced by Haiku 4.5 through
+       `claude -p` on the Claude subscription (GPT stays the auditor). Left:
+       `--baseline-only` (item 2), then
        `pnpm bench:judge --rejudge bench/agent-bench/results/pathology-commits-v2`.
 2. [x] **Judge gets the baseline** (2026-10-13): `bench:agents` runs each
        task's checks once on the untouched parent (`<run>/<task>/baseline-checks.json`)

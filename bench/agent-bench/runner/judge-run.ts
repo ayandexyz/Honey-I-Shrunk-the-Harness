@@ -5,7 +5,7 @@
 //
 //   pnpm bench:judge bench/agent-bench/results/<run> [--panel] [--rejudge] [--concurrency N] [--tasks <file>]
 //
-// Audit mode by default (Gemini scores, GPT audits 20% and falls back);
+// Audit mode by default (Haiku scores, GPT audits 20% and falls back);
 // `--panel` runs BuffBench's full two-judge panel on every trial instead.
 // Resumable: a trial that already has `judging` is skipped unless --rejudge,
 // and report.json is rewritten after every verdict. Writes judging.json per
@@ -164,7 +164,7 @@ async function main(): Promise<void> {
     : agreement.n < MIN_AUDITS
       ? `audit UNMEASURED (${agreement.n} two-sided audits, need ${MIN_AUDITS}): a published number needs --panel`
       : agreement.passes
-        ? `scored by Gemini, audited by GPT: n=${agreement.n}, mean gap ${agreement.meanAbsGap.toFixed(2)} ≤ ${MAX_AUDIT_GAP}`
+        ? `scored by ${JUDGES[0].id}, audited by ${JUDGES[1].id}: n=${agreement.n}, mean gap ${agreement.meanAbsGap.toFixed(2)} ≤ ${MAX_AUDIT_GAP}`
         : `audit FAILED: mean gap ${agreement.meanAbsGap.toFixed(2)} > ${MAX_AUDIT_GAP} over n=${agreement.n}; a published number needs --panel`;
   const judgingVerified = panel ? pv.ok : agreement.passes;
   const contaminationChecked = report.contamination?.checked === true;

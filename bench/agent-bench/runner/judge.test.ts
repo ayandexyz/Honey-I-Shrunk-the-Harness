@@ -130,7 +130,12 @@ test("the panel is two judges from two families, and never the model under test"
   );
   assert.doesNotThrow(() => assertNoCollision(JUDGES, "MiniMax-M3"));
   assert.throws(() => assertNoCollision(JUDGES, "gpt-5.5"), /model under test/);
-  assert.throws(() => assertNoCollision(JUDGES, "google/gemini-3.5-pro"), /model under test/);
+  assert.throws(() => assertNoCollision(JUDGES, "anthropic/claude-sonnet-4-6"), /model under test/);
+  assert.throws(
+    () => assertNoCollision(JUDGES, "claude-opus-5-5"),
+    /model under test/,
+    "the claude judge runs Anthropic's model, so a Claude agent model collides with it",
+  );
   assert.throws(
     () => assertNoCollision(JUDGES, "openai/gpt-5.5"),
     /model under test/,

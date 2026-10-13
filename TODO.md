@@ -532,10 +532,6 @@ From the first `pnpm bench:pathology` over 12,370 runs (HARNESS-BENCH.md §3b):
       because each part is tested alone. Not a stuck-loop problem; candidate
       fix is a finish-time check ("trace the user-facing entry point to your
       new code") and an end-to-end test per feature. Needs its own spec.
-- [ ] **The configured Gemini judge key is invalid** ("API key not valid"),
-      so the v2 run was scored by the GPT fallback alone: 0 audited, 9
-      fallback, unpublishable. Fix the key, then `pnpm bench:judge --rejudge`
-      on `results/pathology-commits-v2`.
 - [ ] **Compaction makes it reread.** On long tasks almost every reread follows
       a compaction (24 of 25 in v2 t1, 5 compactions). Cheap per read, but it
       grows with every compaction. Candidate: carry the read-file list in the

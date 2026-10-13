@@ -6,10 +6,12 @@
 // rate table on purpose), because that rule protects a published NUMBER. A
 // judge's transport is not a number, and core already owns provider auth,
 // catalogue and fetch timeouts. Imported lazily, so the tests never load core.
-// The GPT judge is the exception: it runs through `codex exec` on the owner's
-// Codex subscription (codex-complete.ts), which core cannot reach.
+// Both current judges are exceptions: GPT runs through `codex exec` on the
+// owner's Codex subscription (codex-complete.ts) and Haiku through `claude -p`
+// on the Claude subscription (claude-complete.ts), which core cannot reach.
 // =============================================================================
 
+import { claudeComplete } from "./claude-complete.js";
 import { codexComplete } from "./codex-complete.js";
 import type { Complete } from "./judge.js";
 
@@ -42,9 +44,14 @@ export function coreComplete(usage: JudgeUsage): Complete {
   };
 }
 
-/** The panel's transport: `codex` judges through `codex exec`, the rest through core. */
+/**
+ * The panel's transport: `codex` judges through `codex exec`, `claude` judges
+ * through `claude -p` (both on the owner's subscriptions), the rest through core.
+ */
 export function judgeComplete(usage: JudgeUsage): Complete {
   const core = coreComplete(usage);
   const codex = codexComplete(usage);
-  return (judge, ...rest) => (judge.provider === "codex" ? codex : core)(judge, ...rest);
+  const claude = claudeComplete(usage);
+  return (judge, ...rest) =>
+    (judge.provider === "codex" ? codex : judge.provider === "claude" ? claude : core)(judge, ...rest);
 }
