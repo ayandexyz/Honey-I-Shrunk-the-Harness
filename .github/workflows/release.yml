@@ -129,10 +129,16 @@ jobs:
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
+        # A tag with a suffix (v0.45.0-rc.1) is a prerelease: `releases/latest`,
+        # which install.sh and the TUI update check read, skips prereleases,
+        # so a branch build can be benchmarked without reaching users.
         run: |
           set -euo pipefail
+          PRE=()
+          case "${RELEASE_TAG}" in *-*) PRE=(--prerelease) ;; esac
           gh release create "${RELEASE_TAG}" \
             --title "${RELEASE_TAG}" \
             --generate-notes \
+            "${PRE[@]}" \
             out/* \
           || gh release upload "${RELEASE_TAG}" out/* --clobber
