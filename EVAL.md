@@ -365,7 +365,16 @@ FREECODE_EVAL_MODEL=...          # what CI pins as the model under test
   organization. Its cost reports as **unknown**, never $0. Added 2026-10-13;
   judged runs before then were graded by `gemini-3.5-flash-lite`, so compare
   scores across the switch with care (the judged gate is absolute — mean ≥3.5,
-  no case <2 — so the gate itself is unaffected).
+  no case <2 — so the gate itself is unaffected). Its time limit is 120 s
+  (other judges 30 s): `claude -p` starts a whole process, ~17 s per call.
+- **Gemini Flash-Lite vs Haiku on the same replies (2026-10-13).** Haiku
+  re-graded the 16 replies Gemini scored in that day's judged gate. Gemini gave
+  **5/5 to all 16**; Haiku averaged **3.75** — 4.44 where the agent called tools,
+  **2.86 where it answered from memory** — and named real defects Gemini passed:
+  four sentences where the prompt asked for exactly three, the wrong command
+  (`pnpm eval:gate` for `freecode eval --gate`), claims about directories the
+  agent never looked at. Under Haiku that gate would have closed (one case at
+  1/5). Flash-Lite is not discriminating on this suite; prefer `claude-cli`.
 - A judge that collides with the model under test **throws before any case runs**.
 - An unconfigured judge does *not* throw — the deterministic expectations still
   run — but it **closes the gate** (`judgeSkipped`).
