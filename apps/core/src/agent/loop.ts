@@ -121,12 +121,17 @@ import { getToolDefs, unattendedToolDefs } from "../tools/defs-cache.js";
 import type { UnattendedContext } from "../autonomous/types.js";
 import { planToolBatches } from "../tools/batching.js";
 import {
+  getReadState,
   markAllReadsCompacted,
   markReadPruned,
   recentReads,
   touchReadState,
 } from "../tools/read-state.js";
-import { buildRestoreBlock } from "../compaction/restore.js";
+import {
+  buildRestoreBlock,
+  buildSkillBlock,
+  formatTouchedFiles,
+} from "../compaction/restore.js";
 import {
   PruneState,
   getPruneState,
@@ -500,6 +505,9 @@ export class AgentLoop {
   // block until the next one (compaction/restore.ts). Not persisted: after a
   // restart the read state is gone too, so the model simply reads again.
   private restoredFiles = "";
+  // Skills loaded this session, name → the exact text the model was shown,
+  // oldest first; re-attached after a compaction (compaction/restore.ts).
+  private invokedSkills = new Map<string, string>();
   // Signal E's per-line state (agent/repeated-error.ts), per run.
   private repeatedErrors = createRepeatedErrors();
   private turnsSinceTodoWrite = 0;
@@ -2289,6 +2297,11 @@ export class AgentLoop {
           const result = batchResults[k];
           toolResults[start + k] = result;
           this.updateLoopHealth(tc, result);
+          const skillName = (tc.args as { name?: unknown } | undefined)?.name;
+          if (tc.tool === "skill" && !result.error && typeof skillName === "string") {
+            this.invokedSkills.delete(skillName);
+            this.invokedSkills.set(skillName, result.modelOutput ?? result.stdout ?? "");
+          }
           // Track file mutations so the verification gate only runs when this
           // run actually changed something.
           if (
@@ -3405,19 +3418,35 @@ export class AgentLoop {
   private restoreRecentFiles(): void {
     this.restoredFiles = "";
     if (process.env.FREECODE_COMPACT_RESTORE === "0") return;
+    // What survived whole in the kept messages need not be attached again.
     const kept = new Set<string>();
+    const keptSkills = new Set<string>();
     for (const m of this.history) {
       for (const part of m.parts) {
-        const fp = part.type === "tool" && part.tool.tool === "read"
-          ? (part.tool.args as { filePath?: unknown })?.filePath
-          : undefined;
-        if (typeof fp === "string") kept.add(fp);
+        if (part.type !== "tool") continue;
+        const args = part.tool.args as { filePath?: unknown; name?: unknown } | undefined;
+        if (part.tool.tool === "read" && typeof args?.filePath === "string") kept.add(args.filePath);
+        if (part.tool.tool === "skill" && typeof args?.name === "string") keptSkills.add(args.name);
       }
     }
-    const block = buildRestoreBlock(recentReads(this.state.sessionId), kept);
-    if (!block) return;
-    this.restoredFiles = block.text;
-    for (const f of block.files) {
+    const recent = recentReads(this.state.sessionId);
+    const block = buildRestoreBlock(recent, kept);
+    const attached = new Set(block?.files.map((f) => f.path));
+    const reads = getReadState(this.state.sessionId);
+    const others = recent.filter((p) => !attached.has(p) && !kept.has(p));
+    // An `edit` leaves no line window on its record (read-state.ts): the last
+    // touch was a change, not a read.
+    const touched = formatTouchedFiles(
+      others.filter((p) => reads.get(p)?.offset !== undefined),
+      others.filter((p) => reads.get(p)?.offset === undefined),
+    );
+    const skills = buildSkillBlock(
+      [...this.invokedSkills].reverse().map(([name, text]) => ({ name, text })),
+      keptSkills,
+    );
+    this.restoredFiles = [block?.text, touched, skills?.text].filter(Boolean).join("\n\n");
+    if (!this.restoredFiles) return;
+    for (const f of block?.files ?? []) {
       if (!f.dedupSafe) continue;
       touchReadState(this.state.sessionId, f.path, {
         mtimeMs: f.mtimeMs,
@@ -3427,7 +3456,11 @@ export class AgentLoop {
         inContext: true,
       });
     }
-    this.recorder.recordCompactRestored(block.files.length, Math.round(block.chars / 4));
+    this.recorder.recordCompactRestored(
+      block?.files.length ?? 0,
+      skills?.count ?? 0,
+      Math.round(this.restoredFiles.length / 4),
+    );
   }
 
   // ===========================================================================

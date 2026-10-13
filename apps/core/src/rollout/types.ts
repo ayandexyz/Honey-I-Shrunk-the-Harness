@@ -149,6 +149,7 @@ export interface CompactOccurredEvent extends BaseEvent {
 export interface CompactRestoredEvent extends BaseEvent {
   type: "compact.restored";
   files: number;
+  skills: number;
   /** Estimated at ~4 chars per token. */
   tokens: number;
 }

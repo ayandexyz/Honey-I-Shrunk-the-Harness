@@ -46,3 +46,30 @@ test("nothing to restore is undefined, not an empty block", () => {
   assert.equal(buildRestoreBlock([], new Set()), undefined);
   assert.equal(buildRestoreBlock([path.join(dir, "nope")], new Set()), undefined);
 });
+
+test("skills: most recent first, kept ones skipped, a big one truncated not dropped", async () => {
+  const { buildSkillBlock, RESTORE_SKILL_CHARS } = await import("./restore.js");
+  const block = buildSkillBlock(
+    [
+      { name: "newest", text: "<skill_content name=\"newest\">do X</skill_content>" },
+      { name: "kept", text: "still in the transcript" },
+      { name: "big", text: "T".repeat(RESTORE_SKILL_CHARS + 5) },
+    ],
+    new Set(["kept"]),
+  )!;
+  assert.equal(block.count, 2);
+  assert.match(block.text, /re-attached after compaction/);
+  assert.ok(block.text.indexOf("do X") < block.text.indexOf("TTT"), "newest first");
+  assert.ok(!block.text.includes("still in the transcript"));
+  assert.match(block.text, /truncated — load the skill again/);
+  assert.equal(buildSkillBlock([], new Set()), undefined);
+});
+
+test("touched files are listed by path, modified apart from read, and capped", async () => {
+  const { formatTouchedFiles, TOUCHED_FILES_MAX } = await import("./restore.js");
+  const text = formatTouchedFiles(["a.ts"], ["b.ts"]);
+  assert.match(text, /<modified-files>\nb\.ts\n<\/modified-files>\n<read-files>\na\.ts\n<\/read-files>/);
+  assert.equal(formatTouchedFiles([], []), "");
+  const many = Array.from({ length: TOUCHED_FILES_MAX + 10 }, (_, i) => `f${i}.ts`);
+  assert.equal(formatTouchedFiles(many, []).split("\n").filter((l) => l.endsWith(".ts")).length, TOUCHED_FILES_MAX);
+});

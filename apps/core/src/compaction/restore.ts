@@ -82,3 +82,49 @@ export function buildRestoreBlock(recent: string[], skip: Set<string>): RestoreB
     chars,
   };
 }
+
+// Skills loaded this session (claude-code services/compact/compact.ts:129-130,
+// createSkillAttachmentIfNeeded): a skill's instructions live in a `skill`
+// tool result, which the summary replaces like any other. Top of a skill is
+// usually the critical part, so truncation beats dropping.
+export const RESTORE_SKILL_CHARS = 20_000;
+export const RESTORE_SKILLS_TOTAL_CHARS = 100_000;
+
+/** `skills` is most-recent first, each the exact text the `skill` tool returned. */
+export function buildSkillBlock(
+  skills: { name: string; text: string }[],
+  skip: Set<string>,
+): { text: string; count: number; chars: number } | undefined {
+  const parts: string[] = [];
+  let chars = 0;
+  for (const s of skills) {
+    if (skip.has(s.name) || chars >= RESTORE_SKILLS_TOTAL_CHARS) continue;
+    const room = Math.min(RESTORE_SKILL_CHARS, RESTORE_SKILLS_TOTAL_CHARS - chars);
+    const shown = s.text.length <= room ? s.text : `${s.text.slice(0, room)}\n(truncated — load the skill again for the rest)`;
+    parts.push(shown);
+    chars += Math.min(s.text.length, room);
+  }
+  if (parts.length === 0) return undefined;
+  return {
+    text: "Skills you loaded earlier, re-attached after compaction (still in effect):\n\n" + parts.join("\n\n"),
+    count: parts.length,
+    chars,
+  };
+}
+
+/**
+ * Every other file touched this session, by path only (pi's
+ * `<read-files>`/`<modified-files>`, coding-agent/src/core/compaction/utils.ts):
+ * cheap, and it covers what the 5-file restore leaves out.
+ */
+export const TOUCHED_FILES_MAX = 50;
+
+export function formatTouchedFiles(read: string[], modified: string[]): string {
+  const sections: string[] = [];
+  const cap = (xs: string[]) => xs.slice(0, TOUCHED_FILES_MAX).join("\n");
+  if (modified.length) sections.push(`<modified-files>\n${cap(modified)}\n</modified-files>`);
+  if (read.length) sections.push(`<read-files>\n${cap(read)}\n</read-files>`);
+  return sections.length
+    ? "Other files touched earlier in this session (not attached — read them if you need them):\n" + sections.join("\n")
+    : "";
+}

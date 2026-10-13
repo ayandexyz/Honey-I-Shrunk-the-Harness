@@ -250,6 +250,37 @@ Built:
    recorded, never paths. Not persisted: after a restart the read state is
    gone too, so the model simply reads again. Off: `FREECODE_COMPACT_RESTORE=0`
    (per compaction, `eval ab`-able).
+3. **Skills and touched files**, after comparing with opencode and pi:
+   - **Skills** (claude-code `createSkillAttachmentIfNeeded`, ≤5K tokens per
+     skill, ≤25K total): the loop keeps the exact text each `skill` call
+     returned (`AgentLoop.invokedSkills`) and re-attaches the ones whose result
+     did not survive in the kept messages, newest first, truncated rather than
+     dropped. opencode protects `skill` outputs from pruning instead
+     (`PRUNE_PROTECTED_TOOLS`); freecode's pruner already never touches a
+     result once sent, so pruning was never the gap — compaction was.
+   - **Touched files by path** (pi's `<read-files>`/`<modified-files>`,
+     `coding-agent/src/core/compaction/utils.ts`): every other file read or
+     edited this session, ≤50 per list, so the 5-file cap does not hide the rest.
+   `compact.restored` carries `{ files, skills, tokens }`.
+
+Compared (2026-10-13, local clones): claude-code clears read state and
+re-attaches files, plan, skills, agent and tool listings; opencode has no
+restore (prunes old tool outputs, protects skills); pi lists file paths in the
+summary. Freecode now does claude-code's files + skills and pi's path list; the
+plan file has no freecode equivalent (todos already ride every request's
+ephemeral tail), and tool/MCP listings are in the system prompt, which
+compaction does not touch.
+
+### 4.3.2 `eval ab` (2026-10-13)
+
+`coding --cases compaction-survives-multi-file-edit,real-tool-call-after-compaction-summary`,
+`FREECODE_COMPACT_RESTORE=0` vs `1`, 5 trials, MiniMax-M3, both sides with the
+dedup fix, measured on the files-only version (`dca4afbb`, before the skills
+and path list): **5/5 → 5/5 on both cases, 0 infrastructure failures**. The
+restore fired in all 10 candidate trials (2–4 files, ~1.5–3K tokens). Tokens
+−0.1%, cost +0.4%, turns 120 → 113, repeated calls 3 → 1, reads after a
+compaction 16 → 13, zero stubs on either side. The fixtures are too small for
+the restore to save much; Phase 4's long trials are the real measure.
 
 ### 4.4 Scratch scripts (lower priority)
 

@@ -286,11 +286,11 @@ export class RolloutRecorder {
     this.write(event);
   }
 
-  recordCompactRestored(files: number, tokens: number): void {
+  recordCompactRestored(files: number, skills: number, tokens: number): void {
     this.write(
       this.makeEvent("compact.restored", {
         aggregateID: this.sessionId,
-        fields: { files, tokens },
+        fields: { files, skills, tokens },
       }),
     );
   }
