@@ -39,6 +39,9 @@ left out.
 | Variable | Default | Purpose |
 |---|---|---|
 | `FREECODE_REPEATED_ERROR` | on | `0` turns off signal E, the "same error back after edits" detector and its one nudge (`agent/repeated-error.ts`). `eval ab`. |
+| `FREECODE_VERIFY_TESTS` | on | `0` skips the finish-time test run for changes of ≥3 files (`verify.tests: false` in settings). Runs each changed file's nearest `package.json` `test` script (`agent/verify-tests.ts`). `eval ab`. |
+| `FREECODE_VERIFY_TEST_COMMAND` | discovered | Test command to run at finish instead of each changed file's package `test` script (`verify.testCommand` in settings). |
+| `FREECODE_UNWIRED_CHECK` | on | `0` turns off the finish-time "nothing outside tests calls this" reminder (`agent/unwired.ts`). `eval ab`. |
 | `FREECODE_DISABLE_REDIRECT` | redirect off | `0` turns trajectory redirection **on** (an extra model call that advises a stuck run), `1` forces it off. Two-way, beats `redirect.enabled`. `eval ab`. |
 | `FREECODE_AUTO_POKE` | off | `1` sends a model that stopped with open todos back to finish them (max 3 per run). `eval ab`. |
 | `FREECODE_CONFIDENCE_GATE` | off | `1`: a todo marked done with a +40 confidence jump in one call is sent back to verify. `eval ab`. |

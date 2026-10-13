@@ -1,7 +1,8 @@
 # Finish-Time Verification: tests before "done", and code nobody calls
 
-> **Status:** Draft (2026-10-13), approved in conversation section by section.
-> Nothing built. **Branch:** `fix/stuck-error-recovery`.
+> **Status:** Phases 1–3 **built 2026-10-13** (§4.1, §4.2); Phase 4 (release +
+> long-task rerun) not run. Plan: `docs/superpowers/plans/2026-10-13-finish-time-verification.md`.
+> **Branch:** `fix/stuck-error-recovery`.
 > **Evidence:** `docs/2026-10-13-long-task-bench-results.md` §3.3, the nine
 > `pathology-commits-v2` trials, `TODO.md` ("Finishing without a full test run",
 > "Built but never wired").
@@ -148,8 +149,8 @@ investigation first), non-JS languages in 2.2, any hard block.
 | Phase | Content | Pass bar |
 |---|---|---|
 | 1 ✅ | **Offline calibration (free)** — done 2026-10-13, §4.1. Run 2.2 on the nine v2 patches (on their parent commits) and on this repo's last ~50 real `apps/core` commits. Measure, from rollout history, how often a ≥3-file run ran a full test command after its last edit. | Flags `attachLoop` in t1; **≤1 false flag per real commit on average**, else tighten 2.2 first. |
-| 2 | **2.1 + 2.2** in the loop, unit tests, logging, off switches. New coding eval case: a multi-file feature whose checker goes only through the entry point. | `eval ab coding`, new case included, no regression. |
-| 3 | **2.3** verifier prompt. | `eval ab` on the new case (the verifier only runs on ≥3-file changes, so short evals show little). |
+| 2 ✅ | **2.1 + 2.2** in the loop, unit tests, logging, off switches. New coding eval case: a multi-file feature whose checker goes only through the entry point. | `eval ab coding`, new case included, no regression. |
+| 3 ✅ | **2.3** verifier prompt. | `eval ab` on the new case (the verifier only runs on ≥3-file changes, so short evals show little). |
 | 4 | **Release + long-task rerun** (shared with the stuck-loop spec): same nine trials, Haiku judge with the parent-commit baseline. | No regressions beyond the baseline; fewer "never wired" weaknesses; judge mean up. Report the minutes 2.1 adds per long run (expect ~2–3). |
 
 ### 4.1 Phase 1 result (2026-10-13)
@@ -169,4 +170,22 @@ The first run **missed `attachLoop`**: its only non-test mentions were its own
 doc comments, which `git grep` counted as callers. Comment lines (`//`, `/*`,
 ` *`) no longer count as references; string literals still do (string-keyed
 dispatch). The real-commit false-flag rate did not change (0.12 both runs).
+
+### 4.2 Phases 2–3 result (2026-10-13)
+
+Built: `agent/unwired.ts`, `agent/verify-tests.ts`, the loop's test and
+no-callers gates, `verify.ran` / `unwired.flagged`, `buildVerifierTask`. New
+coding case `wire-a-new-flag-through-the-cli` (its checker goes only through
+the CLI; a built-but-unwired `--shout` fails it — checked by hand before the
+run). Core 1913/1913.
+
+`eval ab coding`, `FREECODE_VERIFY_TESTS`+`FREECODE_UNWIRED_CHECK` 0 vs 1,
+5 trials, all 15 cases, MiniMax-M3 (ledger `2026-10-13-coding-6`, **kept**):
+**15/15 unchanged-pass, 0 infrastructure failures**, cost −5.2% (noise). The
+test gate ran in all 5 candidate trials of the new case (`tests` ok each
+time) and on no other case (fewer than 3 files, or no `test` script). M3 wired
+the flag correctly on both sides, so the gate had nothing to catch: this
+proves the gate is safe and works live, not that it helps — Phase 4 measures
+that. The no-callers check skipped throughout (eval sandboxes are not git
+repos).
 

@@ -504,31 +504,18 @@ From the first `pnpm bench:pathology` over 12,370 runs (HARNESS-BENCH.md §3b):
       either saves time). Phase 5 is done as a failure-time bash hint
       (`tools/scratch-hint.ts`), not a prompt line. A stop tier
       for E stays unbuilt until a recorded run shows where it would be right.
-- [ ] **Finishing without a full test run lets regressions through.**
-      `add-agent-control` v2 t2 and t3 ran only the test files they touched
-      (`server.test.ts`, `registry.test.ts`, `agent-control.test.ts`) and
-      never `pnpm -C apps/core test`. Three real regressions shipped in other
-      files: an eval case naming a parameter the renamed tool no longer has
-      (`eval/dataset.test.ts`), a new IPC method with no param contract
-      (`ipc/validate-params.test.ts`), and `agents.stop` dropping the
-      caller-is-parent check. Measurable from the log (was the project's full
-      test command run after the last edit?); candidate `bench:pathology`
-      flag `unverified_finish`, and possibly a finish-time reminder.
-      (`final-checks.json` now keeps the `not ok` / `error TS` lines from
-      the part of a check's output the 20K tail cuts, since 2026-10-13.)
-- [ ] **"Built but never wired" is the main quality failure on long tasks.**
-      `bench:judge` on the nine v2 trials (GPT judge only, see next item):
-      3.5–6.8 / 10, mean 4.8, although every trial passes `tsc` and every
-      trial's tests match the parent commit's baseline. The judge's top
-      weakness in most trials is a feature whose parts exist and are unit
-      tested but are not connected to the path that runs: `attachLoop` never
-      called from `tools/agent.ts`; `night stop` writing `cancelRequested`
-      that the orchestrator's `stopRequested` never reads (two trials);
-      `--push` calling a method that is never supplied; `--worktree` creating
-      a worktree and then working in the original checkout. Unit tests pass
-      because each part is tested alone. Not a stuck-loop problem; candidate
-      fix is a finish-time check ("trace the user-facing entry point to your
-      new code") and an end-to-end test per feature. Needs its own spec.
+- [ ] **Finishing without tests, and "built but never wired": built, effect
+      not measured yet.** Spec `2026-10-13-finish-time-verification.md`
+      Phases 1–3 done 2026-10-13: a change of ≥3 files now runs each changed
+      file's package `test` script before finishing (`agent/verify-tests.ts`;
+      the verify gate used to run only the typecheck, and only 5% of such runs
+      re-ran tests themselves), a deterministic "no callers" check names new
+      code nothing outside tests calls (`agent/unwired.ts`, 0.12 false flags
+      per real commit, catches v2 t1's `attachLoop`), and the verifier now gets
+      both plus a reachability instruction. Left: Phase 4 (release + rerun the
+      nine long trials, Haiku judge) — the only test of whether "never wired"
+      verdicts drop. `cancelRequested`-style "written, never read" bugs depend
+      on the verifier following the instruction, which is not guaranteed.
 - [ ] **Rerun the v2 long-task trials with a working `grep` tool.** All 88
       `grep` calls in them failed (no `rg` in the image; tool, image and
       `bench:pathology` fixed 2026-10-13), so every v2 number carries that
