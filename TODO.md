@@ -553,12 +553,10 @@ From the first `pnpm bench:pathology` over 12,370 runs (HARNESS-BENCH.md §3b):
       a compaction (24 of 25 in v2 t1, 5 compactions). Cheap per read, but it
       grows with every compaction. Candidate: carry the read-file list in the
       compaction summary.
-- [ ] **The bench image still has no ripgrep** (tool side fixed 2026-10-13:
-      release archives ship `rg` beside the binary, `tools/grep.ts`
-      `ripgrepPath`, and a missing `rg` is now `success: false` telling the
-      model to use bash `grep -rn` instead of a silent "no matches"). Left:
-      add `ripgrep` to `bench/agent-bench/isolate/Dockerfile` for the other
-      agents; in `bench:pathology`, don't count failed searches as circles.
+- [ ] **`bench:pathology` counts a failed repeated search as a search circle.**
+      The `search_circles` flag on fix-night-envelope t1 was the same failing
+      `grep` call resent (no `rg` in the image; tool and image both fixed
+      2026-10-13). A search that *failed* is a tool problem, not a circle.
       **All 88 `grep` calls in the v2 long-task trials failed** — every v2
       number was measured with this handicap, rerun after the fix.
 - [x] ~~**Measured input shrink per compaction is ~5% and sometimes negative**~~

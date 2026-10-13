@@ -27,7 +27,7 @@ import {
   ensureNetworks,
   forwardedEnvNames,
   imageExists,
-  imageHasPnpm,
+  imageHas,
   startProxyContainer,
 } from "../isolate/docker.js";
 import { meterEnv, upstreamFor } from "../proxy/env.js";
@@ -84,9 +84,14 @@ async function main() {
     }
     ensureNetworks();
     if (judged) fs.mkdirSync(PNPM_STORE_DIR, { recursive: true });
-    if (judged && !imageHasPnpm(IMAGE)) {
+    if (judged && !imageHas(IMAGE, "pnpm")) {
       // Images built before the judged set carry no pnpm; every setup would fail.
       throw new Error(`the "${IMAGE}" image has no pnpm; rebuild it (online): pnpm bench:image`);
+    }
+    if (!imageHas(IMAGE, "rg")) {
+      // Without rg every agent's grep tool fails and the run measures that
+      // (all 88 freecode grep calls in the 2026-10-13 long-task run).
+      throw new Error(`the "${IMAGE}" image has no ripgrep; rebuild it (online): pnpm bench:image`);
     }
   }
 

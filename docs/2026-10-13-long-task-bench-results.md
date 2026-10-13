@@ -166,9 +166,11 @@ calibrated thinking-loop detector; grok-build does it server-side and resamples.
 
 In suggested order. Each is also a TODO.md entry or a spec phase.
 
-0. [ ] **Install ripgrep in the bench image** (`isolate/Dockerfile`), rebuild,
-       and treat every v2 number as measured with a broken `grep` tool (§3.4).
-       Rerun before comparing against any fix.
+0. [x] **Install ripgrep in the bench image** — `isolate/Dockerfile` installs
+       it and `bench:agents --isolate` refuses an image without `rg`
+       (2026-10-13). Rebuild with `pnpm bench:image` and treat every v2 number
+       as measured with a broken `grep` tool (§3.4); rerun before comparing
+       against any fix.
 0. [x] **`grep` tool without `rg`** — fixed 2026-10-13 the way Claude Code
        does it: release archives ship `rg` beside the binary
        (`release.yml`, `tools/grep.ts` `ripgrepPath`), and a missing `rg` is

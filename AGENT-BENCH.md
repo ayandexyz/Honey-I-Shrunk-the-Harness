@@ -405,8 +405,11 @@ turned off.
 - **The screen barely filters this repo.** It kept 10 of 16 in the pilot, and 7
   of those came from two feature series. Our commits are phase-sized, so "HARD"
   is the default.
-- **The image needs pnpm.** Images built before the judged set lack it, and an
-  isolated judged run refuses them with the rebuild command.
+- **The image needs pnpm and ripgrep.** Images built before the judged set lack
+  pnpm, and an isolated judged run refuses them with the rebuild command.
+  Images built before 2026-10-13 lack `rg`, and every `--isolate` run refuses
+  them: without it freecode's `grep` tool failed on every call and opencode's
+  could not download its own copy offline.
 - **You must be in the `docker` group** (`sudo usermod -aG docker $USER`, then
   log in again), or every docker call fails with "permission denied".
 - **Gemini is retried twice before GPT takes over.** The first live smoke
