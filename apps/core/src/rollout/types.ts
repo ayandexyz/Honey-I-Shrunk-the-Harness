@@ -31,6 +31,7 @@ export type RolloutEvent =
   | FunctionOutputEvent
   | FunctionDeniedEvent
   | CompactOccurredEvent
+  | CompactRestoredEvent
   | SubagentStartEvent
   | SubagentStopEvent
   | SkillInvokedEvent
@@ -139,6 +140,17 @@ export interface CompactOccurredEvent extends BaseEvent {
   type: "compact.occurred";
   beforeTokens: number;
   afterTokens: number;
+}
+
+/**
+ * Files re-attached after a compaction (compaction/restore.ts). Counts only:
+ * paths never enter the log, matching checkpoints, so OTLP stays leak-free.
+ */
+export interface CompactRestoredEvent extends BaseEvent {
+  type: "compact.restored";
+  files: number;
+  /** Estimated at ~4 chars per token. */
+  tokens: number;
 }
 
 export interface SubagentStartEvent extends BaseEvent {

@@ -120,7 +120,13 @@ import type { ToolOrchestrator } from "../tools/orchestrator.js";
 import { getToolDefs, unattendedToolDefs } from "../tools/defs-cache.js";
 import type { UnattendedContext } from "../autonomous/types.js";
 import { planToolBatches } from "../tools/batching.js";
-import { markAllReadsCompacted, markReadPruned } from "../tools/read-state.js";
+import {
+  markAllReadsCompacted,
+  markReadPruned,
+  recentReads,
+  touchReadState,
+} from "../tools/read-state.js";
+import { buildRestoreBlock } from "../compaction/restore.js";
 import {
   PruneState,
   getPruneState,
@@ -490,6 +496,10 @@ export class AgentLoop {
   private healthWarned = new Set<string>();
   // Loop-health reasons already written as `loop.warned` this run.
   private warnRecorded = new Set<string>();
+  // Files re-attached by the last compaction, sent inside the summary's system
+  // block until the next one (compaction/restore.ts). Not persisted: after a
+  // restart the read state is gone too, so the model simply reads again.
+  private restoredFiles = "";
   // Signal E's per-line state (agent/repeated-error.ts), per run.
   private repeatedErrors = createRepeatedErrors();
   private turnsSinceTodoWrite = 0;
@@ -1646,6 +1656,7 @@ export class AgentLoop {
         outcome.tokensBefore,
         outcome.tokensAfter,
       );
+      this.restoreRecentFiles();
     } else if (outcome.reason === "nothing to compact") {
       // Routine: the threshold check is a prediction and often fires with
       // nothing to do. WARN reaches the TUI transcript; this is not a warning.
@@ -2004,7 +2015,7 @@ export class AgentLoop {
         ...(compactionSummary
           ? [
               {
-                text: `Compacted session summary:\n${compactionSummary}`,
+                text: `Compacted session summary:\n${compactionSummary}${this.restoredFiles ? `\n\n${this.restoredFiles}` : ""}`,
                 cache: false,
               },
             ]
@@ -3380,6 +3391,43 @@ export class AgentLoop {
     } catch (error) {
       return { success: false, error: String(error) };
     }
+  }
+
+  // ===========================================================================
+  // PRIVATE: restoreRecentFiles()
+  // After a compaction, re-attach the files the model was working on so it
+  // does not reload them (spec 2026-10-13-stuck-loop-recovery.md §4.3). Files
+  // whose read result survived in the kept messages are skipped. A file shown
+  // exactly as a default read would show it is registered as in context, so a
+  // re-read correctly gets the "unchanged" stub. FREECODE_COMPACT_RESTORE=0
+  // turns it off, read per compaction for `eval ab`.
+  // ===========================================================================
+  private restoreRecentFiles(): void {
+    this.restoredFiles = "";
+    if (process.env.FREECODE_COMPACT_RESTORE === "0") return;
+    const kept = new Set<string>();
+    for (const m of this.history) {
+      for (const part of m.parts) {
+        const fp = part.type === "tool" && part.tool.tool === "read"
+          ? (part.tool.args as { filePath?: unknown })?.filePath
+          : undefined;
+        if (typeof fp === "string") kept.add(fp);
+      }
+    }
+    const block = buildRestoreBlock(recentReads(this.state.sessionId), kept);
+    if (!block) return;
+    this.restoredFiles = block.text;
+    for (const f of block.files) {
+      if (!f.dedupSafe) continue;
+      touchReadState(this.state.sessionId, f.path, {
+        mtimeMs: f.mtimeMs,
+        size: f.size,
+        offset: 1,
+        limit: 2000,
+        inContext: true,
+      });
+    }
+    this.recorder.recordCompactRestored(block.files.length, Math.round(block.chars / 4));
   }
 
   // ===========================================================================

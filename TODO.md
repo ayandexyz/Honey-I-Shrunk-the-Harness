@@ -496,13 +496,13 @@ From the first `pnpm bench:pathology` over 12,370 runs (HARNESS-BENCH.md §3b):
       Unknown whether the model is forgetting, or the read output is
       truncated/unclear and it retries. Open a few with `freecode trace`
       before deciding whether this is a tool-output fix or a prompt fix.
-- [ ] **Stuck-on-one-error: signal E is built (warn-only), its effect is not
-      measured yet.** Spec `2026-10-13-stuck-loop-recovery.md` Phases 1–2 done
-      2026-10-13 (`agent/repeated-error.ts`, threshold 5). Left: Phase 3
-      (post-compaction restore + unchanged-read stub), Phase 4 (release,
+- [ ] **Stuck-on-one-error and rereads after compaction: built, effect not
+      measured yet.** Spec `2026-10-13-stuck-loop-recovery.md` Phases 1–3 done
+      2026-10-13 (signal E, threshold 5, warn-only; compaction ends read
+      dedup; post-compaction restore). Left: Phase 4 (release,
       `pnpm bench:image`, rerun the 9 long trials — the only test of whether
-      the nudge saves time), Phase 5 (scratch-script prompt line). A stop
-      tier stays unbuilt until a recorded run shows where it would be right.
+      either saves time), Phase 5 (scratch-script prompt line). A stop tier
+      for E stays unbuilt until a recorded run shows where it would be right.
 - [ ] **Finishing without a full test run lets regressions through.**
       `add-agent-control` v2 t2 and t3 ran only the test files they touched
       (`server.test.ts`, `registry.test.ts`, `agent-control.test.ts`) and
@@ -528,10 +528,6 @@ From the first `pnpm bench:pathology` over 12,370 runs (HARNESS-BENCH.md §3b):
       because each part is tested alone. Not a stuck-loop problem; candidate
       fix is a finish-time check ("trace the user-facing entry point to your
       new code") and an end-to-end test per feature. Needs its own spec.
-- [ ] **Compaction makes it reread.** On long tasks almost every reread follows
-      a compaction (24 of 25 in v2 t1, 5 compactions). Cheap per read, but it
-      grows with every compaction. Candidate: carry the read-file list in the
-      compaction summary.
 - [ ] **Rerun the v2 long-task trials with a working `grep` tool.** All 88
       `grep` calls in them failed (no `rg` in the image; tool, image and
       `bench:pathology` fixed 2026-10-13), so every v2 number carries that

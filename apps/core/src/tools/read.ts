@@ -7,7 +7,7 @@ import * as path from "path";
 import type { ToolContext } from "./types.js";
 import type { Tool, ToolExecutionResult, JsonSchema } from "./tool.types.js";
 import { buildTool } from "./factory.js";
-import { getReadState, canDedup } from "./read-state.js";
+import { getReadState, canDedup, touchReadState } from "./read-state.js";
 import { coerceNumber, coerceBoolean, isPositiveInt } from "./coerce-args.js";
 
 interface ReadParams {
@@ -347,7 +347,7 @@ async function executeRead(
 
     // Record what was shown, so an identical re-read can be deduped and so
     // `edit` can tell whether the file changed underneath the model.
-    readState?.set(filepath, { ...current, inContext: true });
+    if (ctx.sessionId) touchReadState(ctx.sessionId, filepath, { ...current, inContext: true });
 
     return {
       success: true,

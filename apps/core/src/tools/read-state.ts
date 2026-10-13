@@ -47,6 +47,22 @@ export function getReadState(sessionId: string): Map<string, ReadRecord> {
   return state;
 }
 
+/**
+ * Record a file, moving it to the most-recent end: the post-compaction
+ * restore (compaction/restore.ts) re-attaches the newest first. A plain
+ * Map.set keeps an existing key's old position.
+ */
+export function touchReadState(sessionId: string, filePath: string, record: ReadRecord): void {
+  const state = getReadState(sessionId);
+  state.delete(filePath);
+  state.set(filePath, record);
+}
+
+/** Paths read or edited this session, most recent first. */
+export function recentReads(sessionId: string): string[] {
+  return [...(states.get(sessionId)?.keys() ?? [])].reverse();
+}
+
 export function disposeReadState(sessionId: string): void {
   states.delete(sessionId);
 }

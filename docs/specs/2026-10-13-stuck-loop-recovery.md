@@ -7,7 +7,11 @@
 > `effect/loop-health.ts`), **warn-only** (owner decision: neither claude-code
 > nor opencode ever stops a run on its own, and no recorded run reached a stop
 > threshold), the §4.2 reminder, and `loop.warned` (§4.5). `eval ab` §5.2.1.
-> Phases 3–5 not built.
+> **Phase 3 built 2026-10-13** (§4.3.1): the unchanged-read stub already
+> existed (`tools/read-state.ts`, RC5) — the spec was wrong — but compaction
+> never ended it, so 89 of 100 stubs in the long-task run pointed at content
+> the summary had replaced. Fixed, plus the post-compaction restore. Phases 4–5
+> not built.
 > **Branch:** `fix/stuck-error-recovery`.
 > **Evidence:** `bench:pathology` (`bench/harness-signals/pathology.ts`,
 > HARNESS-BENCH.md §3b), the long-task run in
@@ -215,6 +219,38 @@ Following claude-code (§3.1):
   (CLAUDE.md: only compaction may change the cached prefix, because it
   documents its own invalidation).
 
+### 4.3.1 What was built (2026-10-13)
+
+**Correction.** §3.1 and §3.2 said freecode had no unchanged-read stub. It has
+had one since the 2026-08-05 token-efficiency work (`tools/read-state.ts`,
+`canDedup`, RC5, mirroring claude-code). It ends when a read result is
+*pruned* (`markReadPruned`), but **compaction never ended it**. claude-code
+clears its read state at compaction; freecode did not. Measured on the
+long-task run: **89 of 100 "byte-for-byte identical — scroll up" stubs**
+pointed at a read the summary had already replaced. After one, the model read
+the file through bash (28), asked again and got the stub again (19), tried
+another window (7), or went on without the file (35).
+
+Built:
+
+1. **`markAllReadsCompacted(sessionId)`** clears the in-context flag of every
+   record, from `applyCompaction` (loop and manual `/compact`) and the loop's
+   store-less path. Records stay, so `edit`'s staleness check keeps its mtimes.
+2. **Post-compaction restore** (`compaction/restore.ts`,
+   `AgentLoop.restoreRecentFiles`): the 5 most recently read *or edited* files
+   (recency via `touchReadState`, which moves a path to the end of the map),
+   ≤20K chars each (≈5K tokens), ≤200K total (≈50K), current content on disk,
+   skipping files whose read result is still in the kept messages. The block
+   is appended to the summary's system block **at request time, never stored
+   in the summary** (the next compaction would summarise it again), and it
+   changes only at a compaction, so it adds no cache break. A restored file is
+   registered as in context only when it is exactly what a default `read`
+   would show (whole, ≤2000 lines, no line over 2000 chars); otherwise a
+   re-read returns the real file. `compact.restored { files, tokens }` is
+   recorded, never paths. Not persisted: after a restart the read state is
+   gone too, so the model simply reads again. Off: `FREECODE_COMPACT_RESTORE=0`
+   (per compaction, `eval ab`-able).
+
 ### 4.4 Scratch scripts (lower priority)
 
 One line in the bash tool description or system prompt: put probe scripts
@@ -351,7 +387,7 @@ offline failures, TODO.md). n=9 is small: report each trial, not a mean.
 | 0 | `bench:pathology`, isolated rollout capture, long-task run | **built** (`b14585cf`, `41671218`) |
 | 1 | §5.1 calibration report; threshold + exclusion chosen | zero legitimate hits in sample — **done 2026-10-13: threshold 5 (§5.1.1)** |
 | 2 | Signal E + reminder (§4.1–4.2), unit tests next to `loop-health.ts` | `eval ab` §5.2, no regression — **built 2026-10-13, warn-only** |
-| 3 | Unchanged-read stub + post-compaction restore (§4.3) | `eval ab` incl. `compaction-boundary`; cache-miss detector shows no new `harness:*` misses |
+| 3 | Unchanged-read stub + post-compaction restore (§4.3) | `eval ab` incl. `compaction-boundary`; cache-miss detector shows no new `harness:*` misses — **built 2026-10-13 (§4.3.1)**, A/B pending |
 | 4 | Release, rebuild image, §5.3 rerun | numbers in this spec |
 | 5 | §4.4 scratch-script line | `eval ab` |
 
