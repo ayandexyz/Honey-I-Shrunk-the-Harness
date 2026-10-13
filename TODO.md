@@ -487,6 +487,8 @@ spike. What is left is measurement, not code:
 
 ## Run pathology — first pass (2026-10-12)
 
+Results, numbers and the ordered to-do list: `docs/2026-10-13-long-task-bench-results.md`.
+
 From the first `pnpm bench:pathology` over 12,370 runs (HARNESS-BENCH.md §3b):
 
 - [ ] **37 zero-edit runs reread the same file range 30–56% of the time**
@@ -551,11 +553,11 @@ From the first `pnpm bench:pathology` over 12,370 runs (HARNESS-BENCH.md §3b):
       a compaction (24 of 25 in v2 t1, 5 compactions). Cheap per read, but it
       grows with every compaction. Candidate: carry the read-file list in the
       compaction summary.
-- [ ] **Measured input shrink per compaction is ~5% and sometimes negative**
-      on the `compaction-boundary` eval case. Those thresholds are tiny by
-      design, so this needs checking on a real long session before calling it
-      a bug, but a compaction that leaves the next request larger than before
-      did nothing except invalidate the cache.
+- [x] ~~**Measured input shrink per compaction is ~5% and sometimes negative**~~
+      Checked on real long sessions (v2 long-task trials): 61–70% shrink per
+      compaction, no compaction loops. The ~5% is the `compaction-boundary`
+      eval case's tiny thresholds, not a bug. The real compaction cost is the
+      rereads (item above). Full write-up: `docs/2026-10-13-long-task-bench-results.md`.
 
 ## Spec findings (eval harness — 2026-08-23)
 
