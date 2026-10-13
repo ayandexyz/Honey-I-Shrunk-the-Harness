@@ -245,6 +245,11 @@ fire**: `implement-night-morning` t1 (same tsc parse errors ×8),
 `add-agent-control` t1 (`not ok 709` ×5 in two minutes). **Should stay
 quiet**: `fix-night-envelope` t1 (errors keep *changing* — slow progress, not a
 loop) and every trial's repeats of the 3 baseline test failures (§4.1).
+Its `search_circles` flag is **not** a loop either: the bench image has no
+ripgrep, so every `grep` tool call returned `Executable not found in $PATH:
+"rg"` (88/88 across the run) and the model resent it. Install `rg` in the
+image before the §5.3 rerun, or the before/after comparison carries that
+handicap on one side only.
 
 Known legitimate shape to exclude: jcode-bench climbs (`3e5f45bf`, `401d8104`)
 repeat `grade: FAIL (verification)` while the score improves. Candidate

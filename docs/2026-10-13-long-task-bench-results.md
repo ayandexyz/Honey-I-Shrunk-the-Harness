@@ -54,7 +54,7 @@ Active minutes exclude setup (wall clock including setup is ~1–1.5 min more).
 | implement-night-morning t1 | **41.8** | 460 | 27.6M (98%) | $1.96 | 78 | 5 | 24/25 | `stuck_error` ×8 | ok | 4.0 |
 | implement-night-morning t2 | 17.9 | 206 | 11.3M (96%) | $0.88 | 41 | 3 | 18/18 | — | ok | 3.5 |
 | implement-night-morning t3 | 19.8 | 191 | 11.0M (97%) | $0.84 | 46 | 2 | 10/14 | — | ok | 5.0 |
-| fix-night-envelope t1 | **32.3** | 368 | 20.7M (97%) | $1.54 | 78 | 5 | 14/14 | `stuck_error` ×4, `search_circles` | ok | 4.5 |
+| fix-night-envelope t1 | **32.3** | 368 | 20.7M (97%) | $1.54 | 78 | 5 | 14/14 | `stuck_error` ×4, `search_circles` (= missing `rg`, §3.4) | ok | 4.5 |
 | fix-night-envelope t2 | 11.8 | 128 | 6.4M (96%) | $0.50 | 24 | — | — | — | ok | 5.2 |
 | fix-night-envelope t3 | 10.8 | 152 | 8.6M (96%) | $0.65 | 29 | — | — | — | ok | 5.5 |
 | add-agent-control t1 | 19.7 | 194 | 11.6M (97%) | $0.85 | 31 | — | — | `stuck_error` ×4 (`not ok 709` ×5) | ok | 5.0 |
@@ -118,6 +118,27 @@ small tmpfs and hits EDQUOT.)
 - **Recorded decision ignored**: fix-envelope t1 put the fix in `rules.ts`,
   against `docs/DECISIONS.md`; t2 fixed `envelope.ts` (correct); t3 changed both.
 
+### 3.4 Finding: the `grep` tool never worked in the bench image
+
+`search_circles` on fix-envelope t1 is **not** a model loop. **All 88 `grep`
+tool calls across the 9 trials failed** with `Executable not found in $PATH:
+"rg"` — the `agent-bench` image (`isolate/Dockerfile`) installs git, curl and
+ca-certificates but not ripgrep, and `tools/grep.ts` spawns `rg` with no
+fallback. (`glob` is unaffected: 30/30 succeeded.)
+
+- fix-envelope t1 sent the same two greps on 3 consecutive turns ~4 s apart
+  (turns 6–10, 0.6 min in), and again 5× at 23.6 min (turns 254–258) — each
+  time getting the same "Executable not found" back. That is the flag.
+- Every trial fell back to `grep`/`find` through `bash` (~320 such calls), so
+  work continued, but every trial paid for failed calls and retries, and some
+  of the "repeat commands" noise is this fallback.
+- **This biases every number in §3** toward freecode looking worse than it is
+  with a working grep tool. The SWE-bench control (`pathology-11019`) used the
+  same image.
+- **It is also a product bug**: `scripts/install.sh` does not install ripgrep
+  and no doc says it is required, so a user without `rg` on `PATH` has the same
+  broken tool. The error text does not tell the model what to do instead.
+
 ## 4. Prior art (stuck-loop handling)
 
 Full table in spec §3. Short version: opencode had `DOOM_LOOP_THRESHOLD=3`
@@ -129,6 +150,7 @@ calibrated thinking-loop detector; grok-build does it server-side and resamples.
 
 ## 5. Bench tooling problems found
 
+- **ripgrep missing from the image** — every `grep` tool call failed (§3.4).
 - Gemini key in `~/.freecode/config.json` is invalid ("API key not valid") →
   judge ran GPT-fallback only (0 audited, 9 fallback).
 - The judge counts the 3 baseline failures against every trial → scores are
@@ -144,6 +166,14 @@ calibrated thinking-loop detector; grok-build does it server-side and resamples.
 
 In suggested order. Each is also a TODO.md entry or a spec phase.
 
+0. [ ] **Install ripgrep in the bench image** (`isolate/Dockerfile`), rebuild,
+       and treat every v2 number as measured with a broken `grep` tool (§3.4).
+       Rerun before comparing against any fix.
+0. [ ] **`grep` tool without `rg`**: fall back to `grep -rn` (or bundle `rg`
+       in the release binary / install it in `install.sh`), and make the error
+       say "use bash grep" so the model does not retry. A missing binary
+       should also be a `bench:pathology` distinction: a repeated search that
+       *failed* is a tool problem, not a search circle.
 1. [ ] **Fix the Gemini judge key**, then
        `pnpm bench:judge --rejudge bench/agent-bench/results/pathology-commits-v2`.
 2. [ ] **Judge gets the baseline**: pass the parent commit's check results into
