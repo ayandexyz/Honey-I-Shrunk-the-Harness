@@ -49,7 +49,13 @@
 // question. `flags` is a list of things to look at, not a score.
 // =============================================================================
 
-import { createRepeatedErrors, type RepeatedError } from "./repeated-error.js";
+import {
+  createRepeatedErrors,
+  isBashWrite,
+  type RepeatedError,
+} from "../../apps/core/src/agent/repeated-error.js";
+
+export { isBashWrite };
 
 export interface PathEvent {
   type: string;
@@ -134,17 +140,8 @@ const SEARCH_TOOLS = new Set(["grep", "glob"]);
 // grep tool logged its errors as `failed: false` with the error as output (the
 // v2 long-task image had no `rg`), so old logs are matched by text.
 const SEARCH_ERROR = /^(Executable not found in \$PATH|spawn \S+ ENOENT|rg: |regex parse error)/;
-// Redirects to a file, in-place edits, file moves. Errs on missing things (e.g.
-// `python -c "open(...,'w')"`) rather than inventing progress. Redirects to
-// /dev and to log-shaped files are dropped first: `cmd > /tmp/lint.txt 2>&1`
-// is the agent reading output the long way round, not changing anything.
-const BASH_WRITE =
-  /\bsed\s+-i|\btee\b|(^|[^>&0-9])>>?\s*(?!&)[^\s|&;]|\bpatch\b|\bgit\s+(apply|checkout|restore|mv|rm)\b|(^|[;&|]\s*)(mv|cp|rm|mkdir|touch)\s/;
-const NOT_A_WRITE = /\d?>>?\s*(\/dev\/\S+|\S+\.(log|txt|out))|-o\s+\/dev\/null/g;
-
-export function isBashWrite(command: string): boolean {
-  return BASH_WRITE.test(command.replace(NOT_A_WRITE, " "));
-}
+// What counts as a write through bash lives with signal E in core
+// (`isBashWrite`, agent/repeated-error.ts), so the loop and this fold agree.
 
 // Only these move the run's clock. A run's tail also collects the NEXT prompt's
 // `checkpoint.captured` (written before its `turn-0`) and session-end

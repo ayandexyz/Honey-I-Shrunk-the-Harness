@@ -46,6 +46,7 @@ export type RolloutEvent =
   | MemoryExposureEvent
   | RedirectTriggeredEvent
   | RedirectSkippedEvent
+  | LoopWarnedEvent
   | PokeTriggeredEvent
   | PokeSkippedEvent
   | TodoSignalEvent
@@ -358,6 +359,24 @@ export interface RedirectSkippedEvent extends BaseEvent {
   turnId: string;
   /** RedirectSkipReason — "cap_reached", "timeout", "disabled", … */
   reason: string;
+}
+
+/**
+ * A loop-health signal reached its warn threshold, once per reason per run
+ * (spec 2026-10-13-stuck-loop-recovery.md §4.5). Before it, a warn with
+ * redirect off left only `redirect.skipped { disabled }`, which does not say
+ * which signal fired. Never carries the error text: it can hold paths and
+ * source, and OTLP export must stay leak-free.
+ */
+export interface LoopWarnedEvent extends BaseEvent {
+  type: "loop.warned";
+  turnId: string;
+  /** "repeated_identical_tool", "repeated_error", "no_progress", … */
+  reason: string;
+  /** The signal's counter when it fired. */
+  count: number;
+  /** A static reminder went to the model (A and E; the rest need redirect). */
+  reminded: boolean;
 }
 
 // ============================================================================

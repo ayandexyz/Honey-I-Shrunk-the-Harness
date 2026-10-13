@@ -625,6 +625,17 @@ export class RolloutRecorder {
       }),
     );
   }
+
+  recordLoopWarned(turnId: string, reason: string, count: number, reminded: boolean): void {
+    this.write(
+      this.makeEvent("loop.warned", {
+        aggregateID: this.sessionId,
+        turnId,
+        reason,
+        fields: { count, reminded },
+      }),
+    );
+  }
 }
 
 // ============================================================================

@@ -496,17 +496,13 @@ From the first `pnpm bench:pathology` over 12,370 runs (HARNESS-BENCH.md §3b):
       Unknown whether the model is forgetting, or the read output is
       truncated/unclear and it retries. Open a few with `freecode trace`
       before deciding whether this is a tool-output fix or a prompt fix.
-- [ ] **Stuck-on-one-error is the main long-task time sink, not dryness.**
-      `implement-night-morning` v2 t1 (41.8 min vs 16–22 for other trials) saw
-      the same 4 tsc parse errors 8 times over ~10 min while editing steadily,
-      so it never looked dry. User session `6d4b1c74` run 7 did the same at
-      small scale (one TS2345 four times in ~1.5 min). Shared moves: re-running
-      `tsc` with different greps instead of reading the reported line,
-      byte-dumping with `od -c`/awk, and `/tmp` probe scripts that cannot
-      resolve the repo's `node_modules`. `bench:pathology` flags it
-      (`stuck_error`). Candidate fix: a loop-health signal on a repeated error
-      fingerprint feeding the (off by default) redirect. That is an `eval ab`
-      decision.
+- [ ] **Stuck-on-one-error: signal E is built (warn-only), its effect is not
+      measured yet.** Spec `2026-10-13-stuck-loop-recovery.md` Phases 1–2 done
+      2026-10-13 (`agent/repeated-error.ts`, threshold 5). Left: Phase 3
+      (post-compaction restore + unchanged-read stub), Phase 4 (release,
+      `pnpm bench:image`, rerun the 9 long trials — the only test of whether
+      the nudge saves time), Phase 5 (scratch-script prompt line). A stop
+      tier stays unbuilt until a recorded run shows where it would be right.
 - [ ] **Finishing without a full test run lets regressions through.**
       `add-agent-control` v2 t2 and t3 ran only the test files they touched
       (`server.test.ts`, `registry.test.ts`, `agent-control.test.ts`) and

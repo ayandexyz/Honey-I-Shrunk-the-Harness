@@ -91,9 +91,11 @@ import {
   renderTodoPromptBlock,
   type TodoItem,
 } from "../tools/todo.js";
+import { createRepeatedErrors, errorLocation, isBashWrite } from "./repeated-error.js";
 import {
   MAX_TRUNCATED_TOOL_RETRIES,
   repeatedCallReminder,
+  repeatedErrorReminder,
   shouldNudgeTodo,
   todoNudgeReminder,
   truncatedToolCallReminder,
@@ -415,6 +417,9 @@ function estimatePromptChars(
 // Main entry point for continuous agent execution
 // =============================================================================
 
+// Tools that change a file — signal E counts a repeat only across one of these.
+const EDIT_TOOL_IDS = new Set(["edit", "write", "notebookedit"]);
+
 export class AgentLoop {
   // ---------------------------------------------------------------------------
   // Private State
@@ -483,6 +488,10 @@ export class AgentLoop {
   private runModel: { provider?: string; model?: string } = {};
   // Loop-health reasons already turned into a reminder this run.
   private healthWarned = new Set<string>();
+  // Loop-health reasons already written as `loop.warned` this run.
+  private warnRecorded = new Set<string>();
+  // Signal E's per-line state (agent/repeated-error.ts), per run.
+  private repeatedErrors = createRepeatedErrors();
   private turnsSinceTodoWrite = 0;
   // Did the model save a memory itself during this run? If so, extraction is
   // skipped — it has already said what it wanted to keep.
@@ -790,6 +799,7 @@ export class AgentLoop {
         stagnantTurns: 0,
         oscillationScore: 0,
         repeatedReasoningScore: 0,
+        repeatedError: 0,
       },
       // Redirection caps are per-run for the same reason: one prompt's
       // spending must not silently cap the next prompt's recovery.
@@ -808,6 +818,8 @@ export class AgentLoop {
     // active and run() starting, and a reset would drop that message.
     // Leftovers are emptied at the end by takeUndeliveredSteers().
     this.healthWarned = new Set<string>();
+    this.warnRecorded = new Set<string>();
+    this.repeatedErrors = createRepeatedErrors();
     this.turnsSinceTodoWrite = 0;
     this.turnsSinceLastNudge = 0;
     this.filesMutatedThisRun = false;
@@ -1024,6 +1036,7 @@ export class AgentLoop {
         }
         if (healthAction.action === "warn") {
           logger.debug(`[AgentLoop] Warning: ${healthAction.reason}`);
+          const warnReason = healthAction.reason ?? "unknown";
           // Trajectory redirection: turn the warning into evidence-backed
           // advice for this turn instead of a debug line nobody reads. Off by
           // default (D8); fails closed and costs nothing when it does.
@@ -1052,6 +1065,39 @@ export class AgentLoop {
                 ),
               );
             }
+          }
+          // E: same shape as A — one reminder per run, quoting the error and
+          // the line it names (spec 2026-10-13-stuck-loop-recovery.md §4.2).
+          if (
+            !spent &&
+            healthAction.reason === "repeated_error" &&
+            !this.healthWarned.has(healthAction.reason)
+          ) {
+            const top = this.repeatedErrors.current();
+            if (top.line) {
+              this.healthWarned.add(healthAction.reason);
+              this.pendingReminders.push(
+                repeatedErrorReminder(top.n, top.line, top.others, errorLocation(top.line)),
+              );
+            }
+          }
+          if (!this.warnRecorded.has(warnReason)) {
+            this.warnRecorded.add(warnReason);
+            const h = this.state.loopHealth;
+            const count =
+              {
+                repeated_identical_tool: h.repeatedTools + 1,
+                repeated_error: h.repeatedError,
+                no_progress: h.stagnantTurns,
+                oscillation_detected: h.oscillationScore,
+                repeated_reasoning: h.repeatedReasoningScore,
+              }[warnReason] ?? 0;
+            this.recorder.recordLoopWarned(
+              `turn-${this.state.turnCount}`,
+              warnReason,
+              count,
+              this.healthWarned.has(warnReason),
+            );
           }
           if (spent) {
             // D7: the supervisor's tokens are the run's tokens. A cost the
@@ -3356,6 +3402,33 @@ export class AgentLoop {
     this.state.loopHealth = {
       ...this.state.loopHealth,
       repeatedTools: identicalCount - 1, // -1 because current call is in the array
+    };
+
+    // E. The same located error back in bash output after an edit. Fed the
+    // text the rollout records for this call, so `bench:pathology` replays the
+    // same decision. A failed edit changed nothing and does not count (the
+    // offline fold counts it, so it can only fire earlier than the loop).
+    // FREECODE_REPEATED_ERROR=0 turns it off, read per call so `eval ab` can
+    // flip it between trials.
+    const args = toolCall.args as Record<string, unknown> | undefined;
+    const command =
+      toolCall.tool === "bash" &&
+      typeof args?.command === "string" &&
+      process.env.FREECODE_REPEATED_ERROR !== "0"
+        ? args.command
+        : undefined;
+    if (
+      (EDIT_TOOL_IDS.has(toolCall.tool) && !result.error) ||
+      (command !== undefined && isBashWrite(command))
+    ) {
+      this.repeatedErrors.edit();
+    }
+    if (command !== undefined) {
+      this.repeatedErrors.output(command, result.stdout || result.error || "");
+    }
+    this.state.loopHealth = {
+      ...this.state.loopHealth,
+      repeatedError: this.repeatedErrors.current().n,
     };
 
     // B. Stagnation is per *turn*, not per tool call — see advanceStagnation().

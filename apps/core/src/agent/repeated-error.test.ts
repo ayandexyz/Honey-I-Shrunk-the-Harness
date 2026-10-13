@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { commandFamily, createRepeatedErrors, errorLines } from "./repeated-error.js";
+import { commandFamily, createRepeatedErrors, errorLines, errorLocation } from "./repeated-error.js";
 
 const TSC = "src/a.ts(3,1): error TS1110: Type expected.";
 const tsc = "npx tsc --noEmit";
@@ -52,4 +52,39 @@ test("a full run without the error clears its count; a filtered one does not", (
   e.edit();
   e.output(tsc, TSC); // a new occurrence starts over
   assert.equal(e.peak().max, 2);
+});
+
+test("errorLocation reads tsc and path:line forms, and nothing from a test name", () => {
+  assert.equal(errorLocation(TSC), "src/a.ts:3");
+  assert.equal(errorLocation("src/b.ts:12:5 - error TS2345: x"), "src/b.ts:12");
+  assert.equal(errorLocation("not ok - providers.list offers"), undefined);
+});
+
+test("current() is the live top line: it falls when the error clears, unlike peak()", () => {
+  const e = createRepeatedErrors();
+  e.output(tsc, "");
+  for (let i = 0; i < 3; i++) {
+    e.edit();
+    e.output(tsc, `${TSC}\nsrc/b.ts(9,1): error TS1005: ';' expected.`);
+  }
+  assert.deepEqual(e.current(), { n: 3, line: TSC, others: 1 });
+  e.edit();
+  e.output(tsc, "");
+  assert.equal(e.current().n, 0);
+  assert.equal(e.peak().max, 3);
+});
+
+test("the evaluator warns on E at the threshold and never stops on it", async () => {
+  const { createLoopHealthEvaluator } = await import("../effect/loop-health.js");
+  const { DEFAULT_LOOP_HEURISTICS, createInitialSessionState } = await import("./types.js");
+  const state = createInitialSessionState("s", "/p");
+  const evaluate = (n: number) =>
+    createLoopHealthEvaluator().evaluate(
+      { ...state, loopHealth: { ...state.loopHealth, repeatedError: n } },
+      DEFAULT_LOOP_HEURISTICS,
+    );
+  assert.equal(DEFAULT_LOOP_HEURISTICS.repeatedErrorThreshold, 5);
+  assert.deepEqual(evaluate(4), { action: "continue" });
+  assert.deepEqual(evaluate(5), { action: "warn", reason: "repeated_error" });
+  assert.deepEqual(evaluate(50), { action: "warn", reason: "repeated_error" });
 });

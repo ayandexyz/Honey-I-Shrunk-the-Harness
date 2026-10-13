@@ -1,8 +1,9 @@
 // =============================================================================
 // Signal E, `repeated_error` (spec 2026-10-13-stuck-loop-recovery.md §4.1):
 // the same error line coming back in bash output while the calls and files
-// keep changing. Pure and event-fed, so `bench:pathology` calibrates it offline
-// (§5.1) and Phase 2 can move it into core without a rewrite.
+// keep changing. Pure and event-fed: the agent loop feeds it live
+// (`AgentLoop.updateLoopHealth`) and `bench:pathology` replays it over rollout
+// logs (`--calibrate`, §5.1.1), so the two cannot drift.
 //
 // Per error LINE, not per output: a full test run repeats every pre-existing
 // failure, so a whole-output fingerprint fires on errors the agent neither
@@ -17,6 +18,18 @@
 //     counted. Re-reading one failure (`grep -A30 "not ok 709" full.log` four
 //     times) is investigation; the stuck case is "edited, same error back".
 // =============================================================================
+
+// Writes through bash. Redirects to /dev and to log-shaped files are dropped
+// first: `cmd > /tmp/lint.txt 2>&1` is the agent reading output the long way
+// round, not changing anything. (`bash` itself is `isDestructive`, so the
+// tool flag cannot tell a `tsc` run from a `sed -i`.)
+const BASH_WRITE =
+  /\bsed\s+-i|\btee\b|(^|[^>&0-9])>>?\s*(?!&)[^\s|&;]|\bpatch\b|\bgit\s+(apply|checkout|restore|mv|rm)\b|(^|[;&|]\s*)(mv|cp|rm|mkdir|touch)\s/;
+const NOT_A_WRITE = /\d?>>?\s*(\/dev\/\S+|\S+\.(log|txt|out))|-o\s+\/dev\/null/g;
+
+export function isBashWrite(command: string): boolean {
+  return BASH_WRITE.test(command.replace(NOT_A_WRITE, " "));
+}
 
 const ERROR_LINE = /error TS\d+|^\s*not ok\b|\bFAIL\b|\b[A-Z][a-zA-Z]*Error: \S|✖/;
 const TIMING = /\(?\d+(\.\d+)?\s?m?s\)?/g;
@@ -49,6 +62,19 @@ export interface RepeatedError {
   max: number;
   /** The line that reached it (local reports only — never into a rollout log). */
   line?: string;
+}
+
+/** Live: the most-repeated line still failing, and how many others share its count. */
+export interface CurrentError {
+  n: number;
+  line?: string;
+  others: number;
+}
+
+/** `path(12,3)` or `path:12[:3]` → "path:12", for the reminder to point at. */
+export function errorLocation(line: string): string | undefined {
+  const m = line.match(/([\w./-]+\.\w+)(?:\((\d+),\d+\)|:(\d+))/);
+  return m ? `${m[1]}:${m[2] ?? m[3]}` : undefined;
 }
 
 export function createRepeatedErrors() {
@@ -93,5 +119,13 @@ export function createRepeatedErrors() {
       }
     },
     peak: (): RepeatedError => ({ ...peak }),
+    current(): CurrentError {
+      let top: CurrentError = { n: 0, others: 0 };
+      for (const [line, c] of counts) {
+        if (c.n > top.n) top = { n: c.n, line, others: 0 };
+        else if (c.n === top.n && c.n > 0) top.others++;
+      }
+      return top;
+    },
   };
 }

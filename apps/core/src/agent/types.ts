@@ -197,6 +197,7 @@ export interface LoopHealth {
   stagnantTurns: number; // Turns that changed no file (advanced once per turn)
   oscillationScore: number; // Reverts inside the recent-edit window
   repeatedReasoningScore: number; // Similar reasoning repeated
+  repeatedError: number; // Same located error back after edits (agent/repeated-error.ts)
 }
 
 export interface LoopHeuristics {
@@ -209,7 +210,10 @@ export interface LoopHeuristics {
   // D. Repeated reasoning similarity - >90% for N turns → likely stuck
   reasoningSimilarityThreshold: number;
   reasoningSimilarityTurns: number;
-  // E. Hard cap on total iterations
+  // E. Same error line back in bash output across this many edits → warn.
+  // Warn-only: no recorded run reached 2×, so a stop would be uncalibrated.
+  repeatedErrorThreshold: number;
+  // F. Hard cap on total iterations
   totalIterationLimit: number;
 }
 
@@ -219,6 +223,10 @@ export const DEFAULT_LOOP_HEURISTICS: LoopHeuristics = {
   oscillationScoreThreshold: 4,
   reasoningSimilarityThreshold: 0.9,
   reasoningSimilarityTurns: 3,
+  // Calibrated offline (spec 2026-10-13-stuck-loop-recovery.md §5.1.1): the
+  // lowest threshold with zero legitimate hits; at 4 a pre-existing failure
+  // crossed. Nothing in 2,915 everyday runs reaches 3.
+  repeatedErrorThreshold: 5,
   // Unbounded by default, matching AgentLoopConfig.maxIterations — the
   // repeated-tool/stagnation/oscillation heuristics above are what actually
   // catch stuck patterns. Callers that want a hard turn cap (subagents,
@@ -270,6 +278,7 @@ export function createInitialSessionState(
       stagnantTurns: 0,
       oscillationScore: 0,
       repeatedReasoningScore: 0,
+      repeatedError: 0,
     },
     redirect: createRedirectState(),
     pendingToolCalls: [],

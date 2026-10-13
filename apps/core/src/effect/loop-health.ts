@@ -38,6 +38,15 @@ export const createLoopHealthEvaluator = (): LoopHealthEvaluator => ({
       return { action: "warn", reason: "repeated_identical_tool" };
     }
 
+    // E. The same located error back in bash output across edits — the stuck
+    // case A–D cannot see, because the calls and files keep changing. Warn
+    // only (spec 2026-10-13-stuck-loop-recovery.md §5.1.1): neither
+    // claude-code nor opencode ever stops a run on this, and no recorded run
+    // reached a stop threshold to calibrate on.
+    if (health.repeatedError >= heuristics.repeatedErrorThreshold) {
+      return { action: "warn", reason: "repeated_error" };
+    }
+
     // B. No file change for N *turns* — the counter is advanced once per turn
     // by AgentLoop.advanceStagnation(), never per tool call.
     if (health.stagnantTurns >= heuristics.stagnantTurnsThreshold) {
@@ -62,7 +71,7 @@ export const createLoopHealthEvaluator = (): LoopHealthEvaluator => ({
       return { action: "warn", reason: "repeated_reasoning" };
     }
 
-    // E. Hard cap on iterations
+    // F. Hard cap on iterations
     if (state.iterationCount >= heuristics.totalIterationLimit) {
       return { action: "stop", reason: "max_iterations_reached" };
     }

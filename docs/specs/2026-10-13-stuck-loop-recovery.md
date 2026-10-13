@@ -3,7 +3,11 @@
 > **Status:** Draft (2026-10-13). Phase 0 (measurement) is built and is what
 > this spec is derived from. **Phase 1 (calibration) done 2026-10-13, §5.1.1:
 > threshold 5**, plus a fourth rule (count only across edits) the data forced.
-> Phases 2–5 not built.
+> **Phase 2 built 2026-10-13**: signal E in core (`agent/repeated-error.ts`,
+> `effect/loop-health.ts`), **warn-only** (owner decision: neither claude-code
+> nor opencode ever stops a run on its own, and no recorded run reached a stop
+> threshold), the §4.2 reminder, and `loop.warned` (§4.5). `eval ab` §5.2.1.
+> Phases 3–5 not built.
 > **Branch:** `fix/stuck-error-recovery`.
 > **Evidence:** `bench:pathology` (`bench/harness-signals/pathology.ts`,
 > HARNESS-BENCH.md §3b), the long-task run in
@@ -104,7 +108,7 @@ model at all, through `repeatedCallReminder` (`agent/reminders.ts`).
 | Agent | Detects | Signal | Response |
 |---|---|---|---|
 | opencode, last version with it (`44b6938b2a^:packages/opencode/src/session/processor.ts:29,356–380`) | 3 identical tool calls in a row | calls | `permission.ask({ permission: "doom_loop" })`: the **user** decides ("Continue after repeated failures") |
-| opencode, current (`packages/core/src/session/runner/max-steps.ts`) | nothing; doom loop removed in the rewrite | — | only a max-steps cap: tools disabled, model must summarise done / left / next |
+| opencode, current (`packages/opencode/src/session/processor.ts:29,356–380`; `agent/agent.ts:121`) | **still there** (corrected 2026-10-13 against `~/Project/githubprojects/opencode`): 3 consecutive identical tool calls | calls | `permission.ask("doom_loop")`, default `"ask"` — the user decides. Separately, `packages/core/src/session/runner/max-steps.ts` caps steps: tools disabled, model must summarise done / left / next |
 | claude-code | no loop detector; `MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES = 3` (`services/compact/autoCompact.ts:70`) is a compaction circuit breaker | — | — |
 | claude-code (`services/compact/compact.ts:122–124,1415–1464`) | n/a — **post-compact file restore** | read-file state | re-attach the 5 most recently read files, ≤5K tokens each, 50K total, skipping files still in preserved messages |
 | claude-code (`tools/FileReadTool/prompt.ts:7`, `FileReadTool.ts:564`) | n/a — **unchanged-read stub** | read-file state | a re-read of an unchanged file returns "File unchanged since last read… refer to that instead of re-reading"; state is cleared at compaction |
@@ -164,10 +168,11 @@ same command family no longer contains it (the error went away).
 
 **Evaluation.** In `createLoopHealthEvaluator`, after A:
 
-- `≥ repeatedErrorThreshold` (default 3, §5.1 calibrates it) → `warn`,
-  reason `repeated_error`.
-- `≥ 2 × threshold` → `stop`, reason `repeated_error`. Two-tier like A; only
-  reached if the model ignores the nudge.
+- `≥ repeatedErrorThreshold` (**5**, §5.1.1) → `warn`, reason
+  `repeated_error`.
+- ~~`≥ 2 × threshold` → `stop`~~ **Not built (2026-10-13):** warn-only until a
+  recorded run shows where a stop would be right. Off switch
+  `FREECODE_REPEATED_ERROR=0`, read per tool call (an `eval ab` variable).
 
 ### 4.2 The nudge
 
@@ -326,7 +331,7 @@ offline failures, TODO.md). n=9 is small: report each trial, not a mean.
 |---|---|---|
 | 0 | `bench:pathology`, isolated rollout capture, long-task run | **built** (`b14585cf`, `41671218`) |
 | 1 | §5.1 calibration report; threshold + exclusion chosen | zero legitimate hits in sample — **done 2026-10-13: threshold 5 (§5.1.1)** |
-| 2 | Signal E + reminder (§4.1–4.2), unit tests next to `loop-health.ts` | `eval ab` §5.2, no regression |
+| 2 | Signal E + reminder (§4.1–4.2), unit tests next to `loop-health.ts` | `eval ab` §5.2, no regression — **built 2026-10-13, warn-only** |
 | 3 | Unchanged-read stub + post-compaction restore (§4.3) | `eval ab` incl. `compaction-boundary`; cache-miss detector shows no new `harness:*` misses |
 | 4 | Release, rebuild image, §5.3 rerun | numbers in this spec |
 | 5 | §4.4 scratch-script line | `eval ab` |
