@@ -169,11 +169,12 @@ In suggested order. Each is also a TODO.md entry or a spec phase.
 0. [ ] **Install ripgrep in the bench image** (`isolate/Dockerfile`), rebuild,
        and treat every v2 number as measured with a broken `grep` tool (§3.4).
        Rerun before comparing against any fix.
-0. [ ] **`grep` tool without `rg`**: fall back to `grep -rn` (or bundle `rg`
-       in the release binary / install it in `install.sh`), and make the error
-       say "use bash grep" so the model does not retry. A missing binary
-       should also be a `bench:pathology` distinction: a repeated search that
-       *failed* is a tool problem, not a search circle.
+0. [x] **`grep` tool without `rg`** — fixed 2026-10-13 the way Claude Code
+       does it: release archives ship `rg` beside the binary
+       (`release.yml`, `tools/grep.ts` `ripgrepPath`), and a missing `rg` is
+       `success: false` with "use bash `grep -rn`" instead of a silent "no
+       matches". Still open: `bench:pathology` should not count a *failed*
+       repeated search as a search circle.
 1. [ ] **Fix the Gemini judge key**, then
        `pnpm bench:judge --rejudge bench/agent-bench/results/pathology-commits-v2`.
 2. [ ] **Judge gets the baseline**: pass the parent commit's check results into

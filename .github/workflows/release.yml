@@ -73,6 +73,14 @@ jobs:
             [bun-darwin-arm64]=freecode-macos-aarch64
             [bun-windows-x64]=freecode-windows-x86_64
           )
+          RG_VERSION=15.2.0
+          declare -A RG_TRIPLES=(
+            [bun-linux-x64]=x86_64-unknown-linux-musl
+            [bun-linux-arm64]=aarch64-unknown-linux-musl
+            [bun-darwin-x64]=x86_64-apple-darwin
+            [bun-darwin-arm64]=aarch64-apple-darwin
+            [bun-windows-x64]=x86_64-pc-windows-msvc
+          )
           for target in "${!TARGETS[@]}"; do
             name="${TARGETS[$target]}"
             stage="$PWD/stage/$name"
@@ -83,6 +91,16 @@ jobs:
             FREECODE_BUN_TARGET="$target" \
             FREECODE_BUN_OUTFILE="$stage/$bin" \
               node scripts/build-bun.mjs
+            # ripgrep rides beside the binary (tools/grep.ts ripgrepPath), as
+            # Claude Code vendors it: without it every `grep` call fails.
+            rg_pkg="ripgrep-$RG_VERSION-${RG_TRIPLES[$target]}"
+            rg_url="https://github.com/BurntSushi/ripgrep/releases/download/$RG_VERSION/$rg_pkg"
+            if [[ "$target" == *windows* ]]; then
+              curl -fsSL -o rg.zip "$rg_url.zip"
+              unzip -q -j rg.zip "$rg_pkg/rg.exe" -d "$stage" && rm rg.zip
+            else
+              curl -fsSL "$rg_url.tar.gz" | tar -xz -C "$stage" --strip-components=1 "$rg_pkg/rg"
+            fi
             if [[ "$target" == *windows* ]]; then
               ( cd "$stage" && zip -q -r "$root/out/$name.zip" . )
             else

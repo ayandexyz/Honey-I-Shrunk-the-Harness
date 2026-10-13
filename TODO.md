@@ -553,17 +553,14 @@ From the first `pnpm bench:pathology` over 12,370 runs (HARNESS-BENCH.md §3b):
       a compaction (24 of 25 in v2 t1, 5 compactions). Cheap per read, but it
       grows with every compaction. Candidate: carry the read-file list in the
       compaction summary.
-- [ ] **The `grep` tool hard-depends on ripgrep and fails without it.**
-      `tools/grep.ts` spawns `rg` with no fallback; `scripts/install.sh` does
-      not install it and no doc lists it. The bench image lacks it too, so
-      **all 88 `grep` calls in the v2 long-task trials failed** (`Executable
-      not found in $PATH: "rg"`) and the model fell back to bash `grep`/`find`.
-      The `search_circles` flag on fix-night-envelope t1 is this (the same
-      failing grep resent on consecutive turns), not a model loop. Fix: add
-      `ripgrep` to `bench/agent-bench/isolate/Dockerfile`; in the tool, fall
-      back to `grep -rn` or ship `rg`, and word the error so the model stops
-      retrying; in `bench:pathology`, don't count failed searches as circles.
-      Every v2 number was measured with this handicap — rerun after the fix.
+- [ ] **The bench image still has no ripgrep** (tool side fixed 2026-10-13:
+      release archives ship `rg` beside the binary, `tools/grep.ts`
+      `ripgrepPath`, and a missing `rg` is now `success: false` telling the
+      model to use bash `grep -rn` instead of a silent "no matches"). Left:
+      add `ripgrep` to `bench/agent-bench/isolate/Dockerfile` for the other
+      agents; in `bench:pathology`, don't count failed searches as circles.
+      **All 88 `grep` calls in the v2 long-task trials failed** — every v2
+      number was measured with this handicap, rerun after the fix.
 - [x] ~~**Measured input shrink per compaction is ~5% and sometimes negative**~~
       Checked on real long sessions (v2 long-task trials): 61–70% shrink per
       compaction, no compaction loops. The ~5% is the `compaction-boundary`

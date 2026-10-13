@@ -68,6 +68,18 @@ FreeCode restarted or crashed), you see a notice listing them, and the agent is
 told on your next message instead of waiting for a result that cannot come.
 Resuming never starts a turn by itself.
 
+## Searching file contents
+
+The `grep` tool runs [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`).
+Release builds ship their own `rg` next to the `freecode` binary, so you do not
+need to install it; `freecode update` brings it along. Running FreeCode from a
+source checkout uses the `rg` on your `PATH` — install it with your package
+manager (`apt install ripgrep`, `brew install ripgrep`, `pacman -S ripgrep`).
+
+If no `rg` can be found, the tool fails with an error telling the agent to
+search with `grep -rn` through `bash` instead, rather than reporting "no
+matches".
+
 ## On this page (coming soon)
 
 - File operations: `read`, `write`, `edit`, `ls`
