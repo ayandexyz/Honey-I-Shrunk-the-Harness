@@ -200,3 +200,19 @@ test("function.denied records the tool, the gate, and the reason", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("verify.ran and unwired.flagged carry counts only", () => {
+  const dir = mkdtempSync(join(tmpdir(), "freecode-rollout-"));
+  try {
+    const recorder = new RolloutRecorder("s1", { rolloutDir: dir });
+    recorder.recordVerifyRan("tests", false, 1234, 2);
+    recorder.recordUnwiredFlagged(3);
+    const [ran, flagged] = readEvents(dir) as unknown as Record<string, unknown>[];
+    assert.equal(ran.type, "verify.ran");
+    assert.deepEqual([ran.kind, ran.ok, ran.ms, ran.failing], ["tests", false, 1234, 2]);
+    assert.equal(flagged.type, "unwired.flagged");
+    assert.equal(flagged.count, 3);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

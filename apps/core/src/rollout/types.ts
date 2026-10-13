@@ -48,6 +48,8 @@ export type RolloutEvent =
   | RedirectTriggeredEvent
   | RedirectSkippedEvent
   | LoopWarnedEvent
+  | VerifyRanEvent
+  | UnwiredFlaggedEvent
   | PokeTriggeredEvent
   | PokeSkippedEvent
   | TodoSignalEvent
@@ -522,4 +524,20 @@ export interface CheckpointRestoredEvent extends BaseEvent {
   snapshot: string;
   filesChanged: number;
   durationMs: number;
+}
+
+/** A finish-time check ran (spec 2026-10-13-finish-time-verification.md §2.4). Counts only. */
+export interface VerifyRanEvent extends BaseEvent {
+  type: "verify.ran";
+  kind: "typecheck" | "tests";
+  ok: boolean;
+  ms: number;
+  /** Failing test / error lines found in the output. */
+  failing: number;
+}
+
+/** The "no callers" check named this many declarations. Never the names. */
+export interface UnwiredFlaggedEvent extends BaseEvent {
+  type: "unwired.flagged";
+  count: number;
 }

@@ -635,6 +635,14 @@ export class RolloutRecorder {
     );
   }
 
+  recordVerifyRan(kind: "typecheck" | "tests", ok: boolean, ms: number, failing: number): void {
+    this.write(this.makeEvent("verify.ran", { aggregateID: this.sessionId, fields: { kind, ok, ms, failing } }));
+  }
+
+  recordUnwiredFlagged(count: number): void {
+    this.write(this.makeEvent("unwired.flagged", { aggregateID: this.sessionId, fields: { count } }));
+  }
+
   recordLoopWarned(turnId: string, reason: string, count: number, reminded: boolean): void {
     this.write(
       this.makeEvent("loop.warned", {
