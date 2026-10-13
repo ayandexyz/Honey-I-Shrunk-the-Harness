@@ -1,7 +1,9 @@
 # Stuck-Loop Recovery: repeated errors, and rereads after compaction
 
-> **Status:** Draft (2026-10-13). Nothing built. Phase 0 (measurement) is built
-> and is what this spec is derived from.
+> **Status:** Draft (2026-10-13). Phase 0 (measurement) is built and is what
+> this spec is derived from. **Phase 1 (calibration) done 2026-10-13, §5.1.1:
+> threshold 5**, plus a fourth rule (count only across edits) the data forced.
+> Phases 2–5 not built.
 > **Branch:** `fix/stuck-error-recovery`.
 > **Evidence:** `bench:pathology` (`bench/harness-signals/pathology.ts`,
 > HARNESS-BENCH.md §3b), the long-task run in
@@ -256,6 +258,52 @@ repeat `grade: FAIL (verification)` while the score improves. Candidate
 exclusion: the fingerprint must contain a location (`file:line`) or a test
 name, which a bare verifier verdict does not.
 
+### 5.1.1 Result (2026-10-13)
+
+Built as `bench/harness-signals/repeated-error.ts` (pure, event-fed, unit
+tested; Phase 2 moves it into core) and `pnpm bench:pathology --calibrate`,
+which prints hits per threshold and the top line per run.
+
+**The data forced a fourth rule: a line counts again only if a file changed
+since it last counted.** Without it most "repeats" were one failure read
+several times with no edit in between (`grep -A30 "not ok 709" /tmp/full.log`
+four times in 30 s in add-agent t1), which is investigation, not "edited and
+got the same error back". The baseline rule also had to widen: a line in a
+command's **first full (unpiped) run** is baseline even after edits, because
+agents edit before they first run the suite.
+
+| Set | Runs | ≥2 | ≥3 | ≥4 | ≥5 | ≥6 |
+|---|---|---|---|---|---|---|
+| Long-task v2 (9 trials) | 18 | 6 | 5 | 3 | 2 | 0 |
+| SWE-bench control (`pathology-11019`) | 3 | 0 | 0 | 0 | 0 | 0 |
+| Local history (pruned since the spec's 12K scan) | 2,915 | 3 | 0 | 0 | 0 | 0 |
+
+Long-task hits, classified by hand (count = edit-separated repeats):
+
+| Trial | Count | Line | Verdict |
+|---|---|---|---|
+| implement t1 | 5 | `report.ts(412,2): error TS1110` (+3) | **stuck** — the §1.1 case |
+| fix-envelope t1 | 5 | `not ok - outward-facing and system commands are refused` | **stuck** — one test failing through 6 edits over 6 min |
+| add-agent t3 | 4 | `not ok - agents.stop threads the caller through…` | **stuck** — the agent's own regression, never fixed, shipped (§3.3 of the results doc) |
+| add-agent t3 | 4 | `not ok - providers.list only offers…` | **legitimate** — pre-existing offline failure; every command was piped, so no "first full run" ever made it baseline |
+| fix-envelope t3 | 3 | `not ok - normalizeBashForDeny strips…` | legitimate — fixed on the 3rd try within a minute |
+| implement t3 | 3 | `not ok - generateReport reports the wait count…` | legitimate — ordinary test-fix cycle |
+| implement t2 | 2 | `run-store.ts(175,15): error TS2677` | legitimate |
+
+Two of §5.1's expectations were wrong: **add-agent t1 does not fire** (its
+`not ok 709` ×5 were re-reads, 1 edit-separated occurrence), and
+**fix-envelope t1 does** (its errors did not keep changing: one test failed
+through six edits).
+
+**Chosen: threshold 5**, the lowest with zero legitimate hits (at 4 the
+pre-existing `providers.list` failure crosses). It fires on implement t1 and
+fix-envelope t1 only, and on nothing in the control or the local history.
+Known gaps for Phase 2: n is small (9 trials); the pre-existing-failure rule
+cannot see a failure first shown through a pipe; the three offline tests are
+fixed (`a83abf4d`), so this run's only baseline false positive is gone from
+newer parents but the shape is not. The stop at 2× (10) is never reached in
+any recorded run, so it is uncalibrated; consider warn-only until it is.
+
 ### 5.2 `eval ab`
 
 Per EVAL.md for a loop change. Add a coding case reproducing §1.1: a fixture
@@ -277,7 +325,7 @@ offline failures, TODO.md). n=9 is small: report each trial, not a mean.
 | Phase | Content | Gate |
 |---|---|---|
 | 0 | `bench:pathology`, isolated rollout capture, long-task run | **built** (`b14585cf`, `41671218`) |
-| 1 | §5.1 calibration report; threshold + exclusion chosen | zero legitimate hits in sample |
+| 1 | §5.1 calibration report; threshold + exclusion chosen | zero legitimate hits in sample — **done 2026-10-13: threshold 5 (§5.1.1)** |
 | 2 | Signal E + reminder (§4.1–4.2), unit tests next to `loop-health.ts` | `eval ab` §5.2, no regression |
 | 3 | Unchanged-read stub + post-compaction restore (§4.3) | `eval ab` incl. `compaction-boundary`; cache-miss detector shows no new `harness:*` misses |
 | 4 | Release, rebuild image, §5.3 rerun | numbers in this spec |

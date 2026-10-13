@@ -49,6 +49,8 @@
 // question. `flags` is a list of things to look at, not a score.
 // =============================================================================
 
+import { createRepeatedErrors, type RepeatedError } from "./repeated-error.js";
+
 export interface PathEvent {
   type: string;
   timestamp: number;
@@ -98,6 +100,8 @@ export interface RunPathology {
   repeatCommands: number;
   /** Appearances of the most frequent error set in tool output. */
   stuckErrorRepeats: number;
+  /** Signal E (repeated-error.ts): top count of one located, non-baseline error line. */
+  repeatedError: RepeatedError;
   compactions: number;
   compactNoProgress: number;
   /** Time spent waiting on the user's answer to `question`; excluded from the clocks. */
@@ -195,6 +199,7 @@ function newRun(run: number, at: number): RunPathology {
     repeatSearches: 0,
     repeatCommands: 0,
     stuckErrorRepeats: 0,
+    repeatedError: { max: 0 },
     compactions: 0,
     compactNoProgress: 0,
     waitingOnUserMs: 0,
@@ -239,6 +244,9 @@ export function foldRuns(events: PathEvent[]): RunPathology[] {
   let repeatPending = new Set<string>(); // callIds of repeated searches awaiting output
   let progressCount = 0;
   let errorSeen = new Map<string, number>(); // error fingerprint → appearances
+  let repeated = createRepeatedErrors();
+  const bashCommand = new Map<string, string>(); // callId → command
+  let lastBash = ""; // logs from before callIds existed
   const questionAt = new Map<string, number>(); // callId → when the question was asked
   let prevTurn: string | undefined;
   let turn0Answered = false;
@@ -252,6 +260,7 @@ export function foldRuns(events: PathEvent[]): RunPathology[] {
   const finish = () => {
     if (!cur) return;
     closeDry(lastAt);
+    cur.repeatedError = repeated.peak();
     cur.durationMs = lastAt - cur.startedAt - cur.waitingOnUserMs;
     cur.flags = flagsFor(cur);
     runs.push(cur);
@@ -292,6 +301,7 @@ export function foldRuns(events: PathEvent[]): RunPathology[] {
       searchSeen = new Map();
       repeatPending = new Set();
       errorSeen = new Map();
+      repeated = createRepeatedErrors();
       progressCount = 0;
     }
     if (e.turnId !== undefined) prevTurn = e.turnId;
@@ -322,6 +332,9 @@ export function foldRuns(events: PathEvent[]): RunPathology[] {
         }
         // Commands only: a `read` shows file content, not a result.
         const fp = e.tool === "bash" && typeof e.output === "string" ? errorFingerprint(e.output) : undefined;
+        if (e.tool === "bash" && typeof e.output === "string") {
+          repeated.output((e.callId && bashCommand.get(e.callId)) ?? lastBash, e.output);
+        }
         if (fp) {
           const n = (errorSeen.get(fp) ?? 0) + 1;
           errorSeen.set(fp, n);
@@ -363,11 +376,17 @@ export function foldRuns(events: PathEvent[]): RunPathology[] {
         const tool = e.tool ?? "";
         const p = pathOf(e.args);
         if (tool === "question" && e.callId) questionAt.set(e.callId, e.timestamp);
+        if (tool === "bash" && typeof e.args?.command === "string") {
+          lastBash = e.args.command;
+          if (e.callId) bashCommand.set(e.callId, e.args.command);
+        }
         if (EDIT_TOOLS.has(tool)) {
+          repeated.edit();
           cur.edits++;
           if (p) lastEditEpoch.set(p, i);
           progress(e.timestamp);
         } else if (tool === "bash" && typeof e.args?.command === "string" && isBashWrite(e.args.command)) {
+          repeated.edit();
           cur.edits++;
           cur.bashWrites++;
           progress(e.timestamp);
