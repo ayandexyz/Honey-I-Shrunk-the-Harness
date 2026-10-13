@@ -22,7 +22,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { evalsDir } from "../dataset.js";
-import type { JudgeConfig } from "../judge-config.js";
+import { CLAUDE_CLI_DEFAULT_MODEL, CLAUDE_CLI_JUDGE, type JudgeConfig } from "../judge-config.js";
 import type { EvalCase, RunRecord } from "../types.js";
 
 /**
@@ -186,6 +186,17 @@ async function oneShot(
   prompt: string,
   signal: AbortSignal,
 ): Promise<JudgeReply> {
+  if (input.judge.provider === CLAUDE_CLI_JUDGE) {
+    const { runClaudeCli } = await import("../../utils/claude-cli.js");
+    const reply = await runClaudeCli({
+      model: input.judge.model ?? CLAUDE_CLI_DEFAULT_MODEL,
+      system,
+      prompt,
+      signal,
+    });
+    // Subscription usage has no per-token price: unknown, never zero.
+    return { text: reply.text, costUsd: undefined };
+  }
   const { getProvider } = await import("../../providers/index.js");
   const { priceUsd } = await import("../../providers/pricing.js");
   const provider = getProvider(input.judge.provider as never);

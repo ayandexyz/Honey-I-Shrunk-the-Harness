@@ -352,10 +352,20 @@ pnpm bench:agents                                                     # vs other
 
 ```bash
 FREECODE_JUDGE_PROVIDER=gemini   # REQUIRED for the judged suite and for eval:gate
+                                 # or claude-cli: Haiku on your Claude subscription (below)
 FREECODE_JUDGE_MODEL=...         # must NOT be the model under test
 FREECODE_EVAL_MODEL=...          # what CI pins as the model under test
 ```
 
+- **`FREECODE_JUDGE_PROVIDER=claude-cli`** grades through `claude -p` on your
+  Claude subscription (model defaults to `claude-haiku-4-5`; needs `claude`
+  logged in). Same isolated call as agent-bench's judge (`utils/claude-cli.ts`:
+  no settings, hooks, plugins, MCP, skills or tools). Core's `anthropic`
+  provider in OAuth mode cannot be the judge: Anthropic refuses it for this
+  organization. Its cost reports as **unknown**, never $0. Added 2026-10-13;
+  judged runs before then were graded by `gemini-3.5-flash-lite`, so compare
+  scores across the switch with care (the judged gate is absolute — mean ≥3.5,
+  no case <2 — so the gate itself is unaffected).
 - A judge that collides with the model under test **throws before any case runs**.
 - An unconfigured judge does *not* throw — the deterministic expectations still
   run — but it **closes the gate** (`judgeSkipped`).

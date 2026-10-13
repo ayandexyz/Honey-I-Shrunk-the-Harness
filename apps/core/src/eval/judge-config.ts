@@ -12,6 +12,14 @@
 // while telling you nothing.
 // =============================================================================
 
+/**
+ * Not a freecode provider: `claude -p` on the owner's Claude subscription
+ * (utils/claude-cli.ts). Core's Anthropic provider in OAuth mode was refused for
+ * this organization; Claude Code's own CLI is the supported route.
+ */
+export const CLAUDE_CLI_JUDGE = "claude-cli";
+export const CLAUDE_CLI_DEFAULT_MODEL = "claude-haiku-4-5";
+
 export interface JudgeConfig {
   provider: string;
   model?: string;
@@ -65,7 +73,10 @@ export function splitModelId(id: string): {
  */
 export function resolveJudge(subjectModelId?: string): JudgeResolution {
   const provider = process.env.FREECODE_JUDGE_PROVIDER?.trim();
-  const model = process.env.FREECODE_JUDGE_MODEL?.trim();
+  // Resolved here, not at call time, so every report records the actual model.
+  const model =
+    process.env.FREECODE_JUDGE_MODEL?.trim() ||
+    (provider === CLAUDE_CLI_JUDGE ? CLAUDE_CLI_DEFAULT_MODEL : undefined);
 
   if (!provider) {
     return {

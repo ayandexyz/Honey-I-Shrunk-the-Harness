@@ -3,43 +3,10 @@ import assert from "node:assert/strict";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { claudeArgs, claudeComplete, parseClaudeResult } from "./claude-complete.js";
+import { claudeComplete } from "./claude-complete.js";
 import type { JudgeUsage } from "./core-complete.js";
 
 const judge = { id: "judge-haiku", provider: "claude", model: "claude-haiku-4-5" };
-const verdict = { analysis: "a", strengths: [], weaknesses: [], completionScore: 7, codeQualityScore: 6, overallScore: 7 };
-
-test("claudeArgs pins the model, puts the system prompt in the system slot, and strips the owner's setup", () => {
-  const a = claudeArgs("claude-haiku-4-5", "SYS");
-  const after = (flag: string) => a[a.indexOf(flag) + 1];
-  assert.equal(a[0], "-p");
-  assert.equal(after("--model"), "claude-haiku-4-5");
-  assert.equal(after("--system-prompt"), "SYS");
-  assert.equal(after("--output-format"), "json");
-  assert.deepEqual(JSON.parse(after("--json-schema")).required.at(-1), "overallScore");
-  assert.equal(after("--setting-sources"), "", "no user/project settings: no hooks, plugins");
-  assert.equal(after("--tools"), "", "a judge has no tools");
-  for (const f of ["--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence"]) {
-    assert.ok(a.includes(f), f);
-  }
-  assert.ok(!a.includes("--bare"), "--bare never reads the subscription login");
-});
-
-test("parseClaudeResult returns structured_output and counts cached input as input", () => {
-  const r = parseClaudeResult(
-    JSON.stringify({
-      is_error: false,
-      result: "ignored",
-      structured_output: verdict,
-      usage: { input_tokens: 10, cache_read_input_tokens: 100, cache_creation_input_tokens: 5, output_tokens: 7 },
-    }),
-  );
-  assert.deepEqual(JSON.parse(r.text), verdict);
-  assert.equal(r.inputTokens, 115);
-  assert.equal(r.outputTokens, 7);
-  assert.throws(() => parseClaudeResult(JSON.stringify({ is_error: true, result: "rate limited" })), /rate limited/);
-  assert.throws(() => parseClaudeResult(JSON.stringify({ is_error: false, result: "prose" })), /no verdict/);
-});
 
 // A fake `claude` that behaves like the real one in -p mode: reads the prompt
 // from stdin (it would hang if stdin stayed open) and prints one JSON result.

@@ -142,8 +142,8 @@ left out.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `FREECODE_JUDGE_PROVIDER` | unset | Provider for the judged suite's grader. Must not be the provider under test. Required by `pnpm eval:gate`. |
-| `FREECODE_JUDGE_MODEL` | provider default | Model for that grader. |
+| `FREECODE_JUDGE_PROVIDER` | unset | Provider for the judged suite's grader. Must not be the provider under test. Required by `pnpm eval:gate`. `claude-cli` grades with `claude -p` on your Claude subscription (no API key). |
+| `FREECODE_JUDGE_MODEL` | provider default (`claude-haiku-4-5` for `claude-cli`) | Model for that grader. |
 | `FREECODE_EVALS_DIR` | `./evals` | Where the case files are read from. |
 | `FREECODE_EVAL_HOME` | `~/.freecode` | Where eval history (`eval_runs.jsonl`) is kept. |
 | `FREECODE_EVAL_KEEP_SANDBOX` | off | `1` keeps each trial's sandbox dir for inspection instead of deleting it. |
