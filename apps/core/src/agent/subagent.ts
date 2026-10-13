@@ -230,29 +230,37 @@ export function verifierFailureReminder(report: string): string {
   ].join("\n");
 }
 
-// Spawn a read-only verifier subagent over the changed files and return its
-// verdict + report. Runs in explore (read-only) mode, so it never mutates
-// files and never itself re-triggers the verification gate.
-export async function verifyChanges(input: {
-  projectPath: string;
-  provider: string;
-  model?: string;
+export interface VerifierTaskInput {
   originalRequest: string;
   changedFiles: string[];
   priorReport?: string;
-  /** The session being verified, so the verifier shows up in /agents. */
-  parentSessionId?: string;
-}): Promise<VerificationResult> {
-  const task = [
+  /** The finish-time test gate's result, if it ran (loop.ts). */
+  testResult?: string;
+  /** Declarations this run added that nothing outside tests calls (unwired.ts). */
+  unwired?: { name: string; file: string; line: number }[];
+}
+
+export function buildVerifierTask(input: VerifierTaskInput): string {
+  return [
     "Independently and adversarially verify the work that was just completed.",
     "",
     `Original user request:\n${input.originalRequest}`,
     "",
     `Files changed:\n${input.changedFiles.map((f) => `- ${f}`).join("\n")}`,
+    ...(input.testResult ? ["", `Tests run before finishing: ${input.testResult}`] : []),
+    ...(input.unwired?.length
+      ? ["", "Added in this run and called by nothing outside tests:", ...input.unwired.map((d) => `- ${d.name} (${d.file}:${d.line})`)]
+      : []),
     "",
     "Read the changed files and confirm they actually satisfy the request and are",
     "correct. Run any read-only checks you can (search, read, type inspection).",
     "Do NOT modify any files.",
+    "",
+    "Reachability: for each new function, flag, option or field, trace it from a",
+    "user entry point (CLI command, tool, IPC handler, config read) to where it",
+    "takes effect. Something written and never read, or built and never called",
+    "from a real path, is FAIL — parts that each pass a unit test but are not",
+    "connected do not satisfy the request.",
     "",
     "Scope discipline: only fail the request as stated. Missing edge-case",
     "handling, extra validation, or additional tests that were never asked for",
@@ -281,6 +289,24 @@ export async function verifyChanges(input: {
     "- PARTIAL if you could not fully verify it.",
     "List specific findings above the verdict line.",
   ].join("\n");
+}
+
+// Spawn a read-only verifier subagent over the changed files and return its
+// verdict + report. Runs in explore (read-only) mode, so it never mutates
+// files and never itself re-triggers the verification gate.
+export async function verifyChanges(input: {
+  projectPath: string;
+  provider: string;
+  model?: string;
+  originalRequest: string;
+  changedFiles: string[];
+  priorReport?: string;
+  testResult?: string;
+  unwired?: VerifierTaskInput["unwired"];
+  /** The session being verified, so the verifier shows up in /agents. */
+  parentSessionId?: string;
+}): Promise<VerificationResult> {
+  const task = buildVerifierTask(input);
 
   const result = await executeSubagent(
     {

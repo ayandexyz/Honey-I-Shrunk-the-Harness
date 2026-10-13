@@ -1491,6 +1491,8 @@ export class AgentLoop {
               originalRequest: input.prompt,
               changedFiles: [...this.mutatedFiles],
               priorReport: this.lastVerifierReport,
+              testResult: this.lastTestResult,
+              unwired: this.lastUnwired,
               parentSessionId: this.state.sessionId,
             });
             if (this.abort.signal.aborted)
