@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.46.0
+
+The verify gate stops failing silently: it now says what it's running before and after, and a per-edit LSP diagnostics loop (on by default) catches type errors incrementally instead of waiting on a slow `build` fallback, which the verify gate no longer falls back to at all. The Omarchy top-bar/board-webhook integration ("glue code") is removed outright, along with a leftover dead import it left behind that broke the build. In the TUI, model narration written right before a tool call now folds into one dim line under the tool group instead of taking its own row — and fixes a bug where that fold silently truncated text still mid-stream — while the static ▶/▼ expand/collapse caret is gone from tool rows (click-to-toggle is unchanged).
+
+### Added
+
+- **Visible verify gate + edit-time LSP diagnostics** (`c3d19443`). Session 5ea1fdcb sat on "in progress" for 93s after the model finished because the verify gate fell back to `next build` and ran silently. The gate now emits a notice before and after running (`runGateCommand`), and `verify.ran` records the script that actually ran. `FREECODE_EDIT_DIAGNOSTICS`: `read` opens a file on its language server as a baseline, `edit`/`write` send `didChange`/`didSave`, and the loop folds the errors an edit introduced into the next request as `<new-diagnostics>`. Spec `docs/specs/2026-10-14-edit-time-diagnostics.md`.
+
+### Changed
+
+- **Edit-time diagnostics on by default; LSP servers disposed** (`2766a48c`). `eval ab` on `coding.jsonl` held (45/45 → 44/45, cost flat-to-lower; the one dip was a pre-existing model flake, re-tested 6/8 → 7/8 with an identical failure reason both sides), so `FREECODE_EDIT_DIAGNOSTICS` now defaults on (`0` opts out). Running that eval surfaced a real leak — `disposeAll()` was never called outside tests, so every sandboxed trial's language server outlived its trial (42 live `typescript-language-server` children by the end of one run); fixed with a scoped `disposeRoot()` from `Sandbox.cleanup()` plus `disposeAll()` in `shutdownRunner()` and the daemon's shutdown path.
+- **Verify gate drops its `build` fallback** (`c0ac201d`, Phase 4). `build` was the slowest possible way to catch a compile error (a full production build, once, at the end of the turn), and edit-time diagnostics already catches the same class of error incrementally. Not `eval ab`-validated by design — `coding.jsonl`'s sandboxes are dependency-free, so no fixture is sensitive to this change; reversible by re-adding `"build"` to `SCRIPT_PRIORITY` if it turns out to matter.
+
+### Removed
+
+- **Omarchy top-bar / board-webhook glue code** (`3c62bf4d`). Deletes `hooks/builtin/agent-fold.ts` and `hooks/builtin/board-webhook.ts` (and their tests) along with the matching wiring in `server.ts` — FreeCode code no longer knows a specific bar plugin's name; that integration point belongs to the plugin's own hook script.
+
+### Fixed
+
+- **Dead board-webhook import left by the glue-code removal** (`ea647954`). `3c62bf4d` deleted the file but left `hooks/bootstrap.ts` importing and calling `registerBoardWebhook` from it — a TS2307 build error. Drops the dead import/call, the two bootstrap tests that exercised it, and the matching stale `FREECODE_HOOK_URL`/`FREECODE_AGENT_FOLD` rows in `ENV.md`.
+- **Tool-call narration folds into the group; live-stream truncation fixed** (`366c383d`). Model prose written immediately before a tool call (e.g. "Now reading the controller.") no longer takes its own full-width transcript row — it folds into one dim line under the tool group's summary, shared by the main transcript and the subagent viewer. Also fixes a bug where, if a tool call interrupted text still mid-stream (deltas only, no turn-end snapshot yet), the fold read the store's stale first-delta-only content instead of the live component's accumulated text, silently dropping everything after the first delta.
+- **Static expand/collapse caret dropped from tool rows** (`72fb7122`). The ▶/▼ glyph on the tool group summary and tool result header rows is gone; the rows are still clickable and toggle exactly as before, just without a persistent arrow hint.
+
+### Notes
+
+`pnpm eval:gate` ran before this release, all three suites **GATE OPEN**: **trajectory 27/27**; **coding 15/15** (one non-blocking warning — tokens/trial up 21% vs baseline, 116,734 vs 96,781, "warn only, over 15%"); **judged 6/6, mean 3.67/5** (judge `claude-cli/claude-haiku-4-5`). The judged suite needed two retries first: the shell's ambient `FREECODE_JUDGE_PROVIDER=gemini`/`FREECODE_JUDGE_MODEL=gemini-3.6-flash` (set for an unrelated Gemini CLI IDE integration) won over `eval:gate`'s own `${FREECODE_JUDGE_PROVIDER:-claude-cli}` default and had an expired key (`judge unavailable: API key not valid`); forcing `FREECODE_JUDGE_PROVIDER=claude-cli` alone still passed the stale `gemini-3.6-flash` through as the model arg to `claude -p` (`claude-code:unrecognized_model`), since `FREECODE_JUDGE_MODEL` is a separate env var the provider override doesn't clear. Clearing both got a real score.
+
 ## v0.45.0
 
 The agent loop knows when it is stuck. The same error coming back after edits now produces one reminder per run (signal E, `apps/core/src/agent/repeated-error.ts`); the long-task bench found 2.2× time on a single trial of "scroll up and try the same broken thing". After a compaction, the files the agent was working on and the skills it loaded are re-attached in the next request, so 89/100 "scroll up" stubs in that trial no longer point at summarised-away content. The release gate grades with Haiku on the operator's Claude subscription, runs a finish-time verifier that runs the touched packages' tests and flags new declarations nothing outside tests calls, and ships ripgrep with the binary so the grep tool stops failing in the agent-bench image.
