@@ -34,8 +34,8 @@ const TRANSCRIPT_EVENTS = new Set<StreamEvent["type"]>([
 export class Transcript {
   // The assistant row currently streaming in, if any. One per internal turn:
   // the turn-end `text` snapshot settles it, and the next turn's first delta
-  // starts a fresh row — which is how prose emitted between tool calls stays
-  // in the transcript instead of being dropped.
+  // starts a fresh row. If a tool call follows, that row is a tool preamble
+  // and moves into the tool group; otherwise it remains the full final reply.
   private liveAssistant: {
     instance: MessageInstance;
     component: StreamingAssistantMessage;
@@ -47,6 +47,7 @@ export class Transcript {
       progress: ToolProgressMessage;
       message: MessageInstance;
       args: Record<string, unknown>;
+      narration?: string;
     }
   >();
 
@@ -96,7 +97,7 @@ export class Transcript {
 
     switch (event.type) {
       case "tool_start": {
-        const { message, progress } = this.createToolProgressMessage(
+        const { message, progress, narration } = this.createToolProgressMessage(
           event.toolCallId,
           event.toolName,
           event.args,
@@ -106,6 +107,7 @@ export class Transcript {
           progress,
           message,
           args: event.args,
+          narration,
         });
         break;
       }
@@ -135,6 +137,7 @@ export class Transcript {
           event.result,
           event.success,
           event.duration_ms,
+          entry?.narration,
         );
         break;
       }
@@ -184,7 +187,6 @@ export class Transcript {
       this.liveAssistant.component.append(delta);
       return this.liveAssistant.instance;
     }
-    this.sealToolGroups();
     const component = new StreamingAssistantMessage(delta);
     const instance = this.store.add("assistant", delta, component);
     this.liveAssistant = { instance, component };
@@ -210,7 +212,11 @@ export class Transcript {
       );
     }
     if (content) {
-      return this.createAssistantMessage(`**FreeCode:** ${content}`);
+      // This may still prove to be a preamble when the next event is a tool
+      // call, so do not seal the preceding tool group yet.
+      const display = `**FreeCode:** ${content}`;
+      const component = createMessageComponent("assistant", display);
+      return this.store.add("assistant", display, component);
     }
     return null;
   }
@@ -256,15 +262,24 @@ export class Transcript {
     toolCallId: string,
     toolName: string,
     args: Record<string, unknown>,
-  ): { message: MessageInstance; progress: ToolProgressMessage } {
+  ): {
+    message: MessageInstance;
+    progress: ToolProgressMessage;
+    narration?: string;
+  } {
     const progress = new ToolProgressMessage({
       toolCallId,
       toolName,
       args,
       outputLines: [],
     });
+    const narration = this.takeAdjacentAssistantNarration();
     if (FILE_UPDATE_TOOLS.has(toolName.toLowerCase())) {
-      return { message: this.store.add("tool", toolName, progress), progress };
+      return {
+        message: this.store.add("tool", toolName, progress),
+        progress,
+        narration,
+      };
     }
     let group = this.findOpenToolGroup();
     let message =
@@ -273,10 +288,11 @@ export class Transcript {
       group = new ToolGroupMessage(this.lastMessageIsPrompt());
       message = this.store.add("tool", toolName, group);
     }
+    if (narration) group.addNarration(narration);
     group.addPending(progress);
     // Same store entry, new content — notifies the list like a result does.
     this.store.update(message.id, toolName, group);
-    return { message, progress };
+    return { message, progress, narration };
   }
 
   /** Undoes createToolProgressMessage once the call's result arrives. */
@@ -327,6 +343,32 @@ export class Transcript {
     return undefined;
   }
 
+  /**
+   * A settled assistant row immediately followed by a tool call is
+   * operational narration, not a user-facing answer. Remove the standalone
+   * row and return its text so the tool group can render it compactly.
+   */
+  private takeAdjacentAssistantNarration(): string | undefined {
+    const messages = this.store.getMessages();
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const message = messages[i]!;
+      if (message.type === "in_progress" || message.type === "system") continue;
+      if (message.type !== "assistant") return undefined;
+
+      let content = message.content;
+      if (this.liveAssistant?.instance.id === message.id) {
+        // The store's content is only the first delta (never updated by
+        // later appends), so read the component's accumulated text instead.
+        content = this.liveAssistant.component.content;
+        this.liveAssistant.component.finalize();
+        this.liveAssistant = null;
+      }
+      this.store.remove(message.id);
+      return content;
+    }
+    return undefined;
+  }
+
   createToolResultMessage(
     toolCallId: string,
     toolName: string,
@@ -334,8 +376,17 @@ export class Transcript {
     result: string | undefined,
     success: boolean,
     duration_ms?: number,
+    narration?: string,
   ): MessageInstance {
-    const options = { toolCallId, toolName, args, result, success, duration_ms };
+    const options = {
+      toolCallId,
+      toolName,
+      args,
+      result,
+      success,
+      duration_ms,
+      narration,
+    };
 
     // File updates carry the diff view — the one tool body worth showing
     // unprompted. They stand alone instead of folding into a collapsed group,
