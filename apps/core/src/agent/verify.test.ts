@@ -46,12 +46,21 @@ test("resolveVerifyCommand prefers typecheck and detects pnpm", async () => {
   }
 });
 
-test("resolveVerifyCommand falls back to build with npm default", async () => {
+test("resolveVerifyCommand no longer falls back to build (spec 2026-10-14-edit-time-diagnostics.md Phase 4)", async () => {
   const dir = await tmpProject({ scripts: { build: "tsc" } });
   try {
+    assert.equal(resolveVerifyCommand(dir), undefined);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("resolveVerifyCommand still prefers typecheck when build is also present", async () => {
+  const dir = await tmpProject({ scripts: { build: "x", typecheck: "tsc --noEmit" } });
+  try {
     assert.deepEqual(resolveVerifyCommand(dir), {
-      command: "npm run build",
-      label: "build",
+      command: "npm run typecheck",
+      label: "typecheck",
     });
   } finally {
     await rm(dir, { recursive: true, force: true });

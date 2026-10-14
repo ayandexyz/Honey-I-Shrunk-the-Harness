@@ -1,5 +1,5 @@
 // =============================================================================
-// Verification Gate - run the project's typecheck/build before declaring done
+// Verification Gate - run the project's typecheck script before declaring done
 // PRIMARY: deterministic backstop for the prompt-level "verify before done"
 // contract. Config-driven: resolves a command from package.json scripts; no
 // guessing, and skips silently when nothing suitable exists.
@@ -18,16 +18,16 @@ const VERIFY_TIMEOUT_MS = 120_000;
 const MAX_OUTPUT_CHARS = 4_000;
 
 // Scripts we accept, in priority order. Typecheck is the strongest signal for
-// the "declared done on uncompiled code" failure mode; build is a heavier
-// fallback that still catches compile errors. Test is intentionally excluded
-// by default (slow/flaky) — that stays the model's job via the prompt contract.
-const SCRIPT_PRIORITY = [
-  "typecheck",
-  "type-check",
-  "check-types",
-  "check",
-  "build",
-];
+// the "declared done on uncompiled code" failure mode. `build` was here as a
+// fallback, but it is the slowest possible way to learn that (full production
+// build, once, at the very end) and edit-time diagnostics (tools/lsp/feedback.ts,
+// on by default since spec 2026-10-14-edit-time-diagnostics.md §2 Phase 3)
+// already catches the same errors incrementally — Phase 4 of that spec drops
+// it rather than run it twice. A project with no typecheck-style script just
+// has no deterministic gate; it still gets edit-time diagnostics. Test is
+// intentionally excluded by default (slow/flaky) — that stays the model's job
+// via the prompt contract.
+const SCRIPT_PRIORITY = ["typecheck", "type-check", "check-types", "check"];
 
 export interface VerifyCommand {
   /** Full shell command, e.g. "pnpm run typecheck". */

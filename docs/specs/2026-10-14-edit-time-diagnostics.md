@@ -9,7 +9,11 @@
 > language server leaked for the run's life and the harness never exited on
 > its own — is fixed (`eval/sandbox.ts` `disposeRoot`, `eval/runner.ts`
 > `shutdownRunner`, `server.ts` shutdown). Phase 4 (drop `build` from
-> `SCRIPT_PRIORITY`) not run.
+> `SCRIPT_PRIORITY`) is **built, as a reasoned call, not `eval ab`-validated**:
+> `coding.jsonl`'s fixtures are dependency-free sandboxes by rule (no
+> `node_modules`, no real `tsc`/bundler), so none of the 15 cases exercise a
+> `build`-only project and no fixture could be added that does — the harness
+> cannot measure the one risk this change actually carries (see §2 Phase 4).
 > **Branch:** `fix/agent-fold-activity`.
 > **Evidence:** session `5ea1fdcb-01bb-4026-b3bd-a574b4fc6232`
 > (`~/.freecode/rollout/sessions/5ea1fdcb…/events.jsonl`).
@@ -133,7 +137,7 @@ waitedMs) — never messages or paths, so OTLP stays leak-free.
 | 1 | §1.1 gate notices + `script` field | unit test; manual run shows the notice |
 | 2 | §1.2 client `didChange`/`didSave`, seq store, drain + baseline, discovery + auto-install, flag | `feedback.test.ts` against a fake server (stale push then fresh, baseline silent, once-only, 1.5 s cap) |
 | 3 | `eval ab` with `FREECODE_EDIT_DIAGNOSTICS` 0/1 on `coding.jsonl` | **done 2026-10-14**: 15 cases × 3 trials, 45/45 → 44/45, cost $0.4823 → $0.4521; the one dip (`fix-in-nested-dir`) re-ran at 8 trials/side (6/8 → 7/8, same failure both sides) and is a pre-existing model flake, not a regression — default flipped on |
-| 4 | With Phase 3 on: drop `build` from `SCRIPT_PRIORITY` (typecheck-style scripts only) | `eval ab` again — this is a gate behaviour change |
+| 4 | With Phase 3 on: drop `build` from `SCRIPT_PRIORITY` (typecheck-style scripts only) | **done 2026-10-14, as a reasoned call, not `eval ab`-validated**: `coding.jsonl`'s dependency-free sandboxes (no `node_modules`, §4) can't run a real `tsc`/bundler, so no fixture exists or could be added where `build` catches something the now-default-on edit-time diagnostics doesn't — an `eval ab` here would report "unchanged" on a suite that was never sensitive to this change, which is not the same as measuring the change. The real residual risk — a project with no typecheck-style script, where a framework/bundler error (not a type error) only `build` would have caught — stays unmeasured; take it on judgment, not data. Reversible by re-adding `"build"` to `SCRIPT_PRIORITY` in `agent/verify.ts` if it turns out to matter |
 
 ## 3. Not doing
 

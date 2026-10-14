@@ -87,12 +87,12 @@ test("the verify gate says what it runs and how it went, and logs the real scrip
     if (ev.type === "notice") notices.push(ev.content ?? "");
   });
   try {
-    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { build: "node -e 0" } }));
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { typecheck: "node -e 0" } }));
     const events = await run(dir, [{ write: [join(dir, "a.txt"), "a"] }, { say: "done" }]);
-    assert.ok(notices.some((n) => /^Verifying: \S+ run build$/.test(n)), notices.join(" | "));
-    assert.ok(notices.some((n) => /^build passed \(\d+s\)$/.test(n)), notices.join(" | "));
+    assert.ok(notices.some((n) => /^Verifying: \S+ run typecheck$/.test(n)), notices.join(" | "));
+    assert.ok(notices.some((n) => /^typecheck passed \(\d+s\)$/.test(n)), notices.join(" | "));
     const ran = events.filter((e) => e.type === "verify.ran" && e.kind === "typecheck");
-    assert.deepEqual(ran.map((e) => e.script), ["build"]);
+    assert.deepEqual(ran.map((e) => e.script), ["typecheck"]);
   } finally {
     unsub();
     rmSync(dir, { recursive: true, force: true });
