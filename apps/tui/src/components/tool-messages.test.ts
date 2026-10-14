@@ -54,7 +54,7 @@ test("large multi-line results render one terminal row per line, collapsed", () 
 
   // Collapsed by default: the header is the whole message.
   assert.deepEqual(msg.render(80).length, 1);
-  assert.match(plain(msg.render(80)), /\u25b6 . Run\(ls\)/);
+  assert.match(plain(msg.render(80)), /● Run\(ls\)/);
   assert.doesNotMatch(plain(msg.render(80)), /out-0/);
 
   msg.toggle();
@@ -68,7 +68,6 @@ test("large multi-line results render one terminal row per line, collapsed", () 
   assert.match(lines.join("|"), /out-4/);
   assert.doesNotMatch(lines.join("|"), /out-5\b/);
   assert.match(lines.join("|"), /\+45 lines/);
-  assert.match(plain(lines), /\u25bc /);
 });
 
 test("only the header row toggles, so expanded output stays selectable", () => {

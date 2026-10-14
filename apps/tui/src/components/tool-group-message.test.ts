@@ -44,7 +44,6 @@ test("consecutive tool results share one message and summarize by tool", () => {
   const collapsed = group.render(80);
   assert.match(plain(collapsed), /Read 2 files, Ran 1 command/);
   assert.doesNotMatch(plain(collapsed), /a\.ts/);
-  assert.match(plain(collapsed), /▶ /);
 });
 
 test("clicking the summary expands the group back to one row per call", () => {
@@ -61,7 +60,6 @@ test("clicking the summary expands the group back to one row per call", () => {
   const expanded = group.render(80);
   assert.match(plain(expanded), /a\.ts/);
   assert.match(plain(expanded), /b\.ts/);
-  assert.match(plain(expanded), /▼ /);
 });
 
 test("a failed call marks the summary", () => {

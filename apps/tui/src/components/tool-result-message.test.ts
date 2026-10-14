@@ -14,11 +14,11 @@ const view = (m: ToolResultMessage, width = 100) => m.render(width).map(stripAns
 const lines = (n: number) => Array.from({ length: n }, (_, i) => `line ${i + 1}`).join("\n");
 const DIFF = ["  10 const a = 1;", "- 11 const b = 2;", "+ 11 const b = 3;"].join("\n");
 
-test("a run with output is one collapsed row: caret, Run(command), duration", () => {
+test("a run with output is one collapsed row: Run(command), duration", () => {
   const m = msg({ args: { command: "ls -la" }, result: lines(3), duration_ms: 1500 });
   const rows = view(m);
   assert.equal(rows.length, 1);
-  assert.match(rows[0], /^▶ ● Run\(ls -la\) \(1\.5s\)$/);
+  assert.match(rows[0], /^● Run\(ls -la\) \(1\.5s\)$/);
   assert.equal(m.isToggleLine(0), true);
 });
 
@@ -27,7 +27,7 @@ test("expanding a run shows Output, the first 5 lines and how many are hidden", 
   m.toggle();
   const rows = view(m);
   assert.equal(rows[0], "", "an expanded block is framed by blank lines");
-  assert.match(rows[1], /^▼ ● Run\(seq 8\)/);
+  assert.match(rows[1], /^● Run\(seq 8\)/);
   assert.match(rows[2], /└─ Output/);
   assert.deepEqual(rows.slice(3, 8).map((r) => r.trim()), ["line 1", "line 2", "line 3", "line 4", "line 5"]);
   assert.match(rows[8], /… \+3 lines/);

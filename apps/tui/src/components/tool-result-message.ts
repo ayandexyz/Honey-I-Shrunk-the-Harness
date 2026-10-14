@@ -243,10 +243,7 @@ export class ToolResultMessage implements Component {
     // lines that frame an expanded block.
     if (!collapsed) lines.push(""); // Empty line above
 
-    const caret = this.collapsible
-      ? chalk.dim(this.isCollapsed ? "\u25b6 " : "\u25bc ")
-      : "";
-    let header = `${caret}${statusIcon} ${chalk.bold(colorFn(headerAction))}${headerTarget}`;
+    let header = `${statusIcon} ${chalk.bold(colorFn(headerAction))}${headerTarget}`;
     if (duration) {
        header += ` ${chalk.dim(duration)}`;
     }

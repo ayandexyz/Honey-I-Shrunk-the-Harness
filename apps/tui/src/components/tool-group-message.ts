@@ -157,8 +157,7 @@ export class ToolGroupMessage implements Component {
 
     const failed = this.entries.filter((e) => !e.success).length;
     const icon = failed > 0 ? palette.red("✖") : palette.green("●");
-    const caret = chalk.dim(expanded ? "▼ " : "▶ ");
-    let summary = `${caret}${icon} ${this.summaryText()}`;
+    let summary = `${icon} ${this.summaryText()}`;
     if (failed > 0) {
       summary += ` ${palette.red(`(${failed} failed)`)}`;
     }
