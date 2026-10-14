@@ -366,6 +366,21 @@ export function diagnosticPushes(root: string): DiagnosticPush[] {
   return out;
 }
 
+/**
+ * Tear down every server rooted at `root`. Call this once that root is gone
+ * (e.g. a sandbox's tmpdir is about to be deleted) — a connection the eval
+ * harness never revisits otherwise sits in the pool, child process and all,
+ * for the rest of the run (spec 2026-10-14-edit-time-diagnostics.md §1.2).
+ */
+export function disposeRoot(root: string): void {
+  for (const [key, conn] of pool) {
+    if (key.endsWith(`::${root}`)) {
+      conn.dispose();
+      pool.delete(key);
+    }
+  }
+}
+
 export function disposeAll(): void {
   for (const conn of pool.values()) conn.dispose();
   pool.clear();

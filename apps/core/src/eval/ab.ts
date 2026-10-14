@@ -87,6 +87,8 @@ export const VARIABLE_ENV_KEYS = [
   // Read per finish in the loop's test and no-callers gates.
   "FREECODE_VERIFY_TESTS",
   "FREECODE_UNWIRED_CHECK",
+  // Read per call in editDiagnosticsEnabled (tools/lsp/feedback.ts).
+  "FREECODE_EDIT_DIAGNOSTICS",
 ] as const;
 
 /**

@@ -31,9 +31,13 @@ interface SessionDiagnostics {
 // ponytail: never pruned — a few small maps per session, fine for a daemon's life
 const sessions = new Map<string, SessionDiagnostics>();
 
-/** Read per call so `eval ab` can flip it per side. */
+/**
+ * On by default since Phase 3's `eval ab` held (45/45 → 44/45, cost flat;
+ * see evals/experiments.jsonl 2026-10-14-coding-1). Read per call so `eval ab`
+ * can still flip it per side — `0` opts out.
+ */
 export function editDiagnosticsEnabled(): boolean {
-  return process.env.FREECODE_EDIT_DIAGNOSTICS === "1";
+  return process.env.FREECODE_EDIT_DIAGNOSTICS !== "0";
 }
 
 function stateFor(sessionId: string): SessionDiagnostics {

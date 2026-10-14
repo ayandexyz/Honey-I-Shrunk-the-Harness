@@ -1,7 +1,15 @@
 # Edit-Time Diagnostics, and a Verify Gate You Can See
 
-> **Status:** Phases 1–2 **built 2026-10-14** (`agent/loop.ts` `runGateCommand`,
-> `tools/lsp/feedback.ts`, `tools/lsp/client.ts`); Phases 3–4 (`eval ab`) not run.
+> **Status:** Phases 1–3 **built 2026-10-14** (`agent/loop.ts` `runGateCommand`,
+> `tools/lsp/feedback.ts`, `tools/lsp/client.ts`). Phase 3's `eval ab` held
+> (coding.jsonl: 45/45 → 44/45, cost flat-to-lower — `evals/experiments.jsonl`
+> `2026-10-14-coding-1`, kept), so `FREECODE_EDIT_DIAGNOSTICS` is **on by
+> default**; `0` opts out. A bug found while running that eval — `disposeAll()`
+> in `tools/lsp/client.ts` was never called, so every sandboxed trial's
+> language server leaked for the run's life and the harness never exited on
+> its own — is fixed (`eval/sandbox.ts` `disposeRoot`, `eval/runner.ts`
+> `shutdownRunner`, `server.ts` shutdown). Phase 4 (drop `build` from
+> `SCRIPT_PRIORITY`) not run.
 > **Branch:** `fix/agent-fold-activity`.
 > **Evidence:** session `5ea1fdcb-01bb-4026-b3bd-a574b4fc6232`
 > (`~/.freecode/rollout/sessions/5ea1fdcb…/events.jsonl`).
@@ -109,9 +117,11 @@ happens). For each registry command, first hit wins:
    `pyright`). The edit that triggered the install gets no diagnostics; later
    ones do. `FREECODE_LSP_AUTO_INSTALL=0` turns the install off.
 
-**Flag.** `FREECODE_EDIT_DIAGNOSTICS=1` turns it on. **Off by default** — it
-changes what the model sees, so flipping the default is an `eval ab` decision
-(CLAUDE.md). Subagents follow the same flag.
+**Flag.** `FREECODE_EDIT_DIAGNOSTICS=0` turns it off. **On by default since
+Phase 3** — it changes what the model sees, so flipping the default was an
+`eval ab` decision (CLAUDE.md), and `eval/experiments.jsonl`'s
+`2026-10-14-coding-1` is that decision's record. Subagents follow the same
+flag.
 
 **Rollout.** `diagnostics.delivered` with counts only (files, errors,
 waitedMs) — never messages or paths, so OTLP stays leak-free.
@@ -122,7 +132,7 @@ waitedMs) — never messages or paths, so OTLP stays leak-free.
 |---|---|---|
 | 1 | §1.1 gate notices + `script` field | unit test; manual run shows the notice |
 | 2 | §1.2 client `didChange`/`didSave`, seq store, drain + baseline, discovery + auto-install, flag | `feedback.test.ts` against a fake server (stale push then fresh, baseline silent, once-only, 1.5 s cap) |
-| 3 | `eval ab` with `FREECODE_EDIT_DIAGNOSTICS` 0/1 on `coding.jsonl` | delta read; flip the default only if pass rate holds and cost per pass does not rise |
+| 3 | `eval ab` with `FREECODE_EDIT_DIAGNOSTICS` 0/1 on `coding.jsonl` | **done 2026-10-14**: 15 cases × 3 trials, 45/45 → 44/45, cost $0.4823 → $0.4521; the one dip (`fix-in-nested-dir`) re-ran at 8 trials/side (6/8 → 7/8, same failure both sides) and is a pre-existing model flake, not a regression — default flipped on |
 | 4 | With Phase 3 on: drop `build` from `SCRIPT_PRIORITY` (typecheck-style scripts only) | `eval ab` again — this is a gate behaviour change |
 
 ## 3. Not doing

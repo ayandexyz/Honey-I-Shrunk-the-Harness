@@ -9,6 +9,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bus } from "../bus/index.js";
+import { disposeRoot } from "../tools/lsp/client.js";
 import { makeTestLayer } from "../effect/layers.js";
 import { makeRuntime } from "../effect/runtime.js";
 import { SessionStoreTag } from "../effect/context.js";
@@ -71,6 +72,10 @@ async function run(projectPath: string, steps: Step[], config: { finishTests?: b
   } finally {
     await runtime.dispose();
     rmSync(rolloutDir, { recursive: true, force: true });
+    // Edit-time diagnostics is on by default: `main.ts`/`lib.ts` below spawn a
+    // real typescript-language-server rooted at `projectPath`, which outlives
+    // this run and hangs the test file's own exit unless disposed here.
+    disposeRoot(projectPath);
   }
 }
 

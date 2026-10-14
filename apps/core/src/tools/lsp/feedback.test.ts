@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { disposeAll, resolveCommand } from "./client.js";
+import { diagnosticPushes, disposeAll, disposeRoot, resolveCommand } from "./client.js";
 import { drainEditDiagnostics, noteEdit, noteRead } from "./feedback.js";
 
 const SERVER = `
@@ -85,12 +85,18 @@ test("a slow server costs the drain at most its cap, and the late push is not lo
   assert.match((await drainEditDiagnostics("s3"))?.text ?? "", /late/);
 });
 
-test("off by default", async () => {
-  delete process.env.FREECODE_EDIT_DIAGNOSTICS;
+test("on by default, off via FREECODE_EDIT_DIAGNOSTICS=0", async () => {
   const file = join(dir, "d.fk");
   writeFileSync(file, "ERR: x\n");
+
+  process.env.FREECODE_EDIT_DIAGNOSTICS = "0";
   noteEdit("s4", file, dir);
-  assert.equal(await drainEditDiagnostics("s4"), undefined);
+  assert.equal(await drainEditDiagnostics("s4"), undefined, "opted out");
+
+  delete process.env.FREECODE_EDIT_DIAGNOSTICS;
+  noteEdit("s4b", file, dir);
+  assert.ok(await drainEditDiagnostics("s4b"), "on when unset");
+
   process.env.FREECODE_EDIT_DIAGNOSTICS = "1";
 });
 
@@ -101,4 +107,29 @@ test("a server is found in the project's node_modules before PATH", () => {
   assert.equal(resolveCommand("node", dir), join(bin, "node"));
   assert.notEqual(resolveCommand("node", tmpdir()), undefined, "falls back to PATH");
   assert.equal(resolveCommand("no-such-lsp-server", dir), undefined);
+});
+
+test("disposeRoot tears down only that root's server, leaving other roots live", async () => {
+  const rootA = mkdtempSync(join(tmpdir(), "freecode-edit-diag-a-"));
+  const rootB = mkdtempSync(join(tmpdir(), "freecode-edit-diag-b-"));
+  try {
+    const fileA = join(rootA, "a.fk");
+    const fileB = join(rootB, "b.fk");
+    writeFileSync(fileA, "ERR: in-a\n");
+    writeFileSync(fileB, "ERR: in-b\n");
+    noteRead("disposeA", fileA, rootA);
+    noteRead("disposeB", fileB, rootB);
+    await sleep(500); // both servers start + push their baseline
+
+    assert.ok(diagnosticPushes(rootA).length > 0, "rootA has a live push before dispose");
+    assert.ok(diagnosticPushes(rootB).length > 0, "rootB has a live push before dispose");
+
+    disposeRoot(rootA);
+
+    assert.deepEqual(diagnosticPushes(rootA), [], "rootA's connection and its pushes are gone");
+    assert.ok(diagnosticPushes(rootB).length > 0, "rootB is untouched by rootA's disposal");
+  } finally {
+    rmSync(rootA, { recursive: true, force: true });
+    rmSync(rootB, { recursive: true, force: true });
+  }
 });

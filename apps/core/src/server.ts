@@ -77,6 +77,7 @@ import { disposeReadState } from "./tools/read-state.js";
 import { getAgentRegistry, disposeAllAgents } from "./agent/registry/index.js";
 import { disposeCacheAwareness } from "./providers/cache-awareness.js";
 import { disposeFrozenSessionContext } from "./context/session-context.js";
+import { disposeAll as disposeLspServers } from "./tools/lsp/client.js";
 import { buildContextBreakdown } from "./context/breakdown.js";
 import type { AgentMode } from "./agent/types.js";
 import {
@@ -2028,6 +2029,10 @@ export async function startServer() {
     // Same backstop for subagents: interrupting the loops also releases the
     // provider streams they are holding open.
     disposeAllAgents();
+    // A language server (edit-time diagnostics, FREECODE_EDIT_DIAGNOSTICS=1)
+    // is a child process the daemon spawned and never killed on its own — an
+    // orphan surviving the daemon's own exit, same failure as a shell or agent.
+    disposeLspServers();
   });
 
   let shuttingDown = false;
@@ -2049,6 +2054,7 @@ export async function startServer() {
     );
     hookSettings.dispose();
     disposeAllShellRegistries();
+    disposeLspServers();
     process.exit(signal === "SIGINT" ? 130 : 143);
   };
   process.on("SIGINT", () => void shutdown("SIGINT"));
