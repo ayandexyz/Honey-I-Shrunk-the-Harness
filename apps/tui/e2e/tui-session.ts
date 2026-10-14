@@ -109,7 +109,7 @@ export class TuiSession {
 
   /** Boot is done once the welcome line or the prompt footer is drawn. */
   waitForBoot(): Promise<string> {
-    return this.waitFor(/>_ OmaCode \(v\d+\.\d+\.\d+\)/);
+    return this.waitFor(/>_ Histh! \(v\d+\.\d+\.\d+\)/);
   }
 
   /** Literal text, no Enter. */
