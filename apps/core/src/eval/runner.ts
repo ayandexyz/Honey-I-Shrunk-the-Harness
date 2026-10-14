@@ -65,6 +65,13 @@ const MEMORY_DRAIN_TIMEOUT_MS = envInt(
 export async function shutdownRunner(): Promise<void> {
   const { stopMcpServers } = await import("../mcp/index.js");
   await stopMcpServers();
+  // Same failure mode, same fix, for edit-time diagnostics (spec
+  // 2026-10-14-edit-time-diagnostics.md §1.2): a sandboxed trial's own
+  // language server is disposed via `Sandbox.cleanup()`, but an unsandboxed
+  // case's server is rooted at the real project path and outlives the trial,
+  // so without this the suite would hang on that live child too.
+  const { disposeAll } = await import("../tools/lsp/client.js");
+  disposeAll();
 }
 
 /** Boots providers + MCP once for the whole suite, not once per case. */

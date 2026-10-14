@@ -64,6 +64,8 @@ left out.
 | `FREECODE_OUTPUT_STORE_BYTES` | 16 MB | Per-session store of full tool outputs; oldest evicted first. |
 | `FREECODE_OUTPUT_STORE_SESSIONS` | `50` | How many sessions' output stores stay live at once. |
 | `FREECODE_LSP_SERVERS` | built-in table | JSON mapping file extensions to language servers, e.g. `{".rs": {"command": "rust-analyzer", "args": []}}`. Adds to or overrides the built-ins. |
+| `FREECODE_EDIT_DIAGNOSTICS` | on | `0` stops sending the errors an edit introduced (language-server diagnostics, minus what was already broken) to the model on its next request. Spec `2026-10-14-edit-time-diagnostics.md`. `eval ab`. |
+| `FREECODE_LSP_AUTO_INSTALL` | on | `0` stops edit diagnostics from installing a missing npm language server (`typescript-language-server`, `pyright`) into `~/.freecode/lsp`. |
 | `FREECODE_RTK` | on if `rtk` is installed | `0` stops rewriting bash commands to their compact `rtk` equivalents. |
 
 ## Prompt and context
@@ -118,8 +120,6 @@ left out.
 | `FREECODE_CLAUDE_CODE_AGENTS` | on | `0` skips subagent definitions from `~/.claude/agents` and `<project>/.claude/agents`. |
 | `FREECODE_DISABLE_EXTENSIONS` | extensions load | `1` loads no extensions at all. |
 | `FREECODE_TRUST_PROJECT_EXTENSIONS` | off | `1` loads `<project>/.freecode/extensions/` without the project being in `extensions.trustedProjects`. An extension is arbitrary code, so use it only on repos you trust. |
-| `FREECODE_HOOK_URL` | unset | URL of a supervising board (AgentBoard): reports activity over HTTP and lets the board answer permission requests. Inert when unset. |
-| `FREECODE_AGENT_FOLD` | on | `0` turns off reporting to the agent-fold bridge (already inert when the bridge isn't running). |
 | `FREECODE_CHECKPOINTS` | on | `0` stops the per-turn file snapshots behind `/rewind`. |
 
 ## Paths

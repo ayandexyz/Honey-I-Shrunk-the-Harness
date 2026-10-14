@@ -9,6 +9,8 @@ import {
   createSystemMessage,
   createUserMessage,
   createInProgressMessage,
+  finalizeAssistantText,
+  mainTranscript,
   sealToolGroups,
 } from "./index.js";
 import { ToolGroupMessage } from "./tool-group-message.js";
@@ -42,7 +44,6 @@ test("consecutive tool results share one message and summarize by tool", () => {
   const collapsed = group.render(80);
   assert.match(plain(collapsed), /Read 2 files, Ran 1 command/);
   assert.doesNotMatch(plain(collapsed), /a\.ts/);
-  assert.match(plain(collapsed), /▶ /);
 });
 
 test("clicking the summary expands the group back to one row per call", () => {
@@ -59,7 +60,6 @@ test("clicking the summary expands the group back to one row per call", () => {
   const expanded = group.render(80);
   assert.match(plain(expanded), /a\.ts/);
   assert.match(plain(expanded), /b\.ts/);
-  assert.match(plain(expanded), /▼ /);
 });
 
 test("a failed call marks the summary", () => {
@@ -211,4 +211,81 @@ test("a group that opens right under the prompt is set off by a blank row", () =
   addResult("Read", { file_path: "c.ts" });
   const next = getMessages().filter((m) => m.component instanceof ToolGroupMessage)[1]!;
   assert.notEqual(next.component.render(80)[0], "");
+});
+
+test("tool preambles fold into one dim line while the final answer stays", () => {
+  clearMessages();
+  createUserMessage("fix it");
+  createInProgressMessage("Thinking");
+
+  // The first internal turn narrates the call. Once the call starts, that
+  // prose should stop occupying its own assistant row.
+  const first = finalizeAssistantText("Now reading the controller.\nPlease wait.");
+  assert.ok(first);
+  const started = createToolProgressMessage("call-read", "Read", {
+    file_path: "controller.ts",
+  });
+  removeToolProgressMessage(started.message, started.progress);
+  createToolResultMessage(
+    "call-read",
+    "Read",
+    { file_path: "controller.ts" },
+    "contents",
+    true,
+  );
+
+  // A second preamble joins the same compact line and does not split the run.
+  finalizeAssistantText("Re-running the tests.");
+  const second = createToolProgressMessage("call-test", "Bash", {
+    command: "pnpm test",
+  });
+  removeToolProgressMessage(second.message, second.progress);
+  createToolResultMessage(
+    "call-test",
+    "Bash",
+    { command: "pnpm test" },
+    "ok",
+    true,
+  );
+
+  const groups = getMessages().filter((m) => m.component instanceof ToolGroupMessage);
+  assert.equal(groups.length, 1);
+  const rendered = plain(groups[0]!.component.render(100));
+  assert.match(rendered, /Read 1 file, Ran 1 command/);
+  assert.match(
+    rendered,
+    /Now reading the controller\. Please wait\. · Re-running the tests\./,
+  );
+
+  // With no following tool_start, terminal prose remains a normal full row.
+  finalizeAssistantText("Everything passes. Here is the full result.");
+  const assistants = getMessages().filter((m) => m.type === "assistant");
+  assert.equal(assistants.length, 1);
+  assert.match(assistants[0]!.content, /Everything passes/);
+});
+
+test("a file-update preamble moves into its diff card", () => {
+  clearMessages();
+  finalizeAssistantText("Now updating the controller.");
+
+  mainTranscript.apply({
+    type: "tool_start",
+    toolCallId: "call-edit",
+    toolName: "Edit",
+    args: { file_path: "controller.ts" },
+  });
+  mainTranscript.apply({
+    type: "tool_complete",
+    toolCallId: "call-edit",
+    toolName: "Edit",
+    result: "+ 1 changed",
+    success: true,
+  });
+
+  const messages = getMessages();
+  assert.equal(messages.filter((m) => m.type === "assistant").length, 0);
+  const rendered = plain(messages.at(-1)!.component.render(100));
+  assert.match(rendered, /Now updating the controller\./);
+  assert.match(rendered, /Update\(/);
+  assert.match(rendered, /controller\.ts/);
 });

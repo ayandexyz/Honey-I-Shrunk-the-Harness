@@ -9,6 +9,7 @@ import type { Tool, ToolExecutionResult, JsonSchema } from "./tool.types.js";
 import { buildTool } from "./factory.js";
 import { generateDiffString } from "./diff-format.js";
 import { getReadState } from "./read-state.js";
+import { noteEdit } from "./lsp/feedback.js";
 
 interface WriteParams {
   content: string;
@@ -100,6 +101,7 @@ async function executeWrite(
     // New files skip the diff — echoing the whole file back adds no signal.
     const oldContent = exists ? fs.readFileSync(filepath, "utf-8") : "";
     fs.writeFileSync(filepath, params.content, "utf-8");
+    noteEdit(ctx.sessionId, filepath, ctx.projectPath ?? ctx.cwd);
 
     // Record the post-write state so `edit` does not later report the model's
     // own write as an external change. No offset/limit — this content was

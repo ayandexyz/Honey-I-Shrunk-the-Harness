@@ -16,6 +16,7 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { disposeRoot } from "../tools/lsp/client.js";
 
 export class SandboxError extends Error {}
 
@@ -65,6 +66,7 @@ export function createSandbox(files: Record<string, string>): Sandbox {
   return {
     dir,
     cleanup() {
+      disposeRoot(dir);
       if (KEEP) {
         console.error(`  kept sandbox ${dir}`);
         return;

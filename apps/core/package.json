@@ -20,7 +20,7 @@
     "build": "tsc && node scripts/copy-assets.mjs",
     "lint": "tsc --noEmit",
     "check-types": "tsc --noEmit",
-    "test": "tsx --test \"src/**/*.test.ts\""
+    "test": "FREECODE_EDIT_DIAGNOSTICS=0 tsx --test \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.80",

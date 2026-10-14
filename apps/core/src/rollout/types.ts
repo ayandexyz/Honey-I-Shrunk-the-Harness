@@ -49,6 +49,7 @@ export type RolloutEvent =
   | RedirectSkippedEvent
   | LoopWarnedEvent
   | VerifyRanEvent
+  | DiagnosticsDeliveredEvent
   | UnwiredFlaggedEvent
   | PokeTriggeredEvent
   | PokeSkippedEvent
@@ -526,6 +527,15 @@ export interface CheckpointRestoredEvent extends BaseEvent {
   durationMs: number;
 }
 
+/** Edit-time diagnostics reached the model (spec 2026-10-14-edit-time-diagnostics.md §1.2). Counts only. */
+export interface DiagnosticsDeliveredEvent extends BaseEvent {
+  type: "diagnostics.delivered";
+  files: number;
+  errors: number;
+  /** How long the drain waited for the server's push. */
+  waitedMs: number;
+}
+
 /** A finish-time check ran (spec 2026-10-13-finish-time-verification.md §2.4). Counts only. */
 export interface VerifyRanEvent extends BaseEvent {
   type: "verify.ran";
@@ -534,6 +544,9 @@ export interface VerifyRanEvent extends BaseEvent {
   ms: number;
   /** Failing test / error lines found in the output. */
   failing: number;
+  /** The script that actually ran (`build`, `typecheck`, `test`…) — `kind` is
+   *  the gate, not the command; a `build` fallback used to log as "typecheck". */
+  script?: string;
 }
 
 /** The "no callers" check named this many declarations. Never the names. */

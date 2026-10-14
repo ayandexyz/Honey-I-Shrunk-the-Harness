@@ -165,7 +165,11 @@ export const createToolProgressMessage = (
   toolCallId: string,
   toolName: string,
   args: Record<string, unknown>,
-): { message: MessageInstance; progress: ToolProgressMessage } =>
+): {
+  message: MessageInstance;
+  progress: ToolProgressMessage;
+  narration?: string;
+} =>
   mainTranscript.createToolProgressMessage(toolCallId, toolName, args);
 /** Undoes createToolProgressMessage once the call's result arrives. */
 export const removeToolProgressMessage = (

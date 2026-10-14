@@ -22,6 +22,15 @@ export interface ToolResultMessageOptions {
   result?: string;
   success: boolean;
   duration_ms?: number;
+  narration?: string;
+}
+
+/** Turn tool-adjacent prose into a compact, single-line annotation. */
+export function compactToolNarration(content: string): string {
+  return content
+    .replace(/^\*\*FreeCode:\*\*\s*/, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 // Tools whose result is a file diff. Their header reads "Update" and they
@@ -91,6 +100,7 @@ export class ToolResultMessage implements Component {
   private result?: string;
   private success: boolean;
   private duration_ms?: number;
+  private narration?: string;
   /** Collapsed by default; a click on the header row expands the body. */
   private isCollapsed = true;
   /**
@@ -127,6 +137,9 @@ export class ToolResultMessage implements Component {
     this.result = options.result;
     this.success = options.success;
     this.duration_ms = options.duration_ms;
+    this.narration = options.narration
+      ? compactToolNarration(options.narration)
+      : undefined;
   }
 
   invalidate(): void {
@@ -230,10 +243,7 @@ export class ToolResultMessage implements Component {
     // lines that frame an expanded block.
     if (!collapsed) lines.push(""); // Empty line above
 
-    const caret = this.collapsible
-      ? chalk.dim(this.isCollapsed ? "\u25b6 " : "\u25bc ")
-      : "";
-    let header = `${caret}${statusIcon} ${chalk.bold(colorFn(headerAction))}${headerTarget}`;
+    let header = `${statusIcon} ${chalk.bold(colorFn(headerAction))}${headerTarget}`;
     if (duration) {
        header += ` ${chalk.dim(duration)}`;
     }
@@ -241,6 +251,10 @@ export class ToolResultMessage implements Component {
     header = truncateToWidth(header, safeWidth);
     this.headerLineIndex = lines.length;
     lines.push(header);
+
+    if (this.narration) {
+      lines.push(chalk.dim(truncateToWidth(`  ${this.narration}`, safeWidth)));
+    }
 
     if (collapsed) return lines;
 

@@ -8,6 +8,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { bus } from "../bus/index.js";
+import { disposeRoot } from "../tools/lsp/client.js";
 import { makeTestLayer } from "../effect/layers.js";
 import { makeRuntime } from "../effect/runtime.js";
 import { SessionStoreTag } from "../effect/context.js";
@@ -70,8 +72,32 @@ async function run(projectPath: string, steps: Step[], config: { finishTests?: b
   } finally {
     await runtime.dispose();
     rmSync(rolloutDir, { recursive: true, force: true });
+    // Edit-time diagnostics is on by default: `main.ts`/`lib.ts` below spawn a
+    // real typescript-language-server rooted at `projectPath`, which outlives
+    // this run and hangs the test file's own exit unless disposed here.
+    disposeRoot(projectPath);
   }
 }
+
+test("the verify gate says what it runs and how it went, and logs the real script", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "freecode-finish-notice-"));
+  const notices: string[] = [];
+  const unsub = bus.subscribe("stream", (e) => {
+    const ev = (e as { event: { type: string; content?: string } }).event;
+    if (ev.type === "notice") notices.push(ev.content ?? "");
+  });
+  try {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { typecheck: "node -e 0" } }));
+    const events = await run(dir, [{ write: [join(dir, "a.txt"), "a"] }, { say: "done" }]);
+    assert.ok(notices.some((n) => /^Verifying: \S+ run typecheck$/.test(n)), notices.join(" | "));
+    assert.ok(notices.some((n) => /^typecheck passed \(\d+s\)$/.test(n)), notices.join(" | "));
+    const ran = events.filter((e) => e.type === "verify.ran" && e.kind === "typecheck");
+    assert.deepEqual(ran.map((e) => e.script), ["typecheck"]);
+  } finally {
+    unsub();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test("a ≥3-file change runs the package's tests; a failure comes back once, the fix finishes", async () => {
   const dir = mkdtempSync(join(tmpdir(), "freecode-finish-tests-"));

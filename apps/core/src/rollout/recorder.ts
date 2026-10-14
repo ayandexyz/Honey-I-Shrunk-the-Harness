@@ -635,8 +635,12 @@ export class RolloutRecorder {
     );
   }
 
-  recordVerifyRan(kind: "typecheck" | "tests", ok: boolean, ms: number, failing: number): void {
-    this.write(this.makeEvent("verify.ran", { aggregateID: this.sessionId, fields: { kind, ok, ms, failing } }));
+  recordVerifyRan(kind: "typecheck" | "tests", ok: boolean, ms: number, failing: number, script?: string): void {
+    this.write(this.makeEvent("verify.ran", { aggregateID: this.sessionId, fields: { kind, ok, ms, failing, script } }));
+  }
+
+  recordDiagnosticsDelivered(files: number, errors: number, waitedMs: number): void {
+    this.write(this.makeEvent("diagnostics.delivered", { aggregateID: this.sessionId, fields: { files, errors, waitedMs } }));
   }
 
   recordUnwiredFlagged(count: number): void {

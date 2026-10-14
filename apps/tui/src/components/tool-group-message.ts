@@ -1,7 +1,11 @@
 import { Component, truncateToWidth } from "@earendil-works/pi-tui";
 import chalk from "chalk";
 import { palette } from "../palette.js";
-import { ToolResultMessage, type ToolResultMessageOptions } from "./tool-result-message.js";
+import {
+  ToolResultMessage,
+  compactToolNarration,
+  type ToolResultMessageOptions,
+} from "./tool-result-message.js";
 import type { ToolProgressMessage } from "./tool-progress-message.js";
 import { formatDuration } from "../utils/format-duration.js";
 
@@ -59,6 +63,7 @@ export class ToolGroupMessage implements Component {
   private items: ToolResultMessage[] = [];
   private entries: ToolResultMessageOptions[] = [];
   private pending: ToolProgressMessage[] = [];
+  private narrations: string[] = [];
   private sealed = false;
   private expanded = false;
   private lineOwners: LineOwner[] = [];
@@ -79,6 +84,14 @@ export class ToolGroupMessage implements Component {
 
   addPending(progress: ToolProgressMessage): void {
     this.pending.push(progress);
+  }
+
+  /** Fold model-written tool preambles into one quiet line for the whole run. */
+  addNarration(content: string): void {
+    const narration = compactToolNarration(content);
+    if (narration && this.narrations[this.narrations.length - 1] !== narration) {
+      this.narrations.push(narration);
+    }
   }
 
   removePending(progress: ToolProgressMessage): void {
@@ -144,8 +157,7 @@ export class ToolGroupMessage implements Component {
 
     const failed = this.entries.filter((e) => !e.success).length;
     const icon = failed > 0 ? palette.red("✖") : palette.green("●");
-    const caret = chalk.dim(expanded ? "▼ " : "▶ ");
-    let summary = `${caret}${icon} ${this.summaryText()}`;
+    let summary = `${icon} ${this.summaryText()}`;
     if (failed > 0) {
       summary += ` ${palette.red(`(${failed} failed)`)}`;
     }
@@ -154,6 +166,11 @@ export class ToolGroupMessage implements Component {
       summary += ` ${chalk.dim(`(${formatDuration(total)})`)}`;
     }
     push(truncateToWidth(summary, Math.max(20, width - 1)), "summary");
+
+    if (this.narrations.length > 0) {
+      const narration = this.narrations.join(" · ");
+      push(chalk.dim(truncateToWidth(`  ${narration}`, Math.max(20, width - 1))), null);
+    }
 
     for (const p of this.pending) {
       // Progress rows frame themselves with blank lines for standalone use;

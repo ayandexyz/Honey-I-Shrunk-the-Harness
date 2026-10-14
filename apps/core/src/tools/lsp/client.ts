@@ -6,6 +6,7 @@
 
 import { spawn, type ChildProcessWithoutNullStreams } from "child_process";
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 import { pathToFileURL } from "url";
 import {
@@ -19,6 +20,14 @@ interface Pending {
   reject: (err: Error) => void;
 }
 
+export interface DiagnosticPush {
+  uri: string;
+  diagnostics: Diagnostic[];
+  /** Process-wide push counter: higher = newer, across every server. */
+  seq: number;
+}
+let pushSeq = 0;
+
 interface Diagnostic {
   range: { start: { line: number; character: number } };
   severity?: number;
@@ -31,13 +40,14 @@ class ServerConnection {
   private buffer = Buffer.alloc(0);
   private nextId = 1;
   private pending = new Map<number, Pending>();
-  private diagnostics = new Map<string, Diagnostic[]>();
-  private openDocs = new Set<string>();
+  private diagnostics = new Map<string, DiagnosticPush>();
+  /** Open documents → their last sent version. */
+  private versions = new Map<string, number>();
   private initialized: Promise<void>;
   private initError: Error | null = null;
 
   constructor(spec: ServerSpec, private root: string) {
-    this.proc = spawn(spec.command, spec.args, {
+    this.proc = spawn(resolveCommand(spec.command, root) ?? spec.command, spec.args, {
       cwd: root,
       stdio: ["pipe", "pipe", "pipe"],
     }) as ChildProcessWithoutNullStreams;
@@ -69,6 +79,7 @@ class ServerConnection {
       capabilities: {
         textDocument: {
           publishDiagnostics: {},
+          synchronization: { didSave: true },
           hover: { contentFormat: ["markdown", "plaintext"] },
           definition: {},
           references: {},
@@ -120,7 +131,11 @@ class ServerConnection {
     }
     if (msg.method === "textDocument/publishDiagnostics") {
       const params = msg.params as { uri: string; diagnostics: Diagnostic[] };
-      this.diagnostics.set(params.uri, params.diagnostics ?? []);
+      this.diagnostics.set(params.uri, {
+        uri: params.uri,
+        diagnostics: params.diagnostics ?? [],
+        seq: ++pushSeq,
+      });
     }
   }
 
@@ -154,7 +169,7 @@ class ServerConnection {
       throw this.initError;
     }
     const uri = pathToFileURL(file).href;
-    if (this.openDocs.has(uri)) return;
+    if (this.versions.has(uri)) return;
     const text = fs.readFileSync(file, "utf-8");
     this.notify("textDocument/didOpen", {
       textDocument: {
@@ -164,7 +179,28 @@ class ServerConnection {
         text,
       },
     });
-    this.openDocs.add(uri);
+    this.versions.set(uri, 1);
+  }
+
+  /**
+   * Tell the server the file on disk changed. Drops the URI's last push first,
+   * so a pre-edit push is never read as this edit's result.
+   */
+  async syncDocument(file: string): Promise<void> {
+    const uri = pathToFileURL(file).href;
+    const version = this.versions.get(uri);
+    if (version === undefined) return this.openDocument(file);
+    this.diagnostics.delete(uri);
+    this.versions.set(uri, version + 1);
+    this.notify("textDocument/didChange", {
+      textDocument: { uri, version: version + 1 },
+      contentChanges: [{ text: fs.readFileSync(file, "utf-8") }],
+    });
+    this.notify("textDocument/didSave", { textDocument: { uri } });
+  }
+
+  pushes(): DiagnosticPush[] {
+    return [...this.diagnostics.values()];
   }
 
   async diagnosticsFor(file: string): Promise<Diagnostic[]> {
@@ -176,7 +212,7 @@ class ServerConnection {
       if (this.diagnostics.has(uri)) break;
       await new Promise((r) => setTimeout(r, 150));
     }
-    return this.diagnostics.get(uri) ?? [];
+    return this.diagnostics.get(uri)?.diagnostics ?? [];
   }
 
   async requestAt(
@@ -206,9 +242,61 @@ class ServerConnection {
 // Pool of live servers keyed by command + root.
 const pool = new Map<string, ServerConnection>();
 
-function getConnection(file: string, root: string): ServerConnection | undefined {
+// Where a server binary is looked for, first hit wins: the project's own
+// install, PATH, then freecode's (spec 2026-10-14-edit-time-diagnostics §1.2).
+export const LSP_INSTALL_DIR = path.join(os.homedir(), ".freecode", "lsp");
+
+export function resolveCommand(command: string, root: string): string | undefined {
+  if (path.isAbsolute(command)) return fs.existsSync(command) ? command : undefined;
+  const dirs = [
+    path.join(root, "node_modules", ".bin"),
+    ...(process.env.PATH ?? "").split(path.delimiter).filter(Boolean),
+    path.join(LSP_INSTALL_DIR, "node_modules", ".bin"),
+  ];
+  for (const dir of dirs) {
+    const candidate = path.join(dir, command);
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return undefined;
+}
+
+// npm-installable servers → the packages that make them work.
+const NPM_PACKAGES: Record<string, string[]> = {
+  "typescript-language-server": ["typescript-language-server", "typescript"],
+  "pyright-langserver": ["pyright"],
+};
+const installs = new Set<string>();
+
+/** Install a missing server into LSP_INSTALL_DIR, once per process, in the background. */
+function installInBackground(command: string): void {
+  const packages = NPM_PACKAGES[command];
+  if (!packages || installs.has(command) || process.env.FREECODE_LSP_AUTO_INSTALL === "0") return;
+  installs.add(command); // ponytail: a failed install is not retried until restart
+  try {
+    fs.mkdirSync(LSP_INSTALL_DIR, { recursive: true });
+    const child = spawn(
+      "npm",
+      ["install", "--prefix", LSP_INSTALL_DIR, "--no-audit", "--no-fund", "--silent", ...packages],
+      { stdio: "ignore" },
+    );
+    child.on("error", () => {});
+    child.unref();
+  } catch {
+    /* no npm: diagnostics stay off for this language */
+  }
+}
+
+function getConnection(
+  file: string,
+  root: string,
+  opts: { install?: boolean } = {},
+): ServerConnection | undefined {
   const spec = serverForExtension(path.extname(file));
   if (!spec) return undefined;
+  if (opts.install && !resolveCommand(spec.command, root)) {
+    installInBackground(spec.command);
+    return undefined;
+  }
   const key = `${spec.command}::${root}`;
   let conn = pool.get(key);
   if (!conn) {
@@ -253,6 +341,44 @@ export async function lspRequest(
   const extra =
     operation === "references" ? { context: { includeDeclaration: false } } : {};
   return conn.requestAt(method, file, line, character, extra);
+}
+
+/** Open a file on its server so its first push becomes a baseline. */
+export async function openFile(file: string, root: string): Promise<boolean> {
+  const conn = getConnection(file, root, { install: true });
+  if (!conn) return false;
+  await conn.openDocument(file);
+  return true;
+}
+
+/** didOpen / didChange + didSave for a file just written. */
+export async function syncFile(file: string, root: string): Promise<boolean> {
+  const conn = getConnection(file, root, { install: true });
+  if (!conn) return false;
+  await conn.syncDocument(file);
+  return true;
+}
+
+/** Latest push per document, across every server rooted at `root`. */
+export function diagnosticPushes(root: string): DiagnosticPush[] {
+  const out: DiagnosticPush[] = [];
+  for (const [key, conn] of pool) if (key.endsWith(`::${root}`)) out.push(...conn.pushes());
+  return out;
+}
+
+/**
+ * Tear down every server rooted at `root`. Call this once that root is gone
+ * (e.g. a sandbox's tmpdir is about to be deleted) — a connection the eval
+ * harness never revisits otherwise sits in the pool, child process and all,
+ * for the rest of the run (spec 2026-10-14-edit-time-diagnostics.md §1.2).
+ */
+export function disposeRoot(root: string): void {
+  for (const [key, conn] of pool) {
+    if (key.endsWith(`::${root}`)) {
+      conn.dispose();
+      pool.delete(key);
+    }
+  }
 }
 
 export function disposeAll(): void {
