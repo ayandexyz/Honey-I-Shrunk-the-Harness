@@ -151,6 +151,7 @@ Read this file before you spend.
 | `--agents` | `freecode,claude-code` | comma-separated adapter ids from `bench/agent-bench/agents/` |
 | `--instances` | every id in `instances/django-lite.txt` (10 django bugs) | comma-separated SWE-bench instance ids |
 | `--trials` | `1` | trials per (agent, instance). Phase 2 onward: **3**, and publish the spread. Never merge into best-of |
+| `--baseline-only` | off | judged set: write each task's `baseline-checks.json` into `--out` and stop — no agent runs, `report.json` untouched |
 | `--first-trial` | `1` | number the trials from N. Extends an earlier run (`--trials 2 --first-trial 2` adds trials 2–3) instead of overwriting its trial 1 — publish keys rows by (agent, instance, trial) |
 | `--timeout` | `900000` (15 min) | per-trial wall-clock cap, ms. Timeout SIGKILLs the agent |
 | `--out` | `bench/agent-bench/results/<timestamp>` | artifact root |
@@ -309,7 +310,7 @@ This set is reported **beside** the SWE-bench number, never instead of it.
 | Candidate commits (BuffBench's `basicFilter` + app scope) | `pnpm bench:commits` | built, free |
 | HARD screen + task generator (GPT-5.5 via `codex exec`) | `pnpm bench:tasks generate` | built; pilot made 10 drafts |
 | Owner review | `pnpm bench:tasks list` / `approve` | built |
-| Judging: Gemini scores, GPT audits 20% + fallback (default); full panel optional | `runner/judge-audit.ts`, `runner/judge.ts` | built; panel live-tested |
+| Judging: Haiku scores, GPT audits 20% + fallback (default); full panel optional | `runner/judge-audit.ts`, `runner/judge.ts` | built; panel live-tested |
 | Trials on judged tasks (setup, 60-min timeout, final checks) | `pnpm bench:agents --set freecode-commits [--isolate]` | built |
 | Judging step + BuffBench's metrics | `pnpm bench:judge` | built; smoke-tested (real diff 10.0, empty 0.0) |
 | In-container install + checks for `--isolate` | (part of `bench:agents`) | built, unit-tested; **not yet run live** (needs the `docker` group and a rebuilt image) |
@@ -347,7 +348,8 @@ reads. Every record there carries `promptReview.by`, and the loader refuses one
 that does not. A trial clones the local repo at the parent commit, runs
 `pnpm install --frozen-lockfile --prefer-offline`, runs the agent, takes the
 patch, then runs the task's typecheck and tests (last 20K characters of output
-kept, `final-checks.json`). A judged run is not published to `/benchmark`.
+kept, plus every `not ok` / `error TS` line from the part cut off — capped at
+5K — so failing test names survive; `final-checks.json`). A judged run is not published to `/benchmark`.
 
 **With `--isolate`, the install and the checks run inside the agent's image**,
 because this repo's native modules (tree-sitter, sharp, onnxruntime) must be
@@ -355,6 +357,20 @@ built for the image's Node, not your host's. The install goes on the egress
 network into a pnpm store at `.cache/pnpm-store`, a plain directory you own (a
 docker volume would be root-owned). The checks run with `--network none`.
 Without `--isolate` both run on the host and the run is unpublishable.
+
+**Baseline checks.** Before the trials, each task's final checks run once on
+the untouched parent commit in a fresh workspace (same image, same setup) and
+land in `<run>/<task>/baseline-checks.json`; `bench:judge` adds their failure
+lines to the prompt as "already broken, do not count against the agent". Our
+parents do not always pass (three core tests fail offline), and before this
+every verdict cited them as the agent's merge blockers. A run with the file
+already present reuses it. To add baselines to an older run and rejudge it:
+
+```sh
+pnpm bench:agents --set freecode-commits --isolate --baseline-only \
+  --contamination-unchecked --out bench/agent-bench/results/<run>
+pnpm bench:judge bench/agent-bench/results/<run> --rejudge
+```
 
 **Contamination check (spec §4.8).** Before any spend, a judged run checks
 that every agent's pinned model was released *before* the window's first day,
@@ -367,7 +383,7 @@ one file.
 and prints BuffBench's table (avg, avg excluding scores of 1.0 or below, $/run,
 minutes per run), per-app and co-author columns, cost on tasks both agents solved
 (≥7.5), wide trial spreads, saturated tasks, and audit and fallback counts. Its
-first line is the verdict: *scored by Gemini, audited by GPT*, or audit
+first line is the verdict: *scored by judge-haiku, audited by judge-gpt*, or audit
 **UNMEASURED** or **FAILED**, which means a published number needs `--panel`.
 `publishable` is true only for an isolated run with verified judging (audit
 passed, or full panel with ≤10% of trials scored by fewer than two judges) and
@@ -376,15 +392,17 @@ a passed contamination check.
 **Prerequisites.**
 - `codex` CLI installed and logged in (`codex login`). Screen, generator and
   the GPT judge all run `codex exec -m gpt-5.5` on that login.
-- A Gemini key in `~/.freecode/config.json` for the Gemini judge.
+- `claude` CLI (Claude Code) logged in to your Claude subscription. The Haiku
+  judge runs `claude -p --model claude-haiku-4-5` on that login — no API key.
 - Neither judge may share a model family with the agents' pinned model:
   `assertNoCollision` refuses MiniMax judges while agents run MiniMax-M3, and
   would refuse the GPT judge if agents were pinned to an OpenAI model.
 
-**Judging is audit mode by default.** Gemini scores every trial. GPT re-judges a
-fixed 20% sample (`sha256(task|agent|trial)`, the same trials on every re-judge)
-and scores a trial only when Gemini fails. The score is never a mean. A run
-reads as "scored by Gemini, audited by GPT" only with ≥5 two-sided audits and a
+**Judging is audit mode by default.** Haiku 4.5 scores every trial (primary
+since 2026-10-13; it was Gemini 3.5 Flash until that key went invalid). GPT
+re-judges a fixed 20% sample (`sha256(task|agent|trial)`, the same trials on
+every re-judge) and scores a trial only when Haiku fails. The score is never a
+mean. A run reads as "scored by judge-haiku, audited by judge-gpt" only with ≥5 two-sided audits and a
 mean gap ≤ 1.5 points. Otherwise a published number needs the full panel.
 
 **Cost (Codex subscription tokens, not dollars).** Measured on the pilot:
@@ -396,6 +414,12 @@ candidate ~22M more. The ~10K-token Codex preamble on every call cannot be
 turned off.
 
 **Gotchas, all measured.**
+- **Your own Claude Code setup is kept out.** Every Haiku call passes
+  `--setting-sources ""`, `--strict-mcp-config`, `--disable-slash-commands`,
+  `--tools ""` and `--no-session-persistence`, from an empty dir, with
+  BuffBench's prompt as the system prompt. Measured 2026-10-13: ~460 tokens of
+  preamble, no `CLAUDE.md`, hooks, plugins or skills. `--bare` is not usable:
+  it ignores the subscription login. A judge call is ~20 s.
 - **Your own Codex setup is kept out.** Every call passes
   `--ignore-user-config --ignore-rules` and disables hooks, plugins, apps,
   multi-agent, browser, computer-use and skill search. Before that, a judge call
@@ -405,24 +429,29 @@ turned off.
 - **The screen barely filters this repo.** It kept 10 of 16 in the pilot, and 7
   of those came from two feature series. Our commits are phase-sized, so "HARD"
   is the default.
-- **The image needs pnpm.** Images built before the judged set lack it, and an
-  isolated judged run refuses them with the rebuild command.
+- **The image needs pnpm and ripgrep.** Images built before the judged set lack
+  pnpm, and an isolated judged run refuses them with the rebuild command.
+  Images built before 2026-10-13 lack `rg`, and every `--isolate` run refuses
+  them: without it freecode's `grep` tool failed on every call and opencode's
+  could not download its own copy offline.
 - **You must be in the `docker` group** (`sudo usermod -aG docker $USER`, then
   log in again), or every docker call fails with "permission denied".
-- **Gemini is retried twice before GPT takes over.** The first live smoke
-  fell back on both trials over a transient "high demand" error, and every
-  fallback puts GPT's scale into a Gemini-scored run.
+- **The primary is retried twice before GPT takes over.** The first live smoke
+  (then Gemini) fell back on both trials over a transient "high demand" error,
+  and every fallback puts GPT's scale into a primary-scored run.
 - **Model ids come in two dialects.** The claude-code adapter says `MiniMax-M3`
   with no provider prefix, so the judge family check reads model names, not
   just prefixes.
 - **Wrong-scale verdicts are rejected.** A judge that answers 0–1 (GPT-5.5 gave
   0.88 once) counts as dead, not as 0.88/10.
-- **Gemini is Flash, not Pro.** This key has no Pro quota
-  (`gemini-3.1-pro-preview`), and the older Pro models are retired. Upgrading
-  the key is the first judge improvement.
-- **Sonnet via the Claude subscription was refused** ("OAuth authentication is
-  currently not allowed for this organization"). That is why the panel is Gemini
-  + GPT and not BuffBench's GPT + Sonnet.
+- **The Claude judge goes through Claude Code, not core's OAuth provider.**
+  Sending the subscription token to the API from core was refused on
+  2026-09-29 ("OAuth authentication is currently not allowed for this
+  organization"); `claude -p` is Anthropic's own client and works. Haiku is
+  weaker than BuffBench's Sonnet; `model` in `runner/judge.ts` is the knob.
+- **A Claude agent model retires the Haiku judge.** `assertNoCollision` counts
+  `claude` as the `anthropic` family, so pinning agents to a Claude model
+  refuses the run until the primary is changed.
 
 ---
 
@@ -636,7 +665,7 @@ apps/web/app/data/benchmarks/<matchup>.json
 ## Environment
 
 ```bash
-# Judged set (§3d): a Gemini key in ~/.freecode/config.json, and `codex login`.
+# Judged set (§3d): `claude` logged in (Haiku judge), and `codex login` (GPT).
 MINIMAX_API_KEY=...          # required for every shipped adapter
 MINIMAX_BASE_URL=...         # injected by the runner; do not set by hand unless debugging
 ANTHROPIC_BASE_URL=...       # same; Claude Code. An operator export of ANTHROPIC_API_KEY

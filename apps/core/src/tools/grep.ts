@@ -3,6 +3,7 @@
 // =============================================================================
 
 import { spawn } from "child_process";
+import { existsSync } from "fs";
 import * as path from "path";
 import type { ToolContext } from "./types.js";
 import type { Tool, ToolExecutionResult, JsonSchema } from "./tool.types.js";
@@ -97,13 +98,34 @@ function countMatches(output: string, mode: string): number {
 const RIPGREP_TIMEOUT_MS = 30_000;
 const DEFAULT_HEAD_LIMIT = 100;
 
-function runRipgrep(
+// Exit 1 is "no matches"; 2 is a real error (bad regex, …). Missing binary and
+// timeout get their own codes so they can never read as an empty search.
+const EXIT_ERROR = 2;
+const EXIT_NOT_INSTALLED = 127;
+
+/** The release archive ships `rg` beside the freecode binary (as Claude Code
+ *  vendors it), so the tool works without a system install; otherwise PATH.
+ *  Only in the release build — under node, execPath's dir is node's. */
+export function ripgrepPath(
+  execPath = process.execPath,
+  isRelease = process.env.FREECODE_BUNDLED === "1",
+): string {
+  if (!isRelease) return "rg";
+  const bundled = path.join(
+    path.dirname(execPath),
+    process.platform === "win32" ? "rg.exe" : "rg",
+  );
+  return existsSync(bundled) ? bundled : "rg";
+}
+
+export function runRipgrep(
   args: string[],
+  bin = ripgrepPath(),
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   return new Promise((resolve) => {
     // stdin: "ignore" — never let rg block reading stdin when it's given no
     // path to search (that was the silent hang: rg waits on stdin forever).
-    const rg = spawn("rg", args, { stdio: ["ignore", "pipe", "pipe"] });
+    const rg = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     let settled = false;
@@ -122,7 +144,7 @@ function runRipgrep(
       finish({
         stdout,
         stderr: `ripgrep timed out after ${RIPGREP_TIMEOUT_MS / 1000}s`,
-        exitCode: 1,
+        exitCode: EXIT_ERROR,
       });
     }, RIPGREP_TIMEOUT_MS);
 
@@ -138,8 +160,12 @@ function runRipgrep(
       finish({ stdout, stderr, exitCode: code ?? 0 });
     });
 
-    rg.on("error", (err) => {
-      finish({ stdout: "", stderr: err.message, exitCode: 1 });
+    rg.on("error", (err: NodeJS.ErrnoException) => {
+      finish({
+        stdout: "",
+        stderr: err.message,
+        exitCode: err.code === "ENOENT" ? EXIT_NOT_INSTALLED : EXIT_ERROR,
+      });
     });
   });
 }
@@ -197,22 +223,37 @@ async function executeGrep(
 
     const result = await runRipgrep(args);
 
-    if (result.exitCode !== 0) {
+    // A failure must not look like an empty search: the long-task bench's
+    // image had no rg, all 88 calls "succeeded" with no matches, and the
+    // model resent them (docs/2026-10-13-long-task-bench-results.md §3.4).
+    if (result.exitCode === EXIT_NOT_INSTALLED) {
+      return {
+        success: false,
+        error:
+          "ripgrep (rg) is not installed, so the grep tool cannot run. Do not retry it: " +
+          "search with `grep -rn` through bash instead (exclude node_modules and .git).",
+      };
+    }
+    if (result.exitCode === 1) {
       return {
         success: true,
         result: {
           title: params.pattern,
-          output: result.stderr || "No matches found",
+          output: "No matches found",
           metadata: { matches: 0 },
         },
       };
+    }
+    // Exit 2 with output = some files unreadable, the rest searched.
+    if (result.exitCode !== 0 && !result.stdout) {
+      return { success: false, error: result.stderr || `rg exited ${result.exitCode}` };
     }
 
     return {
       success: true,
       result: {
         title: params.pattern,
-        output: result.stdout || "No matches found",
+        output: result.exitCode === 0 ? result.stdout : `${result.stdout}\n${result.stderr}`,
         metadata: {
           matches: countMatches(result.stdout, mode),
           exitCode: result.exitCode,

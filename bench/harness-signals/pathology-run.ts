@@ -77,6 +77,21 @@ function main() {
     for (const r of foldRuns(events)) all.push({ ...r, session: id });
   }
 
+  // Spec 2026-10-13-stuck-loop-recovery.md §5.1: how many runs signal E would
+  // fire on per threshold, and which, for classifying by hand.
+  if (process.argv.includes("--calibrate")) {
+    const hits = all.filter((r) => r.repeatedError.max >= 2).sort((a, b) => b.repeatedError.max - a.repeatedError.max);
+    console.log(`${all.length} runs. Signal E (repeated_error) would fire on:`);
+    for (const t of [2, 3, 4, 5, 6]) console.log(`  threshold ${t}: ${hits.filter((r) => r.repeatedError.max >= t).length}`);
+    console.log(`\nruns at ≥2, highest first (top ${top}):`);
+    for (const r of hits.slice(0, top)) {
+      const where = path.dirname(r.session) === "." ? "" : `  [${path.dirname(r.session).replace(/\/rollout$/, "")}]`;
+      console.log(`${String(r.repeatedError.max).padStart(3)}×  ${path.basename(r.session).slice(0, 8)} run ${r.run}${where}`);
+      console.log(`       ${(r.repeatedError.line ?? "").slice(0, 140)}`);
+    }
+    return;
+  }
+
   if (process.argv.includes("--json")) {
     process.stdout.write(JSON.stringify({ thresholds: THRESHOLDS, report: aggregate(all), runs: all }, null, 2) + "\n");
     return;

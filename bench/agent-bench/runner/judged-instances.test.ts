@@ -76,4 +76,9 @@ test("setup throws on failure; final checks record exit codes and keep the tail"
   assert.equal(bad.exitCode, 2);
   assert.match(bad.stderr, /nope/);
   assert.match(tail("x".repeat(50), 10), /^\[… 40 earlier characters dropped\]\nx{10}$/);
+  // Failing test names printed early in a long run survive the cut.
+  const long = ["ok 1 - fine", "not ok 2 - breaks", "src/a.ts(3,1): error TS2345: bad", "x".repeat(50)].join("\n");
+  const kept = tail(long, 10);
+  assert.match(kept, /their failure lines:\]\nnot ok 2 - breaks\nsrc\/a\.ts\(3,1\): error TS2345: bad\n/);
+  assert.doesNotMatch(kept, /ok 1 - fine/);
 });

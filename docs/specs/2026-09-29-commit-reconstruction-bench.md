@@ -9,6 +9,12 @@ unit-tested but **not yet run live**. Not built: §6.5 (per-agent `CLAUDE.md` de
 proxy change; the proxy logs no bodies) and §6.7 (no detection rule defined). Operator page:
 `AGENT-BENCH.md` §3d
 **Date:** 2026-09-29
+**Amended 2026-10-13 (owner decision):** the primary judge is **Haiku 4.5 (`judge-haiku`,
+`claude-haiku-4-5`) through `claude -p` on the owner's Claude subscription**
+(`runner/claude-complete.ts`), replacing Gemini 3.5 Flash after its key went invalid. GPT-5.5
+stays the auditor. Wherever this spec says "Gemini" about audit mode, read "the primary". The
+Claude route refused in §3 was core's OAuth provider calling the API; Claude Code's own CLI is
+accepted, as `codex exec` is for GPT.
 **Prior art:** freebuff's BuffBench (`~/Project/githubprojects/freebuff/evals/buffbench/`,
 Apache-2.0, read for this spec on 2026-09-29). It has about 500 tasks rebuilt from real
 commits in 4 repos (codebuff, manifold, plane, saleor). Each task is an LLM-written prompt
@@ -194,7 +200,15 @@ Their judge prompt, verbatim in structure:
 ```diff <agent diff or "(No changes made)"> ```
 ## Error Encountered            (only if the trial errored)
 ## Final Check Command Outputs  (only if any ran)
+## Final Checks Before the Agent's Changes  (ours, 2026-10-13: only if a baseline exists)
 ```
+
+The last section is our one addition to their layout. BuffBench's parent
+commits pass their checks; ours need not (three core tests fail offline), and
+without it every verdict counted those as the agent's failures. It carries only
+the failure lines (`not ok`, `error TS`) of the checks run on the untouched
+parent (`baseline-checks.json`, once per task), with an instruction not to count
+them against the agent.
 
 Their **system prompt, verbatim** ("You are an expert software engineer evaluating
 AI-generated code changes with empathy for the task given… The ground truth shows ONE
@@ -208,7 +222,11 @@ Their **output schema, verbatim**: `analysis`, `strengths[]`, `weaknesses[]`,
 ### 4.6 The panel (their arithmetic, exactly)
 
 - **Two judges, run in parallel** (`runner/judge.ts` `JUDGES`, pinned 2026-09-29):
-  - **`judge-gemini`: `gemini-3.5-flash`**, through core's providers, using the key already
+  - **`judge-haiku`: `claude-haiku-4-5`** (primary since 2026-10-13), through `claude -p` on
+    the owner's Claude subscription (`runner/claude-complete.ts`): BuffBench's system prompt in
+    `--system-prompt`, the reply constrained by `--json-schema`, no owner settings, hooks,
+    plugins, MCP servers, skills or tools. Replaced:
+  - ~~`judge-gemini`~~ **`gemini-3.5-flash`** (until 2026-10-13), through core's providers, using the key already
     in `~/.freecode/config.json`. It is the strongest Gemini this key can call:
     `gemini-3.1-pro-preview` returns a quota error, and `gemini-2.5-pro` and
     `gemini-3-pro-preview` are retired for new users (probed 2026-09-29). A Flash judge is

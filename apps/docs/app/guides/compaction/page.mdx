@@ -10,6 +10,25 @@ turns into a structured summary and keeps the most recent turns verbatim. It
 fires slightly *before* the window is full so there is always headroom for the
 reply, and a `PreCompact` hook can defer it.
 
+## What comes back after a compaction
+
+The summary replaces the full text of everything older, including files the
+agent read. So the agent does not have to re-read what it was working on,
+FreeCode attaches three things to the summary, the way Claude Code and pi do:
+
+- **The 5 most recently read or edited files**, as they are on disk now (up to
+  about 5K tokens each, 50K in total). A file whose contents are still in the
+  kept recent turns is not repeated.
+- **The paths of every other file touched** in the session, split into
+  modified and read, so the agent knows where to look.
+- **Skills it loaded earlier** (up to about 5K tokens each, 25K in total),
+  since their instructions still apply.
+
+After a compaction, reading a file is always real again: the "unchanged since
+you last read it" shortcut only applies to a copy the agent can still see.
+
+Set `FREECODE_COMPACT_RESTORE=0` to turn the attachments off.
+
 ## On this page (coming soon)
 
 - When compaction triggers (limit minus a safety buffer)

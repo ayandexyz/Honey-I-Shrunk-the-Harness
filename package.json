@@ -14,7 +14,7 @@
     "build:sea": "node scripts/build-sea.mjs",
     "build:bun": "node scripts/build-bun.mjs",
     "eval": "tsx apps/core/src/cli.ts eval",
-    "eval:gate": "tsx apps/core/src/cli.ts eval trajectory --gate && tsx apps/core/src/cli.ts eval coding --gate && tsx apps/core/src/cli.ts eval judged --gate",
+    "eval:gate": "tsx apps/core/src/cli.ts eval trajectory --gate && tsx apps/core/src/cli.ts eval coding --gate && FREECODE_JUDGE_PROVIDER=${FREECODE_JUDGE_PROVIDER:-claude-cli} tsx apps/core/src/cli.ts eval judged --gate",
     "bench:recall": "tsx apps/core/src/memory/bench/run.ts",
     "bench:inject": "tsx apps/core/src/memory/bench/inject-run.ts",
     "bench:longmemeval": "tsx scripts/longmemeval.ts",
@@ -37,7 +37,8 @@
     "bench:pathology": "tsx bench/harness-signals/pathology-run.ts",
     "test:jcode-bench": "tsc -p bench/jcode-bench/tsconfig.json && tsx --test bench/jcode-bench/runner/*.test.ts",
     "test:harness-signals": "tsc -p bench/harness-signals/tsconfig.json && tsx --test bench/harness-signals/*.test.ts",
-    "bench:jcode:regrade": "tsx bench/jcode-bench/runner/regrade.ts"
+    "bench:jcode:regrade": "tsx bench/jcode-bench/runner/regrade.ts",
+    "bench:unwired": "tsx bench/harness-signals/unwired-calibrate.ts"
   },
   "devDependencies": {
     "@changesets/cli": "^2.31.0",

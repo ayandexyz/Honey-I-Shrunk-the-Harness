@@ -148,9 +148,9 @@ export function checkArgv(c: ToolContainer, command: string): string[] {
   ];
 }
 
-/** True when the image carries pnpm — images built before it was added do not. */
-export function imageHasPnpm(image: string): boolean {
-  return docker(["run", "--rm", "--network", "none", image, "pnpm", "--version"]).ok;
+/** True when the image carries `bin` — images built before pnpm or rg were added do not. */
+export function imageHas(image: string, bin: string): boolean {
+  return docker(["run", "--rm", "--network", "none", image, bin, "--version"]).ok;
 }
 
 /** The env names worth forwarding: the adapter's own, plus the meter's. */

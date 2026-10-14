@@ -11,6 +11,7 @@
 //   - Model decides which tools to use via function calling
 // =============================================================================
 
+import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { randomUUID } from "crypto";
@@ -91,9 +92,21 @@ import {
   renderTodoPromptBlock,
   type TodoItem,
 } from "../tools/todo.js";
+import { createRepeatedErrors, errorLocation, isBashWrite } from "./repeated-error.js";
+import { checkUnwired, unwiredReminder, type Declaration } from "./unwired.js";
+import {
+  failingTestLines,
+  loadVerifySettings,
+  MAX_TEST_ATTEMPTS,
+  resolveTestCommands,
+  shouldRunTestGate,
+  testFailureReminder,
+  TEST_TIMEOUT_MS,
+} from "./verify-tests.js";
 import {
   MAX_TRUNCATED_TOOL_RETRIES,
   repeatedCallReminder,
+  repeatedErrorReminder,
   shouldNudgeTodo,
   todoNudgeReminder,
   truncatedToolCallReminder,
@@ -118,7 +131,18 @@ import type { ToolOrchestrator } from "../tools/orchestrator.js";
 import { getToolDefs, unattendedToolDefs } from "../tools/defs-cache.js";
 import type { UnattendedContext } from "../autonomous/types.js";
 import { planToolBatches } from "../tools/batching.js";
-import { markReadPruned } from "../tools/read-state.js";
+import {
+  getReadState,
+  markAllReadsCompacted,
+  markReadPruned,
+  recentReads,
+  touchReadState,
+} from "../tools/read-state.js";
+import {
+  buildRestoreBlock,
+  buildSkillBlock,
+  formatTouchedFiles,
+} from "../compaction/restore.js";
 import {
   PruneState,
   getPruneState,
@@ -291,6 +315,13 @@ export interface AgentLoopConfig {
    */
   autoPoke?: boolean;
   /**
+   * Run the finish-time test gate (spec 2026-10-13-finish-time-verification.md
+   * §2.1). Defaults to true; subagents pass false — their parent runs the
+   * suite at its own finish, and a background subagent running it too would
+   * collide with the parent's run.
+   */
+  finishTests?: boolean;
+  /**
    * Keep the prompt cache warm between turns (spec 2026-09-20-pi-parity-plan
    * Phase 2). Defaults to true and is still gated by the off-by-default
    * `cache.warming` setting; subagents pass false — their contexts die with
@@ -415,6 +446,9 @@ function estimatePromptChars(
 // Main entry point for continuous agent execution
 // =============================================================================
 
+// Tools that change a file — signal E counts a repeat only across one of these.
+const EDIT_TOOL_IDS = new Set(["edit", "write", "notebookedit"]);
+
 export class AgentLoop {
   // ---------------------------------------------------------------------------
   // Private State
@@ -427,6 +461,7 @@ export class AgentLoop {
     redirect: boolean;
     budgetMaxRedirects?: number;
     autoPoke: boolean;
+    finishTests: boolean;
     cacheWarming: boolean;
     autoApproveAsks: boolean;
   };
@@ -483,6 +518,17 @@ export class AgentLoop {
   private runModel: { provider?: string; model?: string } = {};
   // Loop-health reasons already turned into a reminder this run.
   private healthWarned = new Set<string>();
+  // Loop-health reasons already written as `loop.warned` this run.
+  private warnRecorded = new Set<string>();
+  // Files re-attached by the last compaction, sent inside the summary's system
+  // block until the next one (compaction/restore.ts). Not persisted: after a
+  // restart the read state is gone too, so the model simply reads again.
+  private restoredFiles = "";
+  // Skills loaded this session, name → the exact text the model was shown,
+  // oldest first; re-attached after a compaction (compaction/restore.ts).
+  private invokedSkills = new Map<string, string>();
+  // Signal E's per-line state (agent/repeated-error.ts), per run.
+  private repeatedErrors = createRepeatedErrors();
   private turnsSinceTodoWrite = 0;
   // Did the model save a memory itself during this run? If so, extraction is
   // skipped — it has already said what it wanted to keep.
@@ -505,6 +551,17 @@ export class AgentLoop {
   // Distinct files edited/written this run + verifier-subagent attempt count,
   // driving the adversarial verification gate for non-trivial changes.
   private mutatedFiles = new Set<string>();
+  // Finish-time verification (spec 2026-10-13-finish-time-verification.md).
+  // Each edited file's content before the run's first edit to it (null: the
+  // run created it), keyed by absolute path — what "new this run" means for
+  // the no-callers check.
+  private preEditContent = new Map<string, string | null>();
+  private testAttempts = 0;
+  private unwiredChecked = false;
+  // Handed to the verifier: what the test gate saw, and what the no-callers
+  // check named.
+  private lastTestResult: string | undefined;
+  private lastUnwired: Declaration[] = [];
   private verifierAttempts = 0;
   // Harness signals (agent/signals): auto-poke state for this run, and the
   // settings resolved once per run so a mid-run settings edit cannot flip a
@@ -571,6 +628,7 @@ export class AgentLoop {
       redirect: config?.redirect ?? true,
       budgetMaxRedirects: config?.budgetMaxRedirects,
       autoPoke: config?.autoPoke ?? true,
+      finishTests: config?.finishTests ?? true,
       cacheWarming: config?.cacheWarming ?? true,
       autoApproveAsks: config?.autoApproveAsks ?? false,
     };
@@ -790,6 +848,7 @@ export class AgentLoop {
         stagnantTurns: 0,
         oscillationScore: 0,
         repeatedReasoningScore: 0,
+        repeatedError: 0,
       },
       // Redirection caps are per-run for the same reason: one prompt's
       // spending must not silently cap the next prompt's recovery.
@@ -808,11 +867,18 @@ export class AgentLoop {
     // active and run() starting, and a reset would drop that message.
     // Leftovers are emptied at the end by takeUndeliveredSteers().
     this.healthWarned = new Set<string>();
+    this.warnRecorded = new Set<string>();
+    this.repeatedErrors = createRepeatedErrors();
     this.turnsSinceTodoWrite = 0;
     this.turnsSinceLastNudge = 0;
     this.filesMutatedThisRun = false;
     this.verifyAttempts = 0;
     this.mutatedFiles = new Set<string>();
+    this.preEditContent = new Map();
+    this.testAttempts = 0;
+    this.unwiredChecked = false;
+    this.lastTestResult = undefined;
+    this.lastUnwired = [];
     this.verifierAttempts = 0;
     // The poke CAP is per run, so one prompt's pokes never spend the next
     // prompt's. The FINGERPRINT is not: a user's "continue" on a list the
@@ -1024,6 +1090,7 @@ export class AgentLoop {
         }
         if (healthAction.action === "warn") {
           logger.debug(`[AgentLoop] Warning: ${healthAction.reason}`);
+          const warnReason = healthAction.reason ?? "unknown";
           // Trajectory redirection: turn the warning into evidence-backed
           // advice for this turn instead of a debug line nobody reads. Off by
           // default (D8); fails closed and costs nothing when it does.
@@ -1052,6 +1119,39 @@ export class AgentLoop {
                 ),
               );
             }
+          }
+          // E: same shape as A — one reminder per run, quoting the error and
+          // the line it names (spec 2026-10-13-stuck-loop-recovery.md §4.2).
+          if (
+            !spent &&
+            healthAction.reason === "repeated_error" &&
+            !this.healthWarned.has(healthAction.reason)
+          ) {
+            const top = this.repeatedErrors.current();
+            if (top.line) {
+              this.healthWarned.add(healthAction.reason);
+              this.pendingReminders.push(
+                repeatedErrorReminder(top.n, top.line, top.others, errorLocation(top.line)),
+              );
+            }
+          }
+          if (!this.warnRecorded.has(warnReason)) {
+            this.warnRecorded.add(warnReason);
+            const h = this.state.loopHealth;
+            const count =
+              {
+                repeated_identical_tool: h.repeatedTools + 1,
+                repeated_error: h.repeatedError,
+                no_progress: h.stagnantTurns,
+                oscillation_detected: h.oscillationScore,
+                repeated_reasoning: h.repeatedReasoningScore,
+              }[warnReason] ?? 0;
+            this.recorder.recordLoopWarned(
+              `turn-${this.state.turnCount}`,
+              warnReason,
+              count,
+              this.healthWarned.has(warnReason),
+            );
           }
           if (spent) {
             // D7: the supervisor's tokens are the run's tokens. A cost the
@@ -1293,10 +1393,17 @@ export class AgentLoop {
               console.log(
                 `[AgentLoop] Verification gate ${this.verifyAttempts}/${MAX_VERIFY_ATTEMPTS}: running \`${verifyCmd.command}\``,
               );
+              const startedAt = Date.now();
               const verify = await runVerify(
                 verifyCmd.command,
                 this.state.projectPath,
                 this.abort.signal,
+              );
+              this.recorder.recordVerifyRan(
+                "typecheck",
+                verify.ok,
+                Date.now() - startedAt,
+                failingTestLines(verify.raw).length,
               );
               if (this.abort.signal.aborted)
                 return await this.complete(
@@ -1316,6 +1423,65 @@ export class AgentLoop {
                 };
                 continue;
               }
+            }
+          }
+
+          // Test gate (spec §2.1): a change of ≥3 files runs the tests of the
+          // packages it touched. The typecheck alone let two v2 trials ship
+          // regressions in files they never opened. Own cap, so a suite that
+          // was red before the run still terminates.
+          if (
+            shouldRunTestGate({
+              filesChanged: this.mutatedFiles.size,
+              attempts: this.testAttempts,
+              enabled: this.config.finishTests,
+              unattended: this.unattended !== undefined,
+            })
+          ) {
+            const settings = loadVerifySettings(this.state.projectPath);
+            const commands = settings.tests
+              ? resolveTestCommands(this.state.projectPath, [...this.mutatedFiles], settings)
+              : [];
+            if (commands.length === 0) {
+              this.lastTestResult = settings.tests ? "skipped (no test script found)" : "skipped (turned off)";
+            } else {
+              this.testAttempts += 1;
+              const failures: { label: string; raw: string }[] = [];
+              for (const c of commands) {
+                console.log(`[AgentLoop] Test gate ${this.testAttempts}/${MAX_TEST_ATTEMPTS}: running \`${c.command}\``);
+                const startedAt = Date.now();
+                const r = await runVerify(c.command, this.state.projectPath, this.abort.signal, TEST_TIMEOUT_MS);
+                if (this.abort.signal.aborted)
+                  return await this.complete("Interrupted", undefined, undefined, usageSoFar());
+                const failing = failingTestLines(r.raw);
+                this.recorder.recordVerifyRan("tests", r.ok, Date.now() - startedAt, failing.length);
+                if (!r.ok) failures.push({ label: c.label, raw: r.raw });
+              }
+              this.lastTestResult = failures.length
+                ? `failed: ${failures.flatMap((f) => failingTestLines(f.raw)).slice(0, 10).join("; ") || "see output"}`
+                : `passed (${commands.map((c) => c.label).join(", ")})`;
+              if (failures.length) {
+                this.pendingReminders.push(testFailureReminder(failures));
+                this.state = { ...this.state, iterationCount: this.state.iterationCount + 1, turnCount: this.state.turnCount + 1 };
+                continue;
+              }
+            }
+          }
+
+          // No-callers gate (spec §2.2): once per run, name what this run
+          // added that nothing outside tests calls. A nudge, never a block.
+          if (
+            !this.unwiredChecked &&
+            this.preEditContent.size > 0 &&
+            process.env.FREECODE_UNWIRED_CHECK !== "0"
+          ) {
+            this.unwiredChecked = true;
+            this.lastUnwired = checkUnwired(this.state.projectPath, this.preEditContent);
+            this.recorder.recordUnwiredFlagged(this.lastUnwired.length);
+            if (this.lastUnwired.length > 0) {
+              this.pendingReminders.push(unwiredReminder(this.lastUnwired));
+              this.state = { ...this.state, iterationCount: this.state.iterationCount + 1, turnCount: this.state.turnCount + 1 };
+              continue;
             }
           }
 
@@ -1339,6 +1505,8 @@ export class AgentLoop {
               originalRequest: input.prompt,
               changedFiles: [...this.mutatedFiles],
               priorReport: this.lastVerifierReport,
+              testResult: this.lastTestResult,
+              unwired: this.lastUnwired,
               parentSessionId: this.state.sessionId,
             });
             if (this.abort.signal.aborted)
@@ -1566,6 +1734,7 @@ export class AgentLoop {
       const compacted = result.success && !!result.summary;
       if (compacted) {
         this.history = this.history.slice(-result.preservedMessageIds.length);
+        markAllReadsCompacted(this.state.sessionId);
       }
       outcome = {
         compacted,
@@ -1599,6 +1768,7 @@ export class AgentLoop {
         outcome.tokensBefore,
         outcome.tokensAfter,
       );
+      this.restoreRecentFiles();
     } else if (outcome.reason === "nothing to compact") {
       // Routine: the threshold check is a prediction and often fires with
       // nothing to do. WARN reaches the TUI transcript; this is not a warning.
@@ -1957,7 +2127,7 @@ export class AgentLoop {
         ...(compactionSummary
           ? [
               {
-                text: `Compacted session summary:\n${compactionSummary}`,
+                text: `Compacted session summary:\n${compactionSummary}${this.restoredFiles ? `\n\n${this.restoredFiles}` : ""}`,
                 cache: false,
               },
             ]
@@ -2222,6 +2392,7 @@ export class AgentLoop {
       const batches = planToolBatches(toolCalls);
       for (const { start, end, parallel } of batches) {
         const batch = toolCalls.slice(start, end);
+        for (const tc of batch) this.capturePreEdit(tc);
         const batchResults = parallel
           ? await Promise.all(batch.map((tc) => this.executeTool(tc)))
           : [await this.executeTool(batch[0])];
@@ -2231,6 +2402,11 @@ export class AgentLoop {
           const result = batchResults[k];
           toolResults[start + k] = result;
           this.updateLoopHealth(tc, result);
+          const skillName = (tc.args as { name?: unknown } | undefined)?.name;
+          if (tc.tool === "skill" && !result.error && typeof skillName === "string") {
+            this.invokedSkills.delete(skillName);
+            this.invokedSkills.set(skillName, result.modelOutput ?? result.stdout ?? "");
+          }
           // Track file mutations so the verification gate only runs when this
           // run actually changed something.
           if (
@@ -3336,6 +3512,84 @@ export class AgentLoop {
   }
 
   // ===========================================================================
+  // PRIVATE: capturePreEdit()
+  // The first time a run edits or writes a file, keep what it was, so the
+  // no-callers check can tell what THIS run added (agent/unwired.ts).
+  // ===========================================================================
+  private capturePreEdit(tc: ToolCall): void {
+    if (!EDIT_TOOL_IDS.has(tc.tool)) return;
+    const a = tc.args as { filePath?: unknown; path?: unknown } | undefined;
+    const fp = a?.filePath ?? a?.path;
+    if (typeof fp !== "string") return;
+    const abs = path.resolve(this.state.projectPath, fp);
+    if (this.preEditContent.has(abs)) return;
+    let content: string | null = null;
+    try {
+      content = fs.readFileSync(abs, "utf-8");
+    } catch {
+      // Created by this run.
+    }
+    this.preEditContent.set(abs, content);
+  }
+
+  // ===========================================================================
+  // PRIVATE: restoreRecentFiles()
+  // After a compaction, re-attach the files the model was working on so it
+  // does not reload them (spec 2026-10-13-stuck-loop-recovery.md §4.3). Files
+  // whose read result survived in the kept messages are skipped. A file shown
+  // exactly as a default read would show it is registered as in context, so a
+  // re-read correctly gets the "unchanged" stub. FREECODE_COMPACT_RESTORE=0
+  // turns it off, read per compaction for `eval ab`.
+  // ===========================================================================
+  private restoreRecentFiles(): void {
+    this.restoredFiles = "";
+    if (process.env.FREECODE_COMPACT_RESTORE === "0") return;
+    // What survived whole in the kept messages need not be attached again.
+    const kept = new Set<string>();
+    const keptSkills = new Set<string>();
+    for (const m of this.history) {
+      for (const part of m.parts) {
+        if (part.type !== "tool") continue;
+        const args = part.tool.args as { filePath?: unknown; name?: unknown } | undefined;
+        if (part.tool.tool === "read" && typeof args?.filePath === "string") kept.add(args.filePath);
+        if (part.tool.tool === "skill" && typeof args?.name === "string") keptSkills.add(args.name);
+      }
+    }
+    const recent = recentReads(this.state.sessionId);
+    const block = buildRestoreBlock(recent, kept);
+    const attached = new Set(block?.files.map((f) => f.path));
+    const reads = getReadState(this.state.sessionId);
+    const others = recent.filter((p) => !attached.has(p) && !kept.has(p));
+    // An `edit` leaves no line window on its record (read-state.ts): the last
+    // touch was a change, not a read.
+    const touched = formatTouchedFiles(
+      others.filter((p) => reads.get(p)?.offset !== undefined),
+      others.filter((p) => reads.get(p)?.offset === undefined),
+    );
+    const skills = buildSkillBlock(
+      [...this.invokedSkills].reverse().map(([name, text]) => ({ name, text })),
+      keptSkills,
+    );
+    this.restoredFiles = [block?.text, touched, skills?.text].filter(Boolean).join("\n\n");
+    if (!this.restoredFiles) return;
+    for (const f of block?.files ?? []) {
+      if (!f.dedupSafe) continue;
+      touchReadState(this.state.sessionId, f.path, {
+        mtimeMs: f.mtimeMs,
+        size: f.size,
+        offset: 1,
+        limit: 2000,
+        inContext: true,
+      });
+    }
+    this.recorder.recordCompactRestored(
+      block?.files.length ?? 0,
+      skills?.count ?? 0,
+      Math.round(this.restoredFiles.length / 4),
+    );
+  }
+
+  // ===========================================================================
   // PRIVATE: updateLoopHealth()
   // Track tool calls and state changes to detect stuck patterns
   // ===========================================================================
@@ -3356,6 +3610,33 @@ export class AgentLoop {
     this.state.loopHealth = {
       ...this.state.loopHealth,
       repeatedTools: identicalCount - 1, // -1 because current call is in the array
+    };
+
+    // E. The same located error back in bash output after an edit. Fed the
+    // text the rollout records for this call, so `bench:pathology` replays the
+    // same decision. A failed edit changed nothing and does not count (the
+    // offline fold counts it, so it can only fire earlier than the loop).
+    // FREECODE_REPEATED_ERROR=0 turns it off, read per call so `eval ab` can
+    // flip it between trials.
+    const args = toolCall.args as Record<string, unknown> | undefined;
+    const command =
+      toolCall.tool === "bash" &&
+      typeof args?.command === "string" &&
+      process.env.FREECODE_REPEATED_ERROR !== "0"
+        ? args.command
+        : undefined;
+    if (
+      (EDIT_TOOL_IDS.has(toolCall.tool) && !result.error) ||
+      (command !== undefined && isBashWrite(command))
+    ) {
+      this.repeatedErrors.edit();
+    }
+    if (command !== undefined) {
+      this.repeatedErrors.output(command, result.stdout || result.error || "");
+    }
+    this.state.loopHealth = {
+      ...this.state.loopHealth,
+      repeatedError: this.repeatedErrors.current().n,
     };
 
     // B. Stagnation is per *turn*, not per tool call — see advanceStagnation().
@@ -4084,6 +4365,7 @@ export const createAgentLoopEffect = (
     | "sessionGrants"
     | "sessionDenies"
     | "unattended"
+    | "finishTests"
   >,
 ): Effect.Effect<
   AgentLoop,

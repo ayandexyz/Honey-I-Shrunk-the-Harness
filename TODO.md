@@ -487,6 +487,8 @@ spike. What is left is measurement, not code:
 
 ## Run pathology — first pass (2026-10-12)
 
+Results, numbers and the ordered to-do list: `docs/2026-10-13-long-task-bench-results.md`.
+
 From the first `pnpm bench:pathology` over 12,370 runs (HARNESS-BENCH.md §3b):
 
 - [ ] **37 zero-edit runs reread the same file range 30–56% of the time**
@@ -494,33 +496,35 @@ From the first `pnpm bench:pathology` over 12,370 runs (HARNESS-BENCH.md §3b):
       Unknown whether the model is forgetting, or the read output is
       truncated/unclear and it retries. Open a few with `freecode trace`
       before deciding whether this is a tool-output fix or a prompt fix.
-- [ ] **Three core tests fail in an offline container on every commit**:
-      `modelSupportsImages` (×2) and `providers.list only offers providers the
-      registry can construct`. Found by running the judged set's final checks on
-      untouched parent commits in the bench image (`--network none`): 3 fail on
-      all three parents. They likely read the models.dev catalogue, which the
-      offline container cannot reach or has not cached. Until fixed, a judged
-      trial's real test failures are the ones beyond these three.
-- [ ] **Stuck-on-one-error is the main long-task time sink, not dryness.**
-      `implement-night-morning` v2 t1 (41.8 min vs 16–22 for other trials) saw
-      the same 4 tsc parse errors 8 times over ~10 min while editing steadily,
-      so it never looked dry. User session `6d4b1c74` run 7 did the same at
-      small scale (one TS2345 four times in ~1.5 min). Shared moves: re-running
-      `tsc` with different greps instead of reading the reported line,
-      byte-dumping with `od -c`/awk, and `/tmp` probe scripts that cannot
-      resolve the repo's `node_modules`. `bench:pathology` flags it
-      (`stuck_error`). Candidate fix: a loop-health signal on a repeated error
-      fingerprint feeding the (off by default) redirect. That is an `eval ab`
-      decision.
-- [ ] **Compaction makes it reread.** On long tasks almost every reread follows
-      a compaction (24 of 25 in v2 t1, 5 compactions). Cheap per read, but it
-      grows with every compaction. Candidate: carry the read-file list in the
-      compaction summary.
-- [ ] **Measured input shrink per compaction is ~5% and sometimes negative**
-      on the `compaction-boundary` eval case. Those thresholds are tiny by
-      design, so this needs checking on a real long session before calling it
-      a bug, but a compaction that leaves the next request larger than before
-      did nothing except invalidate the cache.
+- [ ] **Stuck-on-one-error and rereads after compaction: built, effect not
+      measured yet.** Spec `2026-10-13-stuck-loop-recovery.md` Phases 1–3 done
+      2026-10-13 (signal E, threshold 5, warn-only; compaction ends read
+      dedup; post-compaction restore). Left: Phase 4 (release,
+      `pnpm bench:image`, rerun the 9 long trials — the only test of whether
+      either saves time). Phase 5 is done as a failure-time bash hint
+      (`tools/scratch-hint.ts`), not a prompt line. A stop tier
+      for E stays unbuilt until a recorded run shows where it would be right.
+- [ ] **Finishing without tests, and "built but never wired": built, effect
+      not measured yet.** Spec `2026-10-13-finish-time-verification.md`
+      Phases 1–3 done 2026-10-13: a change of ≥3 files now runs each changed
+      file's package `test` script before finishing (`agent/verify-tests.ts`;
+      the verify gate used to run only the typecheck, and only 5% of such runs
+      re-ran tests themselves), a deterministic "no callers" check names new
+      code nothing outside tests calls (`agent/unwired.ts`, 0.12 false flags
+      per real commit, catches v2 t1's `attachLoop`), and the verifier now gets
+      both plus a reachability instruction. Left: Phase 4 (release + rerun the
+      nine long trials, Haiku judge) — the only test of whether "never wired"
+      verdicts drop. `cancelRequested`-style "written, never read" bugs depend
+      on the verifier following the instruction, which is not guaranteed.
+- [ ] **Rerun the v2 long-task trials with a working `grep` tool.** All 88
+      `grep` calls in them failed (no `rg` in the image; tool, image and
+      `bench:pathology` fixed 2026-10-13), so every v2 number carries that
+      handicap. Rebuild with `pnpm bench:image` first.
+- [x] ~~**Measured input shrink per compaction is ~5% and sometimes negative**~~
+      Checked on real long sessions (v2 long-task trials): 61–70% shrink per
+      compaction, no compaction loops. The ~5% is the `compaction-boundary`
+      eval case's tiny thresholds, not a bug. The real compaction cost is the
+      rereads (item above). Full write-up: `docs/2026-10-13-long-task-bench-results.md`.
 
 ## Spec findings (eval harness — 2026-08-23)
 

@@ -176,9 +176,14 @@ pnpm bench:pathology --json           # every run, every field
 | `long_dry` | dry ≥ 15 min **and** ≥ 30 calls |
 | `reread_heavy` | ≥ 30% of ≥ 10 reads were rereads |
 | `compact_loop` | any compaction with no progress since the last |
-| `search_circles` | ≥ 5 byte-identical grep/glob calls with no progress between |
+| `search_circles` | ≥ 5 byte-identical grep/glob calls with no progress between; a call whose output was an error (tool missing, bad regex) does not count — that is a broken tool, not a circle |
 | `repeat_commands` | ≥ 5 byte-identical non-writing bash commands with no progress between |
 | `stuck_error` | the same set of error lines (TS errors, `not ok`, FAIL, `XError: msg`) in bash output ≥ 4 times, counted across edits |
+
+`--calibrate` prints the stuck-loop spec's signal E instead (`repeated-error.ts`,
+spec `2026-10-13-stuck-loop-recovery.md` §5.1.1): per error **line**, located
+(`file:line` or a test name), not baseline, counted only when a file changed
+since it last counted. Hits per threshold, then the top line of each run.
 | `hung_call` | one model request waited ≥ 5 min for its first token — the provider or fetch layer, not the model getting lost |
 
 Summary numbers are over runs with ≥ 10 tool calls; shorter runs are chat.

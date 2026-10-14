@@ -130,7 +130,12 @@ test("the panel is two judges from two families, and never the model under test"
   );
   assert.doesNotThrow(() => assertNoCollision(JUDGES, "MiniMax-M3"));
   assert.throws(() => assertNoCollision(JUDGES, "gpt-5.5"), /model under test/);
-  assert.throws(() => assertNoCollision(JUDGES, "google/gemini-3.5-pro"), /model under test/);
+  assert.throws(() => assertNoCollision(JUDGES, "anthropic/claude-sonnet-4-6"), /model under test/);
+  assert.throws(
+    () => assertNoCollision(JUDGES, "claude-opus-5-5"),
+    /model under test/,
+    "the claude judge runs Anthropic's model, so a Claude agent model collides with it",
+  );
   assert.throws(
     () => assertNoCollision(JUDGES, "openai/gpt-5.5"),
     /model under test/,
@@ -146,4 +151,21 @@ test("renderJudgePrompt keeps BuffBench's sections and fallbacks", () => {
   assert.match(p, /```diff\n\(No changes made\)\n```/);
   assert.match(p, /## Error Encountered\nboom/);
   assert.doesNotMatch(p, /Final Check Command Outputs/);
+});
+
+test("the parent commit's failures reach the judge as already broken, names only", () => {
+  const tap = "ok 1 - fine\nnot ok 2 - modelSupportsImages\n" + "x".repeat(3000) + "\n# fail 1";
+  const p = renderJudgePrompt({
+    ...input,
+    baselineCheckOutputs: [
+      { command: "tsc --noEmit", exitCode: 0, stdout: "", stderr: "" },
+      { command: "pnpm test", exitCode: 1, stdout: tap, stderr: "" },
+    ],
+  });
+  assert.match(p, /## Final Checks Before the Agent's Changes\n/);
+  assert.match(p, /do not count it against the agent/);
+  assert.match(p, /### pnpm test\nExit code: 1\n```\nnot ok 2 - modelSupportsImages\n```/);
+  assert.doesNotMatch(p, /ok 1 - fine|xxxx/);
+  // Old runs have no baseline: no section.
+  assert.doesNotMatch(renderJudgePrompt(input), /Before the Agent's Changes/);
 });

@@ -119,3 +119,13 @@ test("splitModelId handles bare ids and provider-qualified ones", () => {
   });
   assert.deepEqual(splitModelId("gpt-4o"), { model: "gpt-4o" });
 });
+
+test("claude-cli resolves to Haiku on the subscription, and still refuses to grade itself", () => {
+  withEnv({ FREECODE_JUDGE_PROVIDER: "claude-cli", FREECODE_JUDGE_MODEL: undefined }, () => {
+    const r = resolveJudge("minimax/MiniMax-M3");
+    assert.deepEqual(r, { ok: true, judge: { provider: "claude-cli", model: "claude-haiku-4-5" } });
+    const self = resolveJudge("anthropic/claude-haiku-4-5-20251001");
+    assert.equal(self.ok, false);
+    assert.equal(self.ok === false && self.reason, "same-model");
+  });
+});

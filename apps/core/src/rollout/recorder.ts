@@ -286,6 +286,15 @@ export class RolloutRecorder {
     this.write(event);
   }
 
+  recordCompactRestored(files: number, skills: number, tokens: number): void {
+    this.write(
+      this.makeEvent("compact.restored", {
+        aggregateID: this.sessionId,
+        fields: { files, skills, tokens },
+      }),
+    );
+  }
+
   // ===========================================================================
   // PUBLIC: recordSubagentStart()
   // ===========================================================================
@@ -622,6 +631,25 @@ export class RolloutRecorder {
         aggregateID: this.sessionId,
         turnId,
         reason,
+      }),
+    );
+  }
+
+  recordVerifyRan(kind: "typecheck" | "tests", ok: boolean, ms: number, failing: number): void {
+    this.write(this.makeEvent("verify.ran", { aggregateID: this.sessionId, fields: { kind, ok, ms, failing } }));
+  }
+
+  recordUnwiredFlagged(count: number): void {
+    this.write(this.makeEvent("unwired.flagged", { aggregateID: this.sessionId, fields: { count } }));
+  }
+
+  recordLoopWarned(turnId: string, reason: string, count: number, reminded: boolean): void {
+    this.write(
+      this.makeEvent("loop.warned", {
+        aggregateID: this.sessionId,
+        turnId,
+        reason,
+        fields: { count, reminded },
       }),
     );
   }

@@ -15,8 +15,12 @@ ARG FREECODE_VERSION=v0.43.0
 # `packageManager` pin.
 ARG PNPM_VERSION=10.0.0
 
+# ripgrep: every agent's grep tool spawns `rg`. Claude Code vendors its own,
+# but opencode downloads one on first use (no network at trial time) and
+# freecode releases before the one that bundles it have none — all 88 of its
+# grep calls failed in the 2026-10-13 long-task run.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git ca-certificates curl \
+ && apt-get install -y --no-install-recommends git ca-certificates curl ripgrep \
  && rm -rf /var/lib/apt/lists/*
 
 # tsx runs the recording-proxy source (proxy/main.ts) when this image is

@@ -49,6 +49,14 @@
 // question. `flags` is a list of things to look at, not a score.
 // =============================================================================
 
+import {
+  createRepeatedErrors,
+  isBashWrite,
+  type RepeatedError,
+} from "../../apps/core/src/agent/repeated-error.js";
+
+export { isBashWrite };
+
 export interface PathEvent {
   type: string;
   timestamp: number;
@@ -98,6 +106,8 @@ export interface RunPathology {
   repeatCommands: number;
   /** Appearances of the most frequent error set in tool output. */
   stuckErrorRepeats: number;
+  /** Signal E (repeated-error.ts): top count of one located, non-baseline error line. */
+  repeatedError: RepeatedError;
   compactions: number;
   compactNoProgress: number;
   /** Time spent waiting on the user's answer to `question`; excluded from the clocks. */
@@ -126,17 +136,12 @@ export const THRESHOLDS = {
 
 const EDIT_TOOLS = new Set(["edit", "write", "notebookedit"]);
 const SEARCH_TOOLS = new Set(["grep", "glob"]);
-// Redirects to a file, in-place edits, file moves. Errs on missing things (e.g.
-// `python -c "open(...,'w')"`) rather than inventing progress. Redirects to
-// /dev and to log-shaped files are dropped first: `cmd > /tmp/lint.txt 2>&1`
-// is the agent reading output the long way round, not changing anything.
-const BASH_WRITE =
-  /\bsed\s+-i|\btee\b|(^|[^>&0-9])>>?\s*(?!&)[^\s|&;]|\bpatch\b|\bgit\s+(apply|checkout|restore|mv|rm)\b|(^|[;&|]\s*)(mv|cp|rm|mkdir|touch)\s/;
-const NOT_A_WRITE = /\d?>>?\s*(\/dev\/\S+|\S+\.(log|txt|out))|-o\s+\/dev\/null/g;
-
-export function isBashWrite(command: string): boolean {
-  return BASH_WRITE.test(command.replace(NOT_A_WRITE, " "));
-}
+// A search that errored is a broken tool, not a circle. Before 2026-10-13 the
+// grep tool logged its errors as `failed: false` with the error as output (the
+// v2 long-task image had no `rg`), so old logs are matched by text.
+const SEARCH_ERROR = /^(Executable not found in \$PATH|spawn \S+ ENOENT|rg: |regex parse error)/;
+// What counts as a write through bash lives with signal E in core
+// (`isBashWrite`, agent/repeated-error.ts), so the loop and this fold agree.
 
 // Only these move the run's clock. A run's tail also collects the NEXT prompt's
 // `checkpoint.captured` (written before its `turn-0`) and session-end
@@ -191,6 +196,7 @@ function newRun(run: number, at: number): RunPathology {
     repeatSearches: 0,
     repeatCommands: 0,
     stuckErrorRepeats: 0,
+    repeatedError: { max: 0 },
     compactions: 0,
     compactNoProgress: 0,
     waitingOnUserMs: 0,
@@ -232,8 +238,12 @@ export function foldRuns(events: PathEvent[]): RunPathology[] {
   let lastEditEpoch = new Map<string, number>(); // path → event index of last edit
   let readAt = new Map<string, number>(); // read key → event index of last read
   let searchSeen = new Map<string, number>(); // args → progress count when last seen
+  let repeatPending = new Set<string>(); // callIds of repeated searches awaiting output
   let progressCount = 0;
   let errorSeen = new Map<string, number>(); // error fingerprint → appearances
+  let repeated = createRepeatedErrors();
+  const bashCommand = new Map<string, string>(); // callId → command
+  let lastBash = ""; // logs from before callIds existed
   const questionAt = new Map<string, number>(); // callId → when the question was asked
   let prevTurn: string | undefined;
   let turn0Answered = false;
@@ -247,6 +257,7 @@ export function foldRuns(events: PathEvent[]): RunPathology[] {
   const finish = () => {
     if (!cur) return;
     closeDry(lastAt);
+    cur.repeatedError = repeated.peak();
     cur.durationMs = lastAt - cur.startedAt - cur.waitingOnUserMs;
     cur.flags = flagsFor(cur);
     runs.push(cur);
@@ -285,7 +296,9 @@ export function foldRuns(events: PathEvent[]): RunPathology[] {
       lastEditEpoch = new Map();
       readAt = new Map();
       searchSeen = new Map();
+      repeatPending = new Set();
       errorSeen = new Map();
+      repeated = createRepeatedErrors();
       progressCount = 0;
     }
     if (e.turnId !== undefined) prevTurn = e.turnId;
@@ -310,8 +323,15 @@ export function foldRuns(events: PathEvent[]): RunPathology[] {
         break;
       case "function.output": {
         if (e.failed === true) cur.failedCalls++;
+        if (e.callId && repeatPending.delete(e.callId)) {
+          const errored = e.failed === true || (typeof e.output === "string" && SEARCH_ERROR.test(e.output));
+          if (!errored) cur.repeatSearches++;
+        }
         // Commands only: a `read` shows file content, not a result.
         const fp = e.tool === "bash" && typeof e.output === "string" ? errorFingerprint(e.output) : undefined;
+        if (e.tool === "bash" && typeof e.output === "string") {
+          repeated.output((e.callId && bashCommand.get(e.callId)) ?? lastBash, e.output);
+        }
         if (fp) {
           const n = (errorSeen.get(fp) ?? 0) + 1;
           errorSeen.set(fp, n);
@@ -353,11 +373,17 @@ export function foldRuns(events: PathEvent[]): RunPathology[] {
         const tool = e.tool ?? "";
         const p = pathOf(e.args);
         if (tool === "question" && e.callId) questionAt.set(e.callId, e.timestamp);
+        if (tool === "bash" && typeof e.args?.command === "string") {
+          lastBash = e.args.command;
+          if (e.callId) bashCommand.set(e.callId, e.args.command);
+        }
         if (EDIT_TOOLS.has(tool)) {
+          repeated.edit();
           cur.edits++;
           if (p) lastEditEpoch.set(p, i);
           progress(e.timestamp);
         } else if (tool === "bash" && typeof e.args?.command === "string" && isBashWrite(e.args.command)) {
+          repeated.edit();
           cur.edits++;
           cur.bashWrites++;
           progress(e.timestamp);
@@ -373,7 +399,12 @@ export function foldRuns(events: PathEvent[]): RunPathology[] {
           readAt.set(key, i);
         } else if (SEARCH_TOOLS.has(tool)) {
           const key = `${tool}\0${JSON.stringify(e.args ?? {})}`;
-          if (searchSeen.get(key) === progressCount) cur.repeatSearches++;
+          // Scored when the output arrives (it may be an error); logs from
+          // before callIds existed are scored here, as before.
+          if (searchSeen.get(key) === progressCount) {
+            if (e.callId) repeatPending.add(e.callId);
+            else cur.repeatSearches++;
+          }
           searchSeen.set(key, progressCount);
         } else if (tool === "bash" && typeof e.args?.command === "string") {
           const key = `bash\0${e.args.command}`;

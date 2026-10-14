@@ -47,6 +47,10 @@ export class AbError extends Error {}
  *   FREECODE_AUTO_POKE                 `loadSignalSettings`, once per AgentLoop
  *   FREECODE_CONFIDENCE_GATE           instance — and the runner builds a
  *   FREECODE_HILLCLIMB_GATE            fresh loop per trial
+ *   FREECODE_REPEATED_ERROR            `updateLoopHealth`, every tool call
+ *   FREECODE_COMPACT_RESTORE           `restoreRecentFiles`, every compaction
+ *   FREECODE_VERIFY_TESTS              `loadVerifySettings`, every finish
+ *   FREECODE_UNWIRED_CHECK             the loop's no-callers gate, every finish
  *
  * A startup-read var (a provider key, a config path, a fetch timeout baked into
  * the client at `createTimeoutFetch`) would be swapped into `process.env` and
@@ -76,6 +80,13 @@ export const VARIABLE_ENV_KEYS = [
   "FREECODE_CONTEXT_FRAMING",
   // Read per call in modelPromptOverlay (session/model-prompt.ts).
   "FREECODE_MODEL_OVERLAY",
+  // Read per tool call in AgentLoop.updateLoopHealth (signal E).
+  "FREECODE_REPEATED_ERROR",
+  // Read per compaction in AgentLoop.restoreRecentFiles.
+  "FREECODE_COMPACT_RESTORE",
+  // Read per finish in the loop's test and no-callers gates.
+  "FREECODE_VERIFY_TESTS",
+  "FREECODE_UNWIRED_CHECK",
 ] as const;
 
 /**

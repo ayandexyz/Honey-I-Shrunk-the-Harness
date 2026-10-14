@@ -72,3 +72,36 @@ test("assertNoFutureHistory throws on a full clone", () => {
     fs.rmSync(up.dir, { recursive: true, force: true });
   }
 });
+
+test("baseline checks run once on the untouched parent, in their own workspace", async () => {
+  const { runBaselineChecks, BASELINE_FILE } = await import("./judged-trial.js");
+  const up = upstream();
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), "ws-baseline-"));
+  const inst = {
+    instanceId: "baseline-test",
+    repo: `test/baseline-${process.pid}`,
+    baseCommit: up.base,
+    problemStatement: "",
+    source: up.dir,
+    initCommand: "touch .setup-ran",
+    // Reads the parent's file; leaves a stray file a trial's patch must never see.
+    finalCheckCommands: ["test -f .setup-ran && grep -q 'bug = True' a.py && touch stray"],
+  } as Instance;
+  try {
+    runBaselineChecks(inst, out);
+    const file = path.join(out, "baseline-test", BASELINE_FILE);
+    const [check] = JSON.parse(fs.readFileSync(file, "utf-8"));
+    assert.equal(check.exitCode, 0);
+    // Kept, not recomputed (--first-trial, --baseline-only).
+    fs.writeFileSync(file, "[]");
+    runBaselineChecks(inst, out);
+    assert.equal(fs.readFileSync(file, "utf-8"), "[]");
+  } finally {
+    fs.rmSync(out, { recursive: true, force: true });
+    fs.rmSync(up.dir, { recursive: true, force: true });
+    fs.rmSync(path.join(CACHE_DIR, "repos/base", `test__baseline-${process.pid}@${up.base}.git`), {
+      recursive: true,
+      force: true,
+    });
+  }
+});

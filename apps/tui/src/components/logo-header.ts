@@ -25,13 +25,14 @@ const coloredLogoLines = portraitLines.map((runs) =>
 );
 
 // Block-letter ASCII painted to the right of the portrait. The bright half
-// follows the theme's `accent`; the dim half stays `accentDim` on Omarchy
-// and goes red off Omarchy, per the user's explicit override of the
-// chalk-yellow fallback.
+// (Histh) follows the theme's `accent`; the dim half (!) stays `accentDim`
+// on Omarchy and goes red off Omarchy, per the user's explicit override of
+// the chalk-yellow fallback. The split is at column 39, which is the visual
+// seam between the "Histh" letters and the "!" mark.
+const GLYPH_SPLIT_COL = 49;
 const dimHalf = omarchyPalette ? palette.accentDim : chalk.red;
 const coloredGlyphLines = glyphLines.map((line) => {
-  const mid = Math.floor(line.length / 2);
-  return palette.accent(line.slice(0, mid)) + dimHalf(line.slice(mid));
+  return palette.accent(line.slice(0, GLYPH_SPLIT_COL)) + dimHalf(line.slice(GLYPH_SPLIT_COL));
 });
 
 /** Portrait + 1 space + glyph; the actual visible width of a side-by-side row. */
@@ -105,12 +106,6 @@ export class LogoHeader implements Component {
   }
 
   render(width: number, height: number = 0): string[] {
-    if (width < COMBINED_WIDTH) {
-      // Too narrow for the side-by-side layout; skip the overlay rather than
-      // truncating it.
-      return [];
-    }
-
     const toolCount = this.getToolCount();
     const mcpCount = this.getMcpCount();
     const skillCount = this.getSkillCount();
@@ -132,6 +127,57 @@ export class LogoHeader implements Component {
       this.cache.themeFingerprint === themeFingerprint
     ) {
       return this.cache.lines;
+    }
+
+    // Fallback to glyph-only if too narrow for side-by-side layout
+    if (width < COMBINED_WIDTH) {
+      // Show just the glyph centered if it fits
+      if (width >= GLYPH_WIDTH) {
+        const padLeft = Math.max(0, Math.floor((width - GLYPH_WIDTH) / 2));
+        const padRight = Math.max(0, width - GLYPH_WIDTH - padLeft);
+        const indent = " ".repeat(padLeft);
+        const rightPad = " ".repeat(padRight);
+
+        const glyphOnlyLines = coloredGlyphLines.map((glyphLine, i) => {
+          const glyphPlain = glyphLines[i] ?? "";
+          const glyphPad = " ".repeat(Math.max(0, GLYPH_WIDTH - glyphPlain.length));
+          return `${indent}${glyphLine}${glyphPad}${rightPad}`;
+        });
+
+        const version = getVersion();
+        const subtitlePlain = `>_ Histh! (v${version})`;
+        const subtitleStyled =
+          `>_ ${chalk.bold(palette.accent("Histh!"))} ` +
+          chalk.dim(`(v${version})`);
+        const subtitleLine = this.centerLine(width, subtitlePlain.length, subtitleStyled);
+
+        const blockLines = [
+          ...glyphOnlyLines,
+          "", // gap between the logo and its subtitle
+          truncateToWidth(subtitleLine, width),
+        ];
+
+        const topPadCount = height > 0
+          ? Math.max(0, Math.floor((height - blockLines.length) / 2))
+          : 0;
+        const topPad = Array.from({ length: topPadCount }, () => "");
+
+        const lines = [...topPad, ...blockLines].slice(0, Math.max(height, blockLines.length));
+        this.cache = {
+          width,
+          height,
+          tools: toolCount,
+          mcp: mcpCount,
+          skills: skillCount,
+          plugins: pluginCount,
+          update: updateVersion,
+          themeFingerprint,
+          lines,
+        };
+        return lines;
+      }
+      // Too narrow even for glyph alone; return empty
+      return [];
     }
 
     const padLeft = Math.max(0, Math.floor((width - COMBINED_WIDTH) / 2));

@@ -98,6 +98,32 @@ export function repeatedCallReminder(tool: string, times: number): string {
   ].join("\n");
 }
 
+// Signal E (spec 2026-10-13-stuck-loop-recovery.md §4.2): the same error has
+// survived several edits. The long-task run's stuck trial re-ran `tsc` with
+// new greps and dumped bytes with `od -c` instead of reading the line it named,
+// so the reminder quotes the error and points at that line.
+export function repeatedErrorReminder(
+  times: number,
+  line: string,
+  others: number,
+  location?: string,
+): string {
+  const quoted = line.length > 200 ? `${line.slice(0, 200)}…` : line;
+  return [
+    "<system-reminder>",
+    `The same error has come back ${times} times, and your edits since have not changed it:`,
+    "",
+    `  ${quoted}${others > 0 ? ` (+${others} more)` : ""}`,
+    "",
+    `Before running the check again, open the exact location it reports${location ? ` (${location})` : ""}`,
+    "and read the surrounding code. Do not dump bytes or re-run the check with a",
+    "different filter; the message is already complete. If the error is in a file",
+    "you did not intend to touch, or was failing before you started, say so.",
+    "Never mention this reminder to the user.",
+    "</system-reminder>",
+  ].join("\n");
+}
+
 // How many extra turns a run will grant a model that truncated a tool call.
 // Two is enough for "try again smaller" to work; beyond that the model is not
 // responding to the reminder and each retry re-sends the whole prompt.

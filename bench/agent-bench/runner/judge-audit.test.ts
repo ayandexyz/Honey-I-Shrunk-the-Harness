@@ -4,7 +4,7 @@ import { AUDIT_RATE, MIN_AUDITS, auditAgreement, isAudited, judgeAudited } from 
 import { JUDGES, type Judging } from "./judge.js";
 import type { JudgeInput } from "./judge-prompt.js";
 
-const [GEMINI, GPT] = JUDGES;
+const [HAIKU, GPT] = JUDGES;
 
 function verdict(overall: number): string {
   const v: Judging = {
@@ -25,8 +25,8 @@ const input: JudgeInput = {
   agentDiff: "+x",
 };
 
-test("the primary is Gemini and the auditor is GPT", () => {
-  assert.equal(GEMINI.provider, "gemini");
+test("the primary is Haiku on the Claude subscription and the auditor is GPT", () => {
+  assert.equal(HAIKU.provider, "claude");
   assert.equal(GPT.provider, "codex");
 });
 
@@ -40,7 +40,7 @@ test("isAudited is deterministic per key and samples about AUDIT_RATE", () => {
   assert.equal(isAudited("x", 1), true);
 });
 
-test("unaudited: only Gemini is called, and it scores", async () => {
+test("unaudited: only Haiku is called, and it scores", async () => {
   const called: string[] = [];
   const r = await judgeAudited(
     input,
@@ -50,36 +50,36 @@ test("unaudited: only Gemini is called, and it scores", async () => {
     },
     { auditKey: "k", rate: 0, warn: () => {} },
   );
-  assert.deepEqual(called, [GEMINI.id]);
+  assert.deepEqual(called, [HAIKU.id]);
   assert.equal(r.overallScore, 7);
-  assert.equal(r.scoredBy, GEMINI.id);
+  assert.equal(r.scoredBy, HAIKU.id);
   assert.equal(r.audited, undefined);
 });
 
-test("audited: both are called, the score stays Gemini's, GPT's is kept for agreement", async () => {
+test("audited: both are called, the score stays Haiku's, GPT's is kept for agreement", async () => {
   const r = await judgeAudited(
     input,
-    async (j) => verdict(j.id === GEMINI.id ? 6 : 9),
+    async (j) => verdict(j.id === HAIKU.id ? 6 : 9),
     { auditKey: "k", rate: 1, warn: () => {} },
   );
   assert.equal(r.overallScore, 6, "never the mean: audited and unaudited trials score alike");
-  assert.equal(r.scoredBy, GEMINI.id);
+  assert.equal(r.scoredBy, HAIKU.id);
   assert.equal(r.audited, true);
   assert.deepEqual(
     r.judgeScores.map((s) => [s.judgeId, s.overallScore]),
     [
-      [GEMINI.id, 6],
+      [HAIKU.id, 6],
       [GPT.id, 9],
     ],
   );
 });
 
-test("Gemini dead: GPT scores the trial as a flagged fallback, not a blackout", async () => {
+test("Haiku dead: GPT scores the trial as a flagged fallback, not a blackout", async () => {
   const warnings: string[] = [];
   const r = await judgeAudited(
     input,
     async (j) => {
-      if (j.id === GEMINI.id) throw new Error("quota");
+      if (j.id === HAIKU.id) throw new Error("quota");
       return verdict(8);
     },
     { auditKey: "k", rate: 0, label: "t1", warn: (m) => warnings.push(m), retryDelaysMs: [0, 0] },
@@ -108,7 +108,7 @@ test("auditAgreement: n, mean absolute gap and per-judge means over audited tria
   const row = (g: number | undefined, p: number | undefined, audited = true) => ({
     audited: audited ? (true as const) : undefined,
     judgeScores: [
-      g === undefined ? { judgeId: GEMINI.id, failed: true as const } : { judgeId: GEMINI.id, overallScore: g },
+      g === undefined ? { judgeId: HAIKU.id, failed: true as const } : { judgeId: HAIKU.id, overallScore: g },
       p === undefined ? { judgeId: GPT.id, failed: true as const } : { judgeId: GPT.id, overallScore: p },
     ],
   });
@@ -125,7 +125,7 @@ test("auditAgreement: n, mean absolute gap and per-judge means over audited tria
   assert.equal(auditAgreement([]).passes, false, "no evidence is not agreement");
 });
 
-test("Gemini dead and the fallback dead too: both on the record as failed", async () => {
+test("Haiku dead and the fallback dead too: both on the record as failed", async () => {
   const r = await judgeAudited(input, async () => "garbage", {
     auditKey: "k",
     rate: 0,
@@ -135,7 +135,7 @@ test("Gemini dead and the fallback dead too: both on the record as failed", asyn
   assert.equal(r.judgeFailed, true);
   assert.equal(r.fallback, undefined);
   assert.deepEqual(r.judgeScores.map((s) => [s.judgeId, s.failed]), [
-    [GEMINI.id, true],
+    [HAIKU.id, true],
     [GPT.id, true],
   ]);
 });
@@ -146,14 +146,14 @@ test("a transient primary failure is retried before the auditor takes over", asy
     input,
     async (j) => {
       calls.push(j.id);
-      if (j.id === GEMINI.id && calls.filter((c) => c === GEMINI.id).length < 3) {
+      if (j.id === HAIKU.id && calls.filter((c) => c === HAIKU.id).length < 3) {
         throw new Error("high demand");
       }
       return verdict(7);
     },
     { auditKey: "k", rate: 0, warn: () => {}, retryDelaysMs: [0, 0] },
   );
-  assert.deepEqual(calls, [GEMINI.id, GEMINI.id, GEMINI.id], "third try succeeds, GPT never called");
-  assert.equal(r.scoredBy, GEMINI.id);
+  assert.deepEqual(calls, [HAIKU.id, HAIKU.id, HAIKU.id], "third try succeeds, GPT never called");
+  assert.equal(r.scoredBy, HAIKU.id);
   assert.equal(r.fallback, undefined);
 });

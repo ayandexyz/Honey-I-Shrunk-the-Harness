@@ -128,6 +128,28 @@ test("repeated identical searches only count with no progress between them", () 
   assert.equal(r!.repeatSearches, 3);
 });
 
+test("a repeated search that errored is a broken tool, not a search circle", () => {
+  t = 0;
+  let n = 0;
+  const g = (output: string, failed = false) => {
+    const callId = `c${++n}`;
+    return [
+      call("grep", { pattern: "foo" }, undefined, callId),
+      e({ type: "function.output", turnId: "x", tool: "grep", callId, output, failed }),
+    ];
+  };
+  const [r] = foldRuns([
+    req("turn-0"),
+    res("turn-0"),
+    ...g("a.ts:1:foo"),
+    // Old logs: the missing-rg error was recorded as `failed: false`.
+    ...g('Executable not found in $PATH: "rg"'),
+    ...g("ripgrep (rg) is not installed…", true),
+    ...g("a.ts:1:foo"), // the one real repeat
+  ]);
+  assert.equal(r!.repeatSearches, 1);
+});
+
 test("a model call that hangs is flagged hung_call, not long_dry", () => {
   t = 0;
   const [r] = foldRuns([req("turn-0", 0), e({ type: "model.error", turnId: "turn-0" }, 400 * MIN)]);

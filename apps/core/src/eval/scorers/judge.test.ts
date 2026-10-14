@@ -216,3 +216,33 @@ test("an outage has no cost to report", async () => {
   assert.equal(v.score, null);
   assert.equal(v.costUsd, undefined);
 });
+
+test("the claude-cli judge goes through `claude -p` and is reported unpriced, not free", async () => {
+  // A fake `claude` on PATH: echoes a verdict naming what it was given.
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), "fake-claude-judge-"));
+  fs.writeFileSync(
+    path.join(bin, "claude"),
+    `#!/usr/bin/env node
+const a = process.argv;
+let input = "";
+process.stdin.on("data", (d) => (input += d));
+process.stdin.on("end", () => {
+  const model = a[a.indexOf("--model") + 1];
+  const sys = a[a.indexOf("--system-prompt") + 1];
+  const ok = input.includes("RUBRIC TEXT") && sys.startsWith("You are grading");
+  console.log(JSON.stringify({ result: ok ? "SCORE: 4\\nWHY: " + model : "SCORE: 0\\nWHY: bad call" }));
+});
+`,
+  );
+  fs.chmodSync(path.join(bin, "claude"), 0o755);
+  const prevPath = process.env.PATH;
+  process.env.PATH = `${bin}${path.delimiter}${prevPath}`;
+  try {
+    const v = await scoreJudged({ run: run([]), kase, judge: { provider: "claude-cli", model: "claude-haiku-4-5" } });
+    assert.equal(v.score, 4);
+    assert.equal(v.reason, "claude-haiku-4-5");
+    assert.equal(v.costUsd, undefined, "a subscription has no per-token price; unknown, never 0");
+  } finally {
+    process.env.PATH = prevPath;
+  }
+});

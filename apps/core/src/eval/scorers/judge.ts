@@ -22,7 +22,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { evalsDir } from "../dataset.js";
-import type { JudgeConfig } from "../judge-config.js";
+import { CLAUDE_CLI_DEFAULT_MODEL, CLAUDE_CLI_JUDGE, type JudgeConfig } from "../judge-config.js";
 import type { EvalCase, RunRecord } from "../types.js";
 
 /**
@@ -52,6 +52,9 @@ export const MAX_SCORE = 5;
  */
 const JUDGE_MAX_TOKENS = 2_000;
 const JUDGE_TIMEOUT_MS = 30_000;
+// `claude -p` starts a whole Claude Code process before it answers: ~17 s
+// measured, and the first live judged run timed out one call of six at 30 s.
+const CLAUDE_CLI_TIMEOUT_MS = 120_000;
 
 export const JUDGE_SYSTEM = `You are grading the reply of an AI coding assistant.
 
@@ -186,6 +189,17 @@ async function oneShot(
   prompt: string,
   signal: AbortSignal,
 ): Promise<JudgeReply> {
+  if (input.judge.provider === CLAUDE_CLI_JUDGE) {
+    const { runClaudeCli } = await import("../../utils/claude-cli.js");
+    const reply = await runClaudeCli({
+      model: input.judge.model ?? CLAUDE_CLI_DEFAULT_MODEL,
+      system,
+      prompt,
+      signal,
+    });
+    // Subscription usage has no per-token price: unknown, never zero.
+    return { text: reply.text, costUsd: undefined };
+  }
   const { getProvider } = await import("../../providers/index.js");
   const { priceUsd } = await import("../../providers/pricing.js");
   const provider = getProvider(input.judge.provider as never);
@@ -219,8 +233,10 @@ async function oneShot(
 export async function scoreJudged(input: JudgeInput): Promise<JudgeVerdict> {
   if (!input.kase.rubric) return { score: null, reason: "no rubric" };
 
+  const timeoutMs =
+    input.judge.provider === CLAUDE_CLI_JUDGE ? CLAUDE_CLI_TIMEOUT_MS : JUDGE_TIMEOUT_MS;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), JUDGE_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const rubric = loadRubric(input.kase.rubric);
     const prompt = renderJudgePrompt(input.run, input.kase, rubric);
@@ -234,7 +250,7 @@ export async function scoreJudged(input: JudgeInput): Promise<JudgeVerdict> {
       new Promise<never>((_, reject) =>
         setTimeout(
           () => reject(new Error("judge timed out")),
-          JUDGE_TIMEOUT_MS,
+          timeoutMs,
         ).unref?.(),
       ),
     ]);

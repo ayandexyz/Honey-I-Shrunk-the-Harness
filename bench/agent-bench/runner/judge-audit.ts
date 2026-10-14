@@ -1,5 +1,5 @@
 // =============================================================================
-// Audit mode: Gemini scores every trial, GPT re-judges a sample.
+// Audit mode: Haiku (primary) scores every trial, GPT re-judges a sample.
 // Spec: docs/specs/2026-09-29-commit-reconstruction-bench.md §4.6 ("Audit mode").
 //
 // The owner's choice (2026-09-29) over the full panel, because a GPT call on
@@ -25,8 +25,8 @@ import { JUDGE_SYSTEM, renderJudgePrompt, type JudgeInput } from "./judge-prompt
 
 export const AUDIT_RATE = 0.2;
 /**
- * A run in audit mode is reported as "scored by Gemini" only while the two
- * judges agree to within this many points (mean |Gemini − GPT| over audited
+ * A run in audit mode is reported as "scored by" the primary only while the two
+ * judges agree to within this many points (mean |Haiku − GPT| over audited
  * trials, 0–10 scale). Past it, the report says the audit failed and a
  * published number needs the full panel.
  */
@@ -35,7 +35,7 @@ export const MAX_AUDIT_GAP = 1.5;
 export const MIN_AUDITS = 5;
 /**
  * The primary is retried before the auditor takes over. Every fallback puts a
- * second judge's scale into a run the report calls Gemini-scored, and the
+ * second judge's scale into a run the report calls primary-scored, and the
  * first live smoke (2026-09-29) fell back on BOTH trials over a transient
  * "model is experiencing high demand".
  */

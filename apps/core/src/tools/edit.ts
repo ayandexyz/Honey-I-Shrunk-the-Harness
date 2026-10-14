@@ -8,7 +8,7 @@ import type { ToolContext } from "./types.js";
 import type { Tool, ToolExecutionResult, JsonSchema } from "./tool.types.js";
 import { buildTool } from "./factory.js";
 import { generateDiffString } from "./diff-format.js";
-import { getReadState } from "./read-state.js";
+import { getReadState, touchReadState } from "./read-state.js";
 
 interface EditParams {
   filePath: string;
@@ -692,11 +692,13 @@ async function executeEdit(
     // offset/limit: the model has not been *shown* this content, so it must
     // never be deduped against (see ReadRecord.offset).
     const after = fs.statSync(filepath);
-    readState?.set(filepath, {
-      mtimeMs: after.mtimeMs,
-      size: after.size,
-      inContext: false,
-    });
+    if (ctx.sessionId) {
+      touchReadState(ctx.sessionId, filepath, {
+        mtimeMs: after.mtimeMs,
+        size: after.size,
+        inContext: false,
+      });
+    }
 
     const diff = generateDiffString(content, newContent);
 

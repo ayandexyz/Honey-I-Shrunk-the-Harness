@@ -27,6 +27,7 @@ import {
   taskNotificationsEnabled,
 } from "../agent/task-notify.js";
 import { recordEnd, recordStart } from "../agent/background-ledger.js";
+import { scratchScriptHint } from "./scratch-hint.js";
 
 interface BashParams {
   command: string;
@@ -506,6 +507,7 @@ function runForeground(
       if (!output) {
         output = "(no output)";
       }
+      output += scratchScriptHint(params.command, output, cwd);
 
       // Returned untruncated: the orchestrator stores the full text in the
       // OutputStore before any lossy cap, so the `output` tool can page the

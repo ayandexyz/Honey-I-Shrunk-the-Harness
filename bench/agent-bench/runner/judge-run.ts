@@ -5,7 +5,7 @@
 //
 //   pnpm bench:judge bench/agent-bench/results/<run> [--panel] [--rejudge] [--concurrency N] [--tasks <file>]
 //
-// Audit mode by default (Gemini scores, GPT audits 20% and falls back);
+// Audit mode by default (Haiku scores, GPT audits 20% and falls back);
 // `--panel` runs BuffBench's full two-judge panel on every trial instead.
 // Resumable: a trial that already has `judging` is skipped unless --rejudge,
 // and report.json is rewritten after every verdict. Writes judging.json per
@@ -20,6 +20,7 @@ import { auditAgreement, judgeAudited, MAX_AUDIT_GAP, MIN_AUDITS } from "./judge
 import { JUDGES, assertNoCollision, judgePanel } from "./judge.js";
 import type { FinalCheckOutput, JudgeInput } from "./judge-prompt.js";
 import { INSTANCE_PREFIX, REPO_DIR, loadJudgedTasks } from "./judged-instances.js";
+import { BASELINE_FILE } from "./judged-trial.js";
 import { MAX_ONE_JUDGE_SHARE, panelVerdict, summarize, type JudgedRow } from "./judged-metrics.js";
 import type { JudgedTask } from "./task-build.js";
 import type { Report, TrialJudging, TrialRecord } from "./types.js";
@@ -59,6 +60,7 @@ function judgeInput(task: JudgedTask, trial: TrialRecord): JudgeInput {
   const dir = path.join(ROOT, trial.artifactDir);
   const read = (f: string) => (fs.existsSync(path.join(dir, f)) ? fs.readFileSync(path.join(dir, f), "utf-8") : "");
   const checks = read("final-checks.json");
+  const baselineFile = path.join(ROOT, path.dirname(path.dirname(trial.artifactDir)), BASELINE_FILE);
   return {
     // The judge sees the task as the user typed it, not our wrapper template.
     prompt: task.prompt,
@@ -67,6 +69,9 @@ function judgeInput(task: JudgedTask, trial: TrialRecord): JudgeInput {
     agentDiff: read("patch.diff"),
     error: errored(trial) ? trial.reason : undefined,
     finalCheckOutputs: checks ? (JSON.parse(checks) as FinalCheckOutput[]) : undefined,
+    baselineCheckOutputs: fs.existsSync(baselineFile)
+      ? (JSON.parse(fs.readFileSync(baselineFile, "utf-8")) as FinalCheckOutput[])
+      : undefined,
   };
 }
 
@@ -159,7 +164,7 @@ async function main(): Promise<void> {
     : agreement.n < MIN_AUDITS
       ? `audit UNMEASURED (${agreement.n} two-sided audits, need ${MIN_AUDITS}): a published number needs --panel`
       : agreement.passes
-        ? `scored by Gemini, audited by GPT: n=${agreement.n}, mean gap ${agreement.meanAbsGap.toFixed(2)} ≤ ${MAX_AUDIT_GAP}`
+        ? `scored by ${JUDGES[0].id}, audited by ${JUDGES[1].id}: n=${agreement.n}, mean gap ${agreement.meanAbsGap.toFixed(2)} ≤ ${MAX_AUDIT_GAP}`
         : `audit FAILED: mean gap ${agreement.meanAbsGap.toFixed(2)} > ${MAX_AUDIT_GAP} over n=${agreement.n}; a published number needs --panel`;
   const judgingVerified = panel ? pv.ok : agreement.passes;
   const contaminationChecked = report.contamination?.checked === true;

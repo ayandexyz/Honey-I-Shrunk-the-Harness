@@ -38,25 +38,29 @@ export interface PanelJudging extends Judging {
 export interface JudgeSpec {
   id: string;
   /**
-   * A freecode provider id (served by core's providers), or "codex" (served by
-   * `codex exec`, see core-complete.ts judgeComplete).
+   * A freecode provider id (served by core's providers), "codex" (served by
+   * `codex exec`) or "claude" (served by `claude -p`); see core-complete.ts
+   * judgeComplete.
    */
   provider: string;
   model: string;
 }
 
 /**
- * Pinned 2026-09-29. Gemini: 3.5-flash, the strongest this key can call —
- * gemini-3.1-pro-preview is out of quota, 2.5-pro and 3-pro-preview are
- * retired for new users (probed 2026-09-29). A retired id surfaces as a dead judge, not an error, so
- * both ids are written into every judged report. Sonnet goes through the
- * GPT goes through `codex exec` on the owner's Codex subscription
- * (codex-complete.ts): the Claude-subscription Sonnet judge was refused by
- * Anthropic ("OAuth authentication is currently not allowed for this
- * organization"), probed 2026-09-29.
+ * Primary first (audit mode scores with it), auditor second.
+ *
+ * Haiku 4.5 is primary since 2026-10-13 (owner decision), through `claude -p`
+ * on the owner's Claude subscription (claude-complete.ts). It replaced
+ * Gemini 3.5 Flash, whose API key had gone invalid, so the v2 long-task run
+ * was scored by the GPT fallback alone. A Sonnet judge through core's
+ * Anthropic OAuth provider was refused on 2026-09-29 ("OAuth authentication
+ * is currently not allowed for this organization"); Claude Code's own CLI is
+ * not. GPT goes through `codex exec` on the owner's Codex subscription
+ * (codex-complete.ts). A retired id surfaces as a dead judge, not an error,
+ * so both ids are written into every judged report.
  */
 export const JUDGES: JudgeSpec[] = [
-  { id: "judge-gemini", provider: "gemini", model: "gemini-3.5-flash" },
+  { id: "judge-haiku", provider: "claude", model: "claude-haiku-4-5" },
   { id: "judge-gpt", provider: "codex", model: "gpt-5.5" },
 ];
 
