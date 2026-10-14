@@ -1,6 +1,6 @@
 {
   "name": "@thisisayande/freecode",
-  "version": "0.45.0-rc.1",
+  "version": "0.45.0",
   "type": "module",
   "description": "Terminal UI for FreeCode AI coding assistant",
   "license": "MIT",
