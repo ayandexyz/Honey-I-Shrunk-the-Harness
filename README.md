@@ -6,7 +6,7 @@
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-<img src="docs/assets/tui2.png" width="960" height="720" />
+<img src="docs/assets/tui3.png" width="960" height="720" />
 <img src="docs/assets/image.png" width="1663" height="650" />
 
 </div>
