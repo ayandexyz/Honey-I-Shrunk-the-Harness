@@ -120,8 +120,6 @@ left out.
 | `FREECODE_CLAUDE_CODE_AGENTS` | on | `0` skips subagent definitions from `~/.claude/agents` and `<project>/.claude/agents`. |
 | `FREECODE_DISABLE_EXTENSIONS` | extensions load | `1` loads no extensions at all. |
 | `FREECODE_TRUST_PROJECT_EXTENSIONS` | off | `1` loads `<project>/.freecode/extensions/` without the project being in `extensions.trustedProjects`. An extension is arbitrary code, so use it only on repos you trust. |
-| `FREECODE_HOOK_URL` | unset | URL of a supervising board (AgentBoard): reports activity over HTTP and lets the board answer permission requests. Inert when unset. |
-| `FREECODE_AGENT_FOLD` | on | `0` turns off reporting to the agent-fold bridge (already inert when the bridge isn't running). |
 | `FREECODE_CHECKPOINTS` | on | `0` stops the per-turn file snapshots behind `/rewind`. |
 
 ## Paths
