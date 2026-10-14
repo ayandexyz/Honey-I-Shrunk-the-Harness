@@ -99,10 +99,6 @@ import { loadExtensions, listExtensions } from "./extensions/index.js";
 import { getConfigDir } from "./cli/utils/config.js";
 import { initHooks } from "./hooks/bootstrap.js";
 import {
-  registerAgentFold,
-  type AgentFoldIntegration,
-} from "./hooks/builtin/agent-fold.js";
-import {
   bus,
   BusEvents,
   answerQuestion,
@@ -375,7 +371,6 @@ async function runSessionTurn(
     startingTurns.delete(sessionId);
   }
   activeLoops.set(sessionId, loop);
-  agentFold?.turnStarted(sessionId);
   // run() leaves pendingSteers alone, so these reach the model before its
   // first call of this turn.
   for (const text of deferredNotifications.get(sessionId) ?? []) {
@@ -617,25 +612,6 @@ function createSession(config: SessionConfig): SessionInfo {
 
 function getSession(id: string): SessionInfo | undefined {
   return sessions.get(id);
-}
-
-// The Omarchy top-bar mirror (hooks/builtin/agent-fold.ts). Registered by
-// startServer only: a headless `freecode run` must not wait on the bar.
-let agentFold: AgentFoldIntegration | undefined;
-
-async function lastAssistantText(sessionId: string): Promise<string | null> {
-  const session = getSession(sessionId);
-  if (!session) return null;
-  const store = await getSessionStore();
-  const messages = await store.getMessages(sessionId, session.projectPath);
-  const last = messages.at(-1);
-  if (last?.role !== "assistant") return null;
-  const text = last.parts
-    .filter((part) => part.type === "text" && typeof part.content === "string")
-    .map((part) => part.content)
-    .join("\n")
-    .trim();
-  return text.length > 0 ? text : null;
 }
 
 /**
@@ -2031,22 +2007,11 @@ export async function startServer() {
   await loadExtensions(process.cwd());
 
   // Built-in hooks + settings.json hooks (project + user scopes). Shared with
-  // `freecode run` so headless and served runs load the same hooks.
+  // `freecode run` so headless and served runs load the same hooks. A bar
+  // plugin like Hommies mirrors activity/permissions/turn-ends the same way
+  // it does for Claude Code: its own hook script, registered here, not
+  // FreeCode code that knows the plugin's name (see hooks/hooks-system.md).
   const hookSettings = initHooks(process.cwd(), { watch: true });
-
-  // Mirror questions, permissions, and turn ends into the agent-fold top-bar
-  // plugin when its bridge is running; inert otherwise.
-  agentFold = registerAgentFold({
-    describe: async (id) => {
-      const session = getSession(id);
-      if (!session) return null;
-      const meta = await (await getSessionStore())
-        .getMeta(id, session.projectPath)
-        .catch(() => null);
-      return { cwd: session.projectPath, title: meta?.title || undefined };
-    },
-    lastAssistantText,
-  });
 
   // Clean up on shutdown. `exit` cannot await, so the memory flush goes on the
   // signal handlers, which can (spec D3/D4) — quitting is how most sessions
