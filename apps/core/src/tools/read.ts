@@ -7,6 +7,7 @@ import * as path from "path";
 import type { ToolContext } from "./types.js";
 import type { Tool, ToolExecutionResult, JsonSchema } from "./tool.types.js";
 import { buildTool } from "./factory.js";
+import { noteRead } from "./lsp/feedback.js";
 import { getReadState, canDedup, touchReadState } from "./read-state.js";
 import { coerceNumber, coerceBoolean, isPositiveInt } from "./coerce-args.js";
 
@@ -312,6 +313,7 @@ async function executeRead(
     }
 
     const lines = readLines(filepath, { limit, offset });
+    noteRead(ctx.sessionId, filepath, ctx.projectPath ?? ctx.cwd);
 
     let output = [
       `<path>${filepath}</path>`,

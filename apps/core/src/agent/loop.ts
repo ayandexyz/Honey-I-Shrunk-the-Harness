@@ -120,6 +120,7 @@ import {
   verifyFailureReminder,
   MAX_VERIFY_ATTEMPTS,
 } from "./verify.js";
+import { drainEditDiagnostics, editDiagnosticsEnabled } from "../tools/lsp/feedback.js";
 import {
   verifyChanges,
   verifierFailureReminder,
@@ -1393,17 +1394,10 @@ export class AgentLoop {
               console.log(
                 `[AgentLoop] Verification gate ${this.verifyAttempts}/${MAX_VERIFY_ATTEMPTS}: running \`${verifyCmd.command}\``,
               );
-              const startedAt = Date.now();
-              const verify = await runVerify(
-                verifyCmd.command,
-                this.state.projectPath,
-                this.abort.signal,
-              );
-              this.recorder.recordVerifyRan(
+              const verify = await this.runGateCommand(
                 "typecheck",
-                verify.ok,
-                Date.now() - startedAt,
-                failingTestLines(verify.raw).length,
+                verifyCmd.command,
+                verifyCmd.label,
               );
               if (this.abort.signal.aborted)
                 return await this.complete(
@@ -1449,12 +1443,9 @@ export class AgentLoop {
               const failures: { label: string; raw: string }[] = [];
               for (const c of commands) {
                 console.log(`[AgentLoop] Test gate ${this.testAttempts}/${MAX_TEST_ATTEMPTS}: running \`${c.command}\``);
-                const startedAt = Date.now();
-                const r = await runVerify(c.command, this.state.projectPath, this.abort.signal, TEST_TIMEOUT_MS);
+                const r = await this.runGateCommand("tests", c.command, c.label, TEST_TIMEOUT_MS);
                 if (this.abort.signal.aborted)
                   return await this.complete("Interrupted", undefined, undefined, usageSoFar());
-                const failing = failingTestLines(r.raw);
-                this.recorder.recordVerifyRan("tests", r.ok, Date.now() - startedAt, failing.length);
                 if (!r.ok) failures.push({ label: c.label, raw: r.raw });
               }
               this.lastTestResult = failures.length
@@ -2101,6 +2092,16 @@ export class AgentLoop {
         this.state.sessionId,
         this.state.projectPath,
       );
+      // Errors the last edits introduced, from the language server (spec
+      // 2026-10-14-edit-time-diagnostics.md §1.2). Off unless
+      // FREECODE_EDIT_DIAGNOSTICS=1; read per turn for `eval ab`.
+      if (editDiagnosticsEnabled()) {
+        const diagnostics = await drainEditDiagnostics(this.state.sessionId);
+        if (diagnostics) {
+          this.pendingReminders.push(diagnostics.text);
+          this.recorder.recordDiagnosticsDelivered(diagnostics.files, diagnostics.errors, diagnostics.waitedMs);
+        }
+      }
       // Drain any queued <system-reminder> blocks (todo nudge / completion
       // gate) into this turn's prompt. Transient — never persisted to history.
       const reminderText = this.pendingReminders.join("\n\n");
@@ -3817,6 +3818,32 @@ export class AgentLoop {
     const left = this.pendingSteers;
     this.pendingSteers = [];
     return left;
+  }
+
+  /**
+   * Run one finish-gate command with a notice on each side. Without them the
+   * frontend shows only "in progress" for however long the build takes — 93s
+   * after the model had already finished, in session 5ea1fdcb (spec
+   * 2026-10-14-edit-time-diagnostics.md §0).
+   */
+  private async runGateCommand(
+    kind: "typecheck" | "tests",
+    command: string,
+    label: string,
+    timeoutMs?: number,
+  ) {
+    const notice = (content: string) =>
+      BusEvents.stream(this.state.sessionId, { type: "notice", level: "info", content });
+    notice(`Verifying: ${command}`);
+    const startedAt = Date.now();
+    const r = await runVerify(command, this.state.projectPath, this.abort.signal, timeoutMs);
+    const ms = Date.now() - startedAt;
+    // A test label carries a package path, which stays out of the log.
+    const script = kind === "typecheck" ? label : undefined;
+    this.recorder.recordVerifyRan(kind, r.ok, ms, failingTestLines(r.raw).length, script);
+    if (!this.abort.signal.aborted)
+      notice(`${label} ${r.ok ? "passed" : "failed"} (${Math.round(ms / 1000)}s)`);
+    return r;
   }
 
   // ===========================================================================

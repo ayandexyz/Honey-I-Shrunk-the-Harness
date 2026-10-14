@@ -64,6 +64,8 @@ left out.
 | `FREECODE_OUTPUT_STORE_BYTES` | 16 MB | Per-session store of full tool outputs; oldest evicted first. |
 | `FREECODE_OUTPUT_STORE_SESSIONS` | `50` | How many sessions' output stores stay live at once. |
 | `FREECODE_LSP_SERVERS` | built-in table | JSON mapping file extensions to language servers, e.g. `{".rs": {"command": "rust-analyzer", "args": []}}`. Adds to or overrides the built-ins. |
+| `FREECODE_EDIT_DIAGNOSTICS` | off | `1` sends the errors an edit introduced (language-server diagnostics, minus what was already broken) to the model on its next request. Spec `2026-10-14-edit-time-diagnostics.md`. `eval ab`. |
+| `FREECODE_LSP_AUTO_INSTALL` | on | `0` stops edit diagnostics from installing a missing npm language server (`typescript-language-server`, `pyright`) into `~/.freecode/lsp`. |
 | `FREECODE_RTK` | on if `rtk` is installed | `0` stops rewriting bash commands to their compact `rtk` equivalents. |
 
 ## Prompt and context
