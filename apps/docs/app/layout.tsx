@@ -26,7 +26,7 @@ const navbar = (
     logo={
       <span className="navbar-brand">
         <Image src="/logo.png" alt="" width={28} height={28} priority />
-        <span className="navbar-brand-wordmark">FreeCode</span>
+        <span className="navbar-brand-wordmark">Histh!</span>
       </span>
     }
     projectLink="https://github.com/ayandexyz/omacode"
