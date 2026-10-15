@@ -24,11 +24,35 @@ import { logger } from "../utils/logger.js";
 const MEMORY_INDEX_FILENAME = "MEMORY.md";
 const MEMORY_DIR_NAME = "memory";
 
+// Eval trials keep the real project as their working tree but need a private
+// memory corpus. The override is deliberately process-local: the eval runner is
+// serial, and production callers should continue to derive storage from HOME.
+const memoryDirOverrides = new Map<string, string>();
+
+function projectKey(projectPath: string): string {
+  return path.resolve(projectPath);
+}
+
+export function overrideMemoryDir(
+  projectPath: string,
+  memoryDir: string,
+): () => void {
+  const key = projectKey(projectPath);
+  const previous = memoryDirOverrides.get(key);
+  memoryDirOverrides.set(key, path.resolve(memoryDir));
+  return () => {
+    if (previous === undefined) memoryDirOverrides.delete(key);
+    else memoryDirOverrides.set(key, previous);
+  };
+}
+
 function projectsDir(): string {
   return path.join(os.homedir(), ".freecode", "projects");
 }
 
 function getMemoryBaseDir(projectPath: string): string {
+  const override = memoryDirOverrides.get(projectKey(projectPath));
+  if (override) return override;
   // Full reversible path (same scheme as session dirs), not basename —
   // basename made ~/work/api and ~/side/api share one store.
   const dir = path.join(
@@ -313,12 +337,13 @@ export class MemoryStore {
 // =============================================================================
 
 let globalMemoryStore: MemoryStore | null = null;
-let globalProjectPath: string | null = null;
+let globalMemoryDir: string | null = null;
 
 export function getMemoryStore(projectPath: string): MemoryStore {
-  if (!globalMemoryStore || globalProjectPath !== projectPath) {
+  const memoryDir = getMemoryBaseDir(projectPath);
+  if (!globalMemoryStore || globalMemoryDir !== memoryDir) {
     globalMemoryStore = new MemoryStore(projectPath);
-    globalProjectPath = projectPath;
+    globalMemoryDir = memoryDir;
   }
   return globalMemoryStore;
 }

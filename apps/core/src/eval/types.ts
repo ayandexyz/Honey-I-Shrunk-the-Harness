@@ -91,6 +91,8 @@ export interface EvalMemory {
   supersedes?: string[];
 }
 
+export type EvalMemoryPolicy = "empty" | "fixture" | "learning";
+
 export interface EvalCase {
   id: string;
   prompt: string;
@@ -443,6 +445,8 @@ export interface CaseResult {
   /** All N trials passed. Reported, never blocking. §9.1 */
   consistent: boolean;
   quarantined: boolean;
+  /** Memory corpus used by every trial. Fingerprint only; bodies never enter reports. */
+  memory?: { policy: EvalMemoryPolicy; fixture: string };
   /**
    * Mean judge score across scored trials; `null` when the judge answered for
    * none of them. Absent on a case with no rubric — which is how the gate
