@@ -103,6 +103,7 @@ export async function executeCommandHook(
         modifiedInput?: Record<string, unknown>;
         modifiedOutput?: unknown;
         context?: string;
+        permissionDecision?: "allow" | "deny" | "ask";
       } | undefined;
       if (trimmed.startsWith("{")) {
         try {
@@ -143,11 +144,16 @@ export async function executeCommandHook(
             blockReason: parsed.reason,
           });
         } else {
+          const permissionDecision = parsed.permissionDecision === "allow" || parsed.permissionDecision === "deny" ||
+            parsed.permissionDecision === "ask"
+            ? parsed.permissionDecision
+            : undefined;
           resolve({
             success: true,
             modifiedInput: parsed.modifiedInput,
             modifiedOutput: parsed.modifiedOutput,
             additionalContext: parsed.context,
+            permissionDecision,
           });
         }
         return;

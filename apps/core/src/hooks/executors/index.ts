@@ -104,6 +104,8 @@ export interface AggregatedHookResult {
   modifiedOutput?: unknown;
   additionalContexts: string[];
   error?: string;
+  /** PermissionRequest only; see HookExecutionResult. Last explicit one wins. */
+  permissionDecision?: "allow" | "deny" | "ask";
 }
 
 export async function executeHooks(
@@ -139,6 +141,10 @@ export async function executeHooks(
 
     if (hookResult.additionalContext) {
       result.additionalContexts.push(hookResult.additionalContext);
+    }
+
+    if (hookResult.permissionDecision) {
+      result.permissionDecision = hookResult.permissionDecision;
     }
   }
 

@@ -66,6 +66,14 @@ export type HookExecutionResult =
       modifiedInput?: Record<string, unknown>;
       modifiedOutput?: unknown;
       additionalContext?: string;
+      /**
+       * PermissionRequest only. Explicit, Claude-Code-style decision from the
+       * hook. Omitted (or "ask") means the hook has no opinion: PermissionRequest.ts
+       * treats that as passthrough, not an implicit allow, so a hook that
+       * merely ran (or a bridge that timed out) can never silently grant a
+       * permission the rules engine would otherwise have asked about.
+       */
+      permissionDecision?: "allow" | "deny" | "ask";
       error?: never;
     }
   | {
@@ -75,6 +83,7 @@ export type HookExecutionResult =
       modifiedInput?: never;
       modifiedOutput?: never;
       additionalContext?: never;
+      permissionDecision?: never;
       error?: never;
     }
   | {
@@ -84,6 +93,7 @@ export type HookExecutionResult =
       modifiedInput?: never;
       modifiedOutput?: never;
       additionalContext?: never;
+      permissionDecision?: never;
       error?: string;
     };
 

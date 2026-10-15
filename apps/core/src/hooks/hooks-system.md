@@ -151,9 +151,20 @@ registerHook("PreToolUse", "block-dangerous", {
   "reason": "User rejected this operation",
   "modifiedInput": { "file": "new-path.txt" },
   "modifiedOutput": "replacement tool output (PostToolUse) or prompt (UserPromptSubmit)",
-  "context": "Additional context to inject"
+  "context": "Additional context to inject",
+  "permissionDecision": "allow"
 }
 ```
+
+`permissionDecision` is read by `PermissionRequest` hooks only (ignored
+elsewhere): `"allow"` or `"deny"` is an explicit decision; omitting the field
+(or sending `"ask"`) means the hook has no opinion. A PermissionRequest hook
+that matched but gave no explicit decision — including one that simply
+printed nothing on exit `0` — resolves to **passthrough**, not an implicit
+allow: the rules engine's own ask/allow/deny stands, the same way a silent
+hook in Claude Code never auto-approves. This matters for a hook that proxies
+to something that can time out (a bridge, a remote approver): on timeout it
+should stay silent rather than ever defaulting to allow.
 
 ### Callback Hook
 
@@ -252,9 +263,12 @@ if (preResult.modifiedInput) {
 
 // Permission Request (for dangerous operations)
 // Runs AFTER the rules engine (permission/evaluate.ts). Decisions:
-//   "allow" | "deny" | "ask" — a matched hook overrides the rules outcome
-//   (except a rules deny, which is absolute and short-circuits before hooks)
-//   "passthrough" — no hook matched; the rules-engine decision stands
+//   "allow" | "deny" — a matched hook gave an explicit `permissionDecision`
+//   and overrides the rules outcome (except a rules deny, which is absolute
+//   and short-circuits before hooks)
+//   "passthrough" — no hook matched, OR one matched but gave no explicit
+//   `permissionDecision` (silence is neutral, not an implicit allow); the
+//   rules-engine decision stands either way
 // See docs/specs/2026-07-18-permission-rules.md §5.
 const permResult = await this.hooks.runPermissionRequest(toolCall, ctx);
 

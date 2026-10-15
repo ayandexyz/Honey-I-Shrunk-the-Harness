@@ -959,6 +959,7 @@ export class AgentLoop {
         await this.hooks.runSessionStart({
           sessionId: this.state.sessionId,
           turnCount: this.state.turnCount,
+          cwd: this.state.projectPath,
         });
 
         // Step 3: Emit session.created event
@@ -1189,6 +1190,7 @@ export class AgentLoop {
         await this.hooks.runTurnStart({
           sessionId: this.state.sessionId,
           turnCount: this.state.turnCount,
+          cwd: this.state.projectPath,
         });
 
         // Execute one turn: send prompt, get response, parse tools, execute
@@ -1211,6 +1213,7 @@ export class AgentLoop {
           {
             sessionId: this.state.sessionId,
             turnCount: this.state.turnCount,
+            cwd: this.state.projectPath,
           },
           turnResult.usage,
         );
@@ -2159,6 +2162,7 @@ export class AgentLoop {
       const hookResult = await this.hooks.runUserPromptSubmit(joinedSystem, {
         sessionId: this.state.sessionId,
         turnCount: this.state.turnCount,
+        cwd: this.state.projectPath,
       });
       const finalSystemBlocks = applySystemPromptHookRewrite(
         systemBlocks,
@@ -3196,6 +3200,11 @@ export class AgentLoop {
       // permission dialog this tool raises; a supervising board needs the id
       // to know which in-flight tool is the blocking one.
       toolUseId: toolCall.id,
+      // Reaches shell hooks as $CLAUDE_CWD (hooks-system.md). Was missing
+      // here entirely, so no PreToolUse/PermissionRequest/PostToolUse/
+      // PostToolUseFailure/Notification hook ever saw a cwd — a command hook
+      // that validates it (an approval bridge, for one) silently got nothing.
+      cwd: this.state.projectPath,
     };
 
     // A tool outside the role's allowlist was never offered; a call to one
@@ -4137,6 +4146,7 @@ export class AgentLoop {
     await this.hooks.runStop(error || message, {
       sessionId: this.state.sessionId,
       turnCount: this.state.turnCount,
+      cwd: this.state.projectPath,
     });
     return {
       success: false,
@@ -4171,6 +4181,7 @@ export class AgentLoop {
     await this.hooks.runStop(message, {
       sessionId: this.state.sessionId,
       turnCount: this.state.turnCount,
+      cwd: this.state.projectPath,
     });
     return {
       success: true,
