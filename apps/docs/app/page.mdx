@@ -15,26 +15,9 @@ theme:
 import Image from "next/image";
 import { Cards } from "nextra/components";
 
-<section className="hero-doc">
-  <p className="eyebrow"><span className="eyebrow-dot" aria-hidden="true"></span>Open-source coding harness · v0.47</p>
-  <h1 className="poster-title" aria-label="FreeCode">
-    <span className="poster-title-art" aria-hidden="true">
-      <span className="poster-title-rule"></span>
-      <span className="poster-title-line">FreeCode</span>
-      <span className="poster-title-rule"></span>
-    </span>
-  </h1>
-  <p className="hero-copy">
-    A compact coding harness built to extract more useful work from every model —
-    through parallel agents, durable memory, real tools, and evidence you can inspect.
-  </p>
-  <div className="hero-actions">
-    <a className="button button-primary" href="/getting-started">Get started</a>
-    <a className="button button-ghost" href="/guides">
-      Read the guides <span aria-hidden="true">↓</span>
-    </a>
-  </div>
-</section>
+<div style={{ display: "flex", justifyContent: "center", marginTop: "3rem", marginBottom: "1.5rem" }}>
+  <Image src="/logo2.png" alt="FreeCode" width={300} height={300} style={{ maxWidth: "90%", height: "auto" }} priority />
+</div>
 
 <Cards num={2} style={{ maxWidth: "48rem", margin: "0 auto" }}>
   <Cards.Card title="Start here" href="/getting-started" arrow>
