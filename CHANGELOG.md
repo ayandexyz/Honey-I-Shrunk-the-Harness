@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.46.1
+
+Permission hooks now stay neutral when they return no explicit decision, every hook receives the documented working directory, and the question flow works cleanly across both the TUI and external approval bridges. The web landing-page heading also gets corrected letter spacing.
+
+### Fixed
+
+- **PermissionRequest hooks no longer allow on silence; hook contexts include `cwd`** (`af08d67c`). Command hooks may return `permissionDecision: "allow" | "deny" | "ask"`; an omitted decision or `"ask"` now passes control back to the rules engine, while hard blocks remain authoritative. All hook contexts built by the agent loop now carry `cwd`, restoring the documented `$CLAUDE_CWD` behavior.
+- **Question UI and bridged answers** (`7a266b69`). Questions render as inline cards beneath the composer, the custom-answer field accepts bracketed paste, and answers supplied by a PreToolUse bridge are consumed directly instead of prompting the user a second time.
+- **Web heading spacing** (`6b749c5a`). Corrects the oversized landing-page heading's letter spacing.
+
 ## v0.46.0
 
 The verify gate stops failing silently: it now says what it's running before and after, and a per-edit LSP diagnostics loop (on by default) catches type errors incrementally instead of waiting on a slow `build` fallback, which the verify gate no longer falls back to at all. The Omarchy top-bar/board-webhook integration ("glue code") is removed outright, along with a leftover dead import it left behind that broke the build. In the TUI, model narration written right before a tool call now folds into one dim line under the tool group instead of taking its own row — and fixes a bug where that fold silently truncated text still mid-stream — while the static ▶/▼ expand/collapse caret is gone from tool rows (click-to-toggle is unchanged).
