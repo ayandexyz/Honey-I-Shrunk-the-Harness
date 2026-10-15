@@ -182,6 +182,42 @@ test("a long Other answer wraps instead of running off the card", () => {
   }
 });
 
+test("a bracketed paste lands in the Other field instead of being dropped", () => {
+  const picked: string[] = [];
+  const modal = new QuestionModal("A", "q", OPTIONS);
+  modal.onSelect = (label) => picked.push(label);
+  modal.handleInput(KEY_DOWN);
+  modal.handleInput(KEY_DOWN); // Other
+  modal.handleInput("\x1b[200~pasted text\x1b[201~");
+  modal.handleInput(KEY_ENTER);
+  assert.deepEqual(picked, ["pasted text"]);
+});
+
+test("a paste split across chunks is buffered until the end marker arrives", () => {
+  const picked: string[] = [];
+  const modal = new QuestionModal("A", "q", OPTIONS);
+  modal.onSelect = (label) => picked.push(label);
+  modal.handleInput(KEY_DOWN);
+  modal.handleInput(KEY_DOWN); // Other
+  modal.handleInput("\x1b[200~first ");
+  modal.handleInput("half");
+  modal.handleInput("\x1b[201~");
+  modal.handleInput(KEY_ENTER);
+  assert.deepEqual(picked, ["first half"]);
+});
+
+test("a multi-line paste is flattened, and trailing input after it still lands", () => {
+  const picked: string[] = [];
+  const modal = new QuestionModal("A", "q", OPTIONS);
+  modal.onSelect = (label) => picked.push(label);
+  modal.handleInput(KEY_DOWN);
+  modal.handleInput(KEY_DOWN); // Other
+  // The terminal can deliver more after the end marker in the same chunk.
+  modal.handleInput("\x1b[200~line one\nline two\x1b[201~!");
+  modal.handleInput(KEY_ENTER);
+  assert.deepEqual(picked, ["line oneline two!"]);
+});
+
 test("navigation keys do not disturb the option cursor", () => {
   const picked: string[] = [];
   const modal = new QuestionModal("A", "q", OPTIONS, { index: 0, total: 2 });

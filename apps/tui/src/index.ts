@@ -2039,19 +2039,28 @@ function handleToolEvent(event: StreamEvent) {
       break;
     }
     case "question_asked": {
-      // Render each question as a centered modal card, collecting answers
-      // indexed by question, then reply once every question has one. A
-      // synthetic "Other" row inside each modal lets the user type their own
-      // answer via an inline editor instead of picking a preset. ←/→ moves
-      // between questions, so answers are kept sparse until they're all in
-      // rather than assumed to arrive in order.
+      // Render each question as an inline card spliced in right after the
+      // composer — the same mounting every other picker in this app uses
+      // (permission, rewind, tree, MCP) — so it scrolls with the transcript
+      // instead of floating centered on top of it like a dialog box.
+      // Collect answers indexed by question, then reply once every question
+      // has one. A synthetic "Other" row inside each card lets the user type
+      // their own answer via an inline editor instead of picking a preset.
+      // ←/→ moves between questions, so answers are kept sparse until
+      // they're all in rather than assumed to arrive in order.
       const total = event.questions.length;
       const answers: string[] = new Array(total);
-      let overlay: OverlayHandle | null = null;
+      let activeModal: QuestionModal | null = null;
 
-      const closeOverlay = () => {
-        overlay?.hide();
-        overlay = null;
+      const removeModal = () => {
+        if (!activeModal) return;
+        const idx = tui.children.indexOf(activeModal);
+        if (idx !== -1) tui.children.splice(idx, 1);
+        activeModal = null;
+      };
+
+      const closeQuestion = () => {
+        removeModal();
         tui.setFocus(focusTarget());
         tui.requestRender();
       };
@@ -2066,7 +2075,7 @@ function handleToolEvent(event: StreamEvent) {
       };
 
       const askAt = (i: number) => {
-        overlay?.hide();
+        removeModal();
         const spec = event.questions[i];
         const modal = new QuestionModal(
           spec.header ?? "Question",
@@ -2074,12 +2083,10 @@ function handleToolEvent(event: StreamEvent) {
           spec.options,
           { index: i, total, previousAnswer: answers[i] },
         );
-        // Cap the overlay width to the terminal so the centered card doesn't
-        // overflow on narrow displays.
-        overlay = tui.showOverlay(modal, {
-          anchor: "center",
-          width: Math.min(modal.width(), Math.max(24, terminal.columns - 4)),
-        });
+        activeModal = modal;
+        const editorIdx = tui.children.indexOf(editor);
+        tui.children.splice(editorIdx + 1, 0, modal);
+        tui.setFocus(modal);
         modal.onSelect = (label) => {
           answers[i] = label;
           const next = nextUnanswered(i);
@@ -2087,7 +2094,7 @@ function handleToolEvent(event: StreamEvent) {
             askAt(next);
             return;
           }
-          closeOverlay();
+          closeQuestion();
           void answerQuestion(event.requestId, answers).catch(() => {
             createSystemMessage(
               "*This question timed out before you answered — your reply wasn't sent.*",
@@ -2095,7 +2102,7 @@ function handleToolEvent(event: StreamEvent) {
           });
         };
         modal.onCancel = () => {
-          closeOverlay();
+          closeQuestion();
           // The request may already be closed (30-min server-side timeout
           // fired while this modal was still open) — that's a benign race,
           // not a crash: swallow it rather than let it become an unhandled

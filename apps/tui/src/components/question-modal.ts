@@ -68,6 +68,14 @@ export class QuestionModal implements Component {
   private selected = 0;
   private otherText = "";
 
+  // Bracketed-paste buffering for the "Other" field, mirroring pi-tui's own
+  // Input component: the terminal always wraps a paste in \x1b[200~ … \x1b[201~
+  // regardless of length, so without unwrapping it here the leading ESC byte
+  // fails the printable-text check in handleOtherInput and the whole paste is
+  // dropped silently instead of landing in the field.
+  private isInPaste = false;
+  private pasteBuffer = "";
+
   /**
    * The inline editor is open exactly while the "Other" row is selected —
    * landing on that row is enough to start typing, and moving off it puts the
@@ -411,6 +419,34 @@ export class QuestionModal implements Component {
   }
 
   private handleOtherInput(data: string): void {
+    // Bracketed paste: buffer across chunks until the end marker shows up,
+    // then insert the cleaned content and replay anything that arrived after
+    // it in the same chunk. Must run before every other check — a paste's
+    // first byte is ESC, which would otherwise hit the Esc-cancels branch
+    // below (if it happened to match) or just fail the printable check.
+    if (data.includes("\x1b[200~")) {
+      this.isInPaste = true;
+      this.pasteBuffer = "";
+      data = data.replace("\x1b[200~", "");
+    }
+    if (this.isInPaste) {
+      this.pasteBuffer += data;
+      const endIndex = this.pasteBuffer.indexOf("\x1b[201~");
+      if (endIndex === -1) return;
+      const pasted = this.pasteBuffer.slice(0, endIndex);
+      const remaining = this.pasteBuffer.slice(endIndex + "\x1b[201~".length);
+      this.isInPaste = false;
+      this.pasteBuffer = "";
+      // Same cleanup as pi-tui's Input: this field is single-line, so a
+      // pasted newline would otherwise submit early instead of landing in
+      // the text.
+      this.otherText += pasted
+        .replace(/\r\n|\r|\n/g, "")
+        .replace(/\t/g, "    ");
+      if (remaining) this.handleInput(remaining);
+      return;
+    }
+
     if (data === "\x1b" || data === "\x1b\x1b") {
       // Esc means the same thing here as on any other row: dismiss the whole
       // question. Leaving the field without cancelling is ↑↓.

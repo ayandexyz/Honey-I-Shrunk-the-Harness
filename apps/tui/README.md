@@ -76,3 +76,27 @@ pnpm build:bun   # → apps/tui/dist/freecode-bun (self-contained)
 | `review`  | Green   | Code review only       |
 | `explore` | Magenta | Discovery mode         |
 | `danger`  | Red     | Bypass all permissions |
+
+## Supported Models
+
+The full provider catalogue is generated at build time from [models.dev](https://models.dev),
+so model availability is updated continuously. The default model for each
+provider below is what FreeCode will pick when you have not specified one.
+
+| Provider      | Default Model        | Env Var                |
+| ------------- | -------------------- | ---------------------- |
+| Anthropic     | `claude-sonnet-4-5`  | `ANTHROPIC_API_KEY`    |
+| OpenAI        | `gpt-4o`             | `OPENAI_API_KEY`       |
+| Google Gemini | `gemini-3.6-flash`   | `GOOGLE_API_KEY`       |
+| MiniMax        | `MiniMax-M2`         | `MINIMAX_API_KEY`      |
+| DeepSeek      | `deepseek-chat`      | `DEEPSEEK_API_KEY`     |
+| Z.AI (GLM)    | `glm-5.2`            | `ZHIPU_API_KEY`        |
+
+In addition to the featured providers above, FreeCode recognizes 200+
+additional providers through their own AI SDK packages (e.g. `xAI`, `Mistral`,
+`Groq`, `Together AI`, `Cohere`, `Perplexity`, `OpenRouter`, `Azure`, AWS
+Bedrock, `Hugging Face`, `GitHub Copilot`, `Vercel AI Gateway`,
+`Cloudflare AI Gateway`, `Google Vertex`, `Deep Infra`, `Fireworks`,
+`Cerebras`, `Novita AI`, `NVIDIA`, etc.). For the complete and current
+catalogue, open the model picker (`/model`) inside the TUI — it lists every
+provider and every model currently reachable on your account.

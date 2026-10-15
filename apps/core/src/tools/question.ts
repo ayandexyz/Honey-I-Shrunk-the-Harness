@@ -23,6 +23,17 @@ interface Question {
 
 interface QuestionParams {
   questions: Question[];
+  /**
+   * Pre-filled answers from a PreToolUse hook that already got a human
+   * answer out-of-band (e.g. the agent-fold bridge's phone/topbar UI) and
+   * merged it into this call's args before execute() ever ran — the same
+   * `modifiedInput` merge every other hook-rewritten tool call gets
+   * (agent/loop.ts). Keyed by the literal question text: there's no numeric
+   * id shared between freecode and an external bridge, so the question
+   * string is the only stable key both sides agree on. Not part of the JSON
+   * schema below — the model never sets this, only a hook does.
+   */
+  answers?: Record<string, string>;
 }
 
 // =============================================================================
@@ -221,6 +232,39 @@ async function executeQuestion(
     };
   }
   const questions = normalized.questions;
+
+  // Honor a hook's pre-filled answers (see QuestionParams.answers) instead of
+  // asking again. Without this check the hook's answer was silently
+  // discarded and the question still popped up in every attached frontend —
+  // the TUI included — even though the user had already answered it through
+  // the bridge. Require every question to have a string answer; a partial or
+  // malformed map falls through to the normal ask below rather than guessing
+  // "Unanswered" for the rest, matching the hook's own "safe no-op, not a
+  // bypass" fallback when it has no answer at all.
+  const preAnswered: string[] | undefined =
+    params.answers && typeof params.answers === "object"
+      ? questions.every((q) => typeof params.answers![q.question] === "string")
+        ? questions.map((q) => params.answers![q.question])
+        : undefined
+      : undefined;
+
+  if (preAnswered) {
+    const formattedAnswers = questions
+      .map((q, i) => `"${q.question}"="${preAnswered[i]}"`)
+      .join(", ");
+    return {
+      success: true,
+      result: {
+        title: `Asked ${questions.length} question${questions.length > 1 ? "s" : ""}`,
+        output: `User has answered your questions: ${formattedAnswers}. You can now continue with the user's answers in mind.`,
+        metadata: {
+          answers: preAnswered,
+          questionCount: questions.length,
+          answeredExternally: true,
+        },
+      },
+    };
+  }
 
   // Unattended run: the bus is never touched. No frontend exists, so asking
   // would reject instantly anyway — but the CHOICE still has to be made and
