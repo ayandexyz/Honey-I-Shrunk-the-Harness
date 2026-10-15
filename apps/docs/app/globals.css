@@ -1,28 +1,11 @@
 /* Departure Mono everywhere. Nextra's font tokens are declared inside
    @layer theme, so these unlayered rules win regardless of import order. */
+@import "@repo/tokens";
+
 :root {
   --x-font-sans: var(--font-departure-mono), ui-monospace, SFMono-Regular, Menlo,
     Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   --x-font-mono: var(--x-font-sans);
-
-  /* Web2 brand palette — mirrors apps/web2/src/styles/global.css.
-     Reserved for CTAs and brand marks; data/charts keep the green accent. */
-  --ink: #15201d;
-  --muted-strong: #53605c;
-  --muted: #7d8884;
-  --paper: #f2f1ec;
-  --surface: #f9f8f4;
-  --surface-dark: #0c1714;
-  --line: #d9dbd4;
-  --accent: #a7d46f;
-  --accent-strong: #4f7625;
-  --brand: #d90a24;
-  --brand-hover: #b80820;
-  --danger: #c2412d;
-  --radius-sm: 0.5rem;
-  --radius-md: 0.75rem;
-  --radius-lg: 1.1rem;
-  --shadow-sm: 0 1px 2px rgb(21 32 29 / 4%), 0 4px 16px rgb(21 32 29 / 4%);
 }
 
 /* Minimal app-level overrides. Nextra theme handles the rest. */
@@ -69,4 +52,20 @@ body {
 .nextra-content .mermaid .edgeLabel,
 .nextra-content .mermaid .label {
   font-size: inherit !important;
+}
+
+/* Web2 surfaces — round the nextra cards and lift on hover. */
+.nextra-card {
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  transition:
+    box-shadow 180ms var(--ease),
+    transform 180ms var(--ease);
+}
+
+.nextra-card:hover {
+  box-shadow:
+    0 1px 2px rgb(21 32 29 / 6%),
+    0 8px 24px rgb(21 32 29 / 8%);
+  transform: translateY(-1px);
 }

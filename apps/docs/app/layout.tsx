@@ -4,6 +4,7 @@ import { Layout, Navbar } from "nextra-theme-docs";
 import { getPageMap } from "nextra/page-map";
 import "nextra-theme-docs/style.css";
 import "./globals.css";
+import "./hero.css";
 
 // Departure Mono (Helena Zhang, SIL OFL 1.1) — see app/fonts/OFL.txt.
 // Single weight: bold text renders as synthetic bold.
@@ -23,7 +24,10 @@ export const metadata = {
 const navbar = (
   <Navbar
     logo={
-      <Image src="/logo.png" alt="FreeCode" width={32} height={32} priority />
+      <span className="navbar-brand">
+        <Image src="/logo.png" alt="" width={28} height={28} priority />
+        <span className="navbar-brand-wordmark">FreeCode</span>
+      </span>
     }
     projectLink="https://github.com/ayandexyz/omacode"
   />
