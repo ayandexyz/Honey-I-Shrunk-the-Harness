@@ -25,14 +25,6 @@ export interface ToolResultMessageOptions {
   narration?: string;
 }
 
-/** Turn tool-adjacent prose into a compact, single-line annotation. */
-export function compactToolNarration(content: string): string {
-  return content
-    .replace(/^\*\*FreeCode:\*\*\s*/, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 // Tools whose result is a file diff. Their header reads "Update" and they
 // stand alone in the transcript (never folded into a tool group) so the diff
 // view is visible without a click — see createToolResultMessage.
@@ -100,7 +92,7 @@ export class ToolResultMessage implements Component {
   private result?: string;
   private success: boolean;
   private duration_ms?: number;
-  private narration?: string;
+  private hasNarration: boolean;
   /** Collapsed by default; a click on the header row expands the body. */
   private isCollapsed = true;
   /**
@@ -137,9 +129,9 @@ export class ToolResultMessage implements Component {
     this.result = options.result;
     this.success = options.success;
     this.duration_ms = options.duration_ms;
-    this.narration = options.narration
-      ? compactToolNarration(options.narration)
-      : undefined;
+    this.hasNarration = Boolean(
+      options.narration?.replace(/^\*\*FreeCode:\*\*\s*/, "").trim(),
+    );
   }
 
   invalidate(): void {
@@ -252,9 +244,9 @@ export class ToolResultMessage implements Component {
     this.headerLineIndex = lines.length;
     lines.push(header);
 
-    if (this.narration) {
-      lines.push(chalk.dim(truncateToWidth(`  ${this.narration}`, safeWidth)));
-    }
+    // Tool-adjacent assistant prose is operational narration, not part of the
+    // answer. Keep its spacing without making the user scroll past the text.
+    if (this.hasNarration) lines.push("");
 
     if (collapsed) return lines;
 
