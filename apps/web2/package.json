@@ -12,6 +12,7 @@
     "astro": "astro"
   },
   "dependencies": {
+    "@repo/tokens": "workspace:*",
     "astro": "^7.3.8"
   }
 }
