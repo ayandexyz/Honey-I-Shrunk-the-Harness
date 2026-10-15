@@ -3393,7 +3393,10 @@ export class AgentLoop {
     );
 
     const context = {
-      cwd: process.cwd(),
+      // A session's project root is the working directory for every tool.
+      // Using the daemon's launch directory here lets relative Bash commands
+      // escape the active project (and, in evals, the fixture sandbox).
+      cwd: this.state.projectPath,
       projectPath: this.state.projectPath,
       sessionId: this.state.sessionId,
       // Lets a long-running tool stream a live tail onto the row the UI is

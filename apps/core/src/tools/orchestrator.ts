@@ -117,7 +117,8 @@ async function checkToolPermissions(
 }
 
 // =============================================================================
-// Default tool context when none provided
+// Default tool context for standalone, projectless calls. Session execution
+// must always pass an explicit context rooted at its projectPath.
 // =============================================================================
 
 const defaultToolContext: ToolContext = {

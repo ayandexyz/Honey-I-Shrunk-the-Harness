@@ -839,20 +839,6 @@ anchors). Detector gained a one-sample deferral for provider blips
 
 ## Found running the release gate on feat/memory-efficiency (2026-09-26)
 
-- [ ] **`bash` runs in the process cwd, not the session's project.**
-      `agent/loop.ts:3043` builds the tool context with `cwd: process.cwd()`
-      beside `projectPath: this.state.projectPath` (unchanged since May), and
-      `tools/bash.ts` runs in `ctx.cwd`. So a sandboxed eval case's shell
-      commands execute in the developer's repo — a `coding` trial on
-      2026-09-26 ran `node dump.mjs | grep -c ERR > answer.txt` and wrote
-      `answer.txt` (`0`) into the repo root ("Cannot find module
-      '/home/ayan-de/Projects/freecode/dump.mjs'"). The case still passed via
-      absolute paths, so scores were unaffected, but the isolation `CLAUDE.md`
-      describes for fixture cases does not hold for `bash`. In production it
-      bites a daemon serving a session whose `projectPath` differs from where
-      it started. Fix is `cwd: this.state.projectPath ?? process.cwd()`
-      (and the orchestrator default); it changes every `bash` call's cwd, so
-      it wants a test plus an `eval ab` per `CLAUDE.md`.
 - [ ] **The judged gate compares across a judge switch.** `baselineFor`
       (`eval/report.ts:100`) refuses a baseline from a different `authMode`
       but not from a different `judge`. With Gemini out of quota the judged

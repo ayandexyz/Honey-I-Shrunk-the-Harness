@@ -335,13 +335,6 @@ export async function runNightCli(argv: NightCliArgs): Promise<void> {
     }
     projectPath = worktreeDir;
     git = createGitOps(projectPath);
-    // The agent loop hands every tool `cwd: process.cwd()`, so without this
-    // bash and every relative read/edit/write resolved against the USER'S
-    // checkout while the envelope and git worked on the worktree. The first
-    // live detached night found it: the sandbox refused every bash call
-    // ("workdir … is outside the run tree") until the turn cap; with
-    // --no-sandbox the commands would have run in the user's checkout.
-    process.chdir(projectPath);
     console.log(`worktree: ${worktreeDir}`);
   } else {
     await git.createOrSwitchBranch(branch);

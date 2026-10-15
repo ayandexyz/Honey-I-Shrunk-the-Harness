@@ -1,4 +1,8 @@
 export interface ToolContext {
+  /**
+   * Effective working directory for this tool call. When projectPath is
+   * present, callers must set cwd to that same resolved project root.
+   */
   cwd: string;
   sessionId?: string;
   abort?: AbortSignal;
@@ -8,6 +12,7 @@ export interface ToolContext {
    * already looking at (see the live tail in `bash.ts`).
    */
   toolCallId?: string;
+  /** The resolved project root, when the call belongs to a project session. */
   projectPath?: string;
   /**
    * The spawning loop's agent mode. Only the `agent` tool reads it, to decide
