@@ -756,12 +756,6 @@ anchors). Detector gained a one-sample deferral for provider blips
 
 ## Found running the release gate on feat/memory-efficiency (2026-09-26)
 
-- [ ] **The judged gate compares across a judge switch.** `baselineFor`
-      (`eval/report.ts:100`) refuses a baseline from a different `authMode`
-      but not from a different `judge`. With Gemini out of quota the judged
-      gate ran on `anthropic/claude-haiku-4-5` and reported "regression: 4/6
-      vs baseline 6/6" against Gemini-graded history. Key the baseline on
-      `SuiteReport.judge` the way it already keys on `authMode`.
 - [ ] **Haiku 4.5 misapplies the `answer-quality` rubric.** It scored
       `admit-what-is-not-there` 1–2 for correct, tool-free answers ("made
       claims without reading any files") that Gemini scored 5/5 seventeen

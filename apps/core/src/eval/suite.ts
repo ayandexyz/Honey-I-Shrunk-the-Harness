@@ -121,7 +121,12 @@ export async function runSuite(
 
   // Read the baseline BEFORE writing, or this run becomes its own baseline
   // and the gate compares the report to itself.
-  const baseline = baselineFor(options.suite, report.model, report.authMode);
+  const baseline = baselineFor(
+    options.suite,
+    report.model,
+    report.authMode,
+    report.judge,
+  );
   const verdict = evaluateGate(report, baseline);
 
   // A blocked run is recorded but MUST NOT become the baseline. Writing it

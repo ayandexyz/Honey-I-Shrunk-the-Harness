@@ -51,6 +51,8 @@ export interface Baseline {
   greenIds: Set<string>;
   /** The model that produced it, so a cross-model comparison can be refused. */
   model?: string;
+  /** The judge identity that produced it, when this was a judged run. */
+  judge?: { provider: string; model?: string };
   ranAt: string;
   /**
    * Folded here rather than in the gate so `evaluateGate` stays pure — it takes
@@ -79,25 +81,39 @@ export interface Baseline {
  * Skipping other models is the other half. Comparing a cheap local run against
  * a CI baseline from a different model reads as a regression with no way to see
  * why, and the spec is explicit that a repriced baseline is worse than none
- * because it looks like data. `undefined` on either side means a run recorded
- * before the model was tracked — compared anyway rather than discarded, since
- * refusing would throw away every baseline written before this change.
+ * because it looks like data. A missing judge identity is comparable only to
+ * another missing identity. An old judged run without a recorded judge is
+ * still readable, but cannot be used as the baseline for a run whose judge is
+ * known.
  */
+function normalizedJudge(judge?: {
+  provider: string;
+  model?: string;
+}): string | undefined {
+  if (!judge?.provider?.trim()) return undefined;
+  return `${judge.provider.trim().toLowerCase()}\u0000${(judge.model ?? "")
+    .trim()
+    .toLowerCase()}`;
+}
+
 export function baselineFor(
   suite: string,
   model?: string,
   authMode?: "oauth" | "api-key",
+  judge?: { provider: string; model?: string },
 ): Baseline | null {
   const history = readHistory(suite);
   // An absent mode on either side means "api-key or not tracked yet", which is
   // the same instrument — only a recorded "oauth" on one side and not the
   // other is a switch.
   const normalize = (m?: string) => (m === "oauth" ? "oauth" : "api-key");
+  const requestedJudge = normalizedJudge(judge);
   for (let i = history.length - 1; i >= 0; i--) {
     const run = history[i];
     if (run.gateBlocked) continue;
     if (model && run.model && run.model !== model) continue;
     if (normalize(run.authMode) !== normalize(authMode)) continue;
+    if (normalizedJudge(run.judge) !== requestedJudge) continue;
     return {
       passed: run.passed,
       total: run.total,
@@ -105,6 +121,7 @@ export function baselineFor(
         run.cases.filter((c) => c.passed && !c.quarantined).map((c) => c.id),
       ),
       model: run.model,
+      judge: run.judge,
       ranAt: run.ranAt,
       efficiency: suiteEfficiency(run),
     };
