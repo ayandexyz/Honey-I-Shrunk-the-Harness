@@ -23,7 +23,7 @@ export const metadata = {
 const navbar = (
   <Navbar
     logo={
-      <Image src="/logo.svg" alt="FreeCode" width={143} height={30} priority />
+      <Image src="/logo.png" alt="FreeCode" width={32} height={32} priority />
     }
     projectLink="https://github.com/ayandexyz/omacode"
   />

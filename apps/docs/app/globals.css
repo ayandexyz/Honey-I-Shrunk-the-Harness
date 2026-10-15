@@ -4,6 +4,25 @@
   --x-font-sans: var(--font-departure-mono), ui-monospace, SFMono-Regular, Menlo,
     Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   --x-font-mono: var(--x-font-sans);
+
+  /* Web2 brand palette — mirrors apps/web2/src/styles/global.css.
+     Reserved for CTAs and brand marks; data/charts keep the green accent. */
+  --ink: #15201d;
+  --muted-strong: #53605c;
+  --muted: #7d8884;
+  --paper: #f2f1ec;
+  --surface: #f9f8f4;
+  --surface-dark: #0c1714;
+  --line: #d9dbd4;
+  --accent: #a7d46f;
+  --accent-strong: #4f7625;
+  --brand: #d90a24;
+  --brand-hover: #b80820;
+  --danger: #c2412d;
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1.1rem;
+  --shadow-sm: 0 1px 2px rgb(21 32 29 / 4%), 0 4px 16px rgb(21 32 29 / 4%);
 }
 
 /* Minimal app-level overrides. Nextra theme handles the rest. */
@@ -11,6 +30,34 @@ html,
 body {
   margin: 0;
   padding: 0;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+/* Brand-red focus ring across the docs surface. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Nextra token overrides — declared outside @layer so they win against
+   nextra-theme-docs/style.css regardless of import order. Primary HSL
+   matches web2's data accent (--accent: #a7d46f) — links/sidebar/TOC stay
+   green; brand red is reserved for CTAs and focus. */
+:root {
+  --nextra-primary-hue: 89deg;
+  --nextra-primary-saturation: 60%;
+  --nextra-primary-lightness: 50%;
+  --nextra-bg: 242 241 236; /* --paper #f2f1ec — light */
+  --x-color-primary-600: hsl(
+    var(--nextra-primary-hue) var(--nextra-primary-saturation)
+      var(--nextra-primary-lightness)
+  );
+}
+
+.dark {
+  --nextra-bg: 12 23 20; /* --surface-dark #0c1714 */
 }
 
 /* Mermaid diagrams: bump text size 15% for legibility */
