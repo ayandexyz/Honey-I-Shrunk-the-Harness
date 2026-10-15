@@ -3,8 +3,7 @@
 > **Status:** Proposed
 > **Date:** 2026-10-15
 > **Scope:** Runtime and eval integrity, memory fidelity, subagent permission
-> scoping, performance and cost measurement, instruction hierarchy, and backlog
-> reconciliation.
+> scoping, performance and cost measurement, and instruction hierarchy.
 > **Explicitly excluded:** Web/Tauri incremental response rendering.
 
 ## 1. Objective
@@ -22,16 +21,15 @@ the next extensibility feature after those foundations are trustworthy.
 
 | Order | Workstream                                             | Why it is here                                                                                                         |
 | ----- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
-| 1     | Reconcile stale TODO and roadmap entries               | The backlog currently advertises already-built work, making prioritization unreliable.                                 |
-| 2     | Close runtime and eval integrity gaps                  | Headless memory, eval isolation, judge identity, output bounds, and compaction traces affect correctness and trust.    |
-| 3     | Build measurement foundations                          | Performance and cost changes cannot be evaluated credibly without complete accounting and repeatable fixtures.         |
-| 4     | Diagnose and prevent memory fact loss                  | Existing long-horizon evidence shows missing and lost facts; new memory features should not be layered on top of that. |
-| 5     | Scope writable subagents                               | Read-only subagents are confined, but writable subagents lack path and network boundaries.                             |
-| 6     | Add an instruction hierarchy                           | This is the roadmap's highest-value remaining extensibility item and benefits from the measurement foundation.         |
+| 1     | Close runtime and eval integrity gaps                  | Headless memory, eval isolation, judge identity, output bounds, and compaction traces affect correctness and trust.    |
+| 2     | Build measurement foundations                          | Performance and cost changes cannot be evaluated credibly without complete accounting and repeatable fixtures.         |
+| 3     | Diagnose and prevent memory fact loss                  | Existing long-horizon evidence shows missing and lost facts; new memory features should not be layered on top of that. |
+| 4     | Scope writable subagents                               | Read-only subagents are confined, but writable subagents lack path and network boundaries.                             |
+| 5     | Add an instruction hierarchy                           | This is the roadmap's highest-value remaining extensibility item and benefits from the measurement foundation.         |
 
-The runtime/eval fixes in Workstream 2 should be separate PRs because they have
-different failure modes. Workstream 3 should begin before any optimization
-experiment. Workstreams 4–6 each require their own design or spec amendment and
+The runtime/eval fixes in Workstream 1 should be separate PRs because they have
+different failure modes. Workstream 2 should begin before any optimization
+experiment. Workstreams 3–5 each require their own design or spec amendment and
 should not be combined into one implementation PR.
 
 ## 3. Architectural constraints
@@ -53,49 +51,12 @@ should not be combined into one implementation PR.
 - Rollout and OTLP events remain body- and path-free. Better observability means
   safe counts, identifiers, and attribution, not logging user content.
 
-## 4. Workstream 1 — backlog reconciliation
-
-### Problem
-
-`TODO.md` says it must shrink and that entries must be verified against code,
-but several entries describe work already present. At minimum, the following
-need reconciliation:
-
-- Eval shutdown now closes MCP clients and disposes language servers.
-- `METHODS` now includes the previously missing memory, configuration, model,
-  and session methods; `session.send` has the richer parameter and result type.
-- JSON-RPC parameter validation now returns `-32602` through the shared required
-  parameter table.
-- Compaction now preserves a bounded founding user instruction.
-- Multimodal message parts and image-bearing session sends are implemented, but
-  the roadmap still calls multimodal input unbuilt.
-
-### Implementation
-
-1. Verify each candidate against source and tests.
-2. Delete resolved TODO entries and their twin **Known gaps** entries in the
-   documentation site in the same change.
-3. Move deliberate limitations to `docs/DECISIONS.md` rather than leaving them
-   as bugs.
-4. Keep incomplete follow-on work separate. For example, image support being
-   built does not automatically resolve the cost of reading an image for a
-   text-only model.
-5. Add a lightweight CI check only if a stable machine-checkable rule exists;
-   do not infer implementation status from unchecked Markdown alone.
-
-### Acceptance gate
-
-- Every retained checkbox names behavior that is still absent or defective in
-  the current tree.
-- `ROADMAP.md` contains only unbuilt features or redesigns.
-- Resolved items are removed rather than marked permanently complete.
-
-## 5. Workstream 2 — runtime and eval integrity
+## 4. Workstream 1 — runtime and eval integrity
 
 These items are independently shippable. They are grouped because each makes a
 successful-looking run less trustworthy than it appears.
 
-### 5.1 Complete background memory work in headless runs
+### 4.1 Complete background memory work in headless runs
 
 `freecode run` calls `process.exit()` immediately after the loop returns. The
 memory system tracks fire-and-forget work and exposes `drainMemoryJobs`, while
@@ -117,7 +78,7 @@ Acceptance requires a short headless session to persist an eligible final
 memory before exit, a timed-out auxiliary call to exit within the configured
 budget, and no leaked child process.
 
-### 5.2 Make eval memory deterministic for every case
+### 4.2 Make eval memory deterministic for every case
 
 Cases with explicit memory fixtures already receive an isolated store. Ordinary
 unsandboxed cases still run with `projectPath: process.cwd()` and may receive
@@ -138,7 +99,7 @@ Implementation requirements:
 Acceptance requires the same case and commit to receive the same initial memory
 corpus on clean and memory-heavy developer machines.
 
-### 5.3 Key judged baselines by judge identity
+### 4.3 Key judged baselines by judge identity
 
 `SuiteReport` records the judge, but `baselineFor` currently filters by suite,
 subject model, and auth mode only. A run graded by one judge can therefore be
@@ -156,7 +117,7 @@ Implementation requirements:
 - Calibrate any release-blocking judge against human labels before trusting its
   numeric floor.
 
-### 5.4 Bound frontend tool-completion payloads
+### 4.4 Bound frontend tool-completion payloads
 
 The orchestrator caps `displayOutput` and preserves full output in the pageable
 output store, but the loop's `tool_complete` event still sends raw
@@ -173,7 +134,7 @@ Implementation requirements:
 - Define a bounded error path too—errors can be as large as stdout.
 - Test large built-in, MCP, and hook-modified outputs.
 
-### 5.5 Make compaction traces describe the real transition
+### 4.5 Make compaction traces describe the real transition
 
 `compact.occurred` still carries only estimated `beforeTokens` and
 `afterTokens`. The apply path already knows message counts and compacted message
@@ -191,7 +152,7 @@ Implementation requirements:
 - Update the trace fold, JSON output, OTLP attributes, and eval scorers together.
 - Preserve backwards compatibility for older rollout logs.
 
-### 5.6 Remove the fixed TUI completion delay
+### 4.6 Remove the fixed TUI completion delay
 
 The TUI still waits 500 ms after the backend returns so the final token state is
 briefly visible, then removes the progress row. Preserve the statistics in a
@@ -209,12 +170,12 @@ eval if deterministic TUI tests cover the state transition.
   transition.
 - The TUI exits its working state without the fixed half-second pause.
 
-## 6. Workstream 3 — measurement foundations
+## 5. Workstream 2 — measurement foundations
 
 This workstream blocks claims that an optimization is faster or cheaper. It
 does not block independent correctness fixes.
 
-### 6.1 Local performance harness
+### 5.1 Local performance harness
 
 Build deterministic, network-free fixtures for:
 
@@ -229,7 +190,7 @@ Report p50, p75, and p95 plus work counts such as bytes parsed, entries
 converted, Markdown parses, renders, and files statted. Separate backend time,
 frontend rendering, and provider time so one cannot be mistaken for another.
 
-### 6.2 Complete cost accounting
+### 5.2 Complete cost accounting
 
 Define one ledger entry per provider attempt, linked to:
 
@@ -249,7 +210,7 @@ Acceptance requires a synthetic task containing a main turn, child agent,
 compaction, memory operation, and cache refresh to reconcile with a known call
 ledger.
 
-### 6.3 Experiment ledger
+### 5.3 Experiment ledger
 
 Add an append-only record for each performance or cost experiment with:
 
@@ -262,14 +223,14 @@ Add an append-only record for each performance or cost experiment with:
 Reuse the existing eval experiment format where it fits instead of inventing a
 second incompatible result model.
 
-### 6.4 Re-establish the long-task baseline
+### 5.4 Re-establish the long-task baseline
 
 Rebuild the benchmark image containing `rg`, rerun the nine long-task trials,
 and rejudge them with the documented judge configuration. Treat the earlier v2
 numbers as historical evidence, not a valid comparison baseline, because all 88
 of their `grep` calls failed.
 
-### 6.5 Measurement-gated optimization queue
+### 5.5 Measurement-gated optimization queue
 
 Do not implement every candidate at once. Use the harness to admit one change at
 a time:
@@ -311,7 +272,7 @@ metric, correctness result, memory tradeoff, and full task-cost result.
 - The long-task baseline uses a functioning tool image and records its exact
   commit, model, and judge.
 
-## 7. Workstream 4 — memory fidelity before memory expansion
+## 6. Workstream 3 — memory fidelity before memory expansion
 
 ### Current evidence
 
@@ -381,7 +342,7 @@ The first task is diagnosis, not prompt tuning.
 - Recall quality does not regress and injected bytes remain within the existing
   budget.
 
-## 8. Workstream 5 — scoped permissions for writable subagents
+## 7. Workstream 4 — scoped permissions for writable subagents
 
 ### Current state
 
@@ -429,7 +390,7 @@ provide the authoritative operation and target.
 - Read-only defaults and existing definition tool allowlists remain compatible.
 - Unknown dynamic tools fail closed with an actionable denial reason.
 
-## 9. Workstream 6 — instruction hierarchy
+## 8. Workstream 5 — instruction hierarchy
 
 ### Current state
 
@@ -484,35 +445,33 @@ Before implementation, settle:
 - Existing root-only projects see no semantic change unless they opt into new
   files or features.
 
-## 10. Delivery slices
+## 9. Delivery slices
 
 Keep review and rollback simple:
 
-1. **PR A:** Remove verified stale TODO/roadmap and documentation-site gaps.
-2. **PR B:** Headless session-end lifecycle and bounded memory drain.
-3. **PR C:** Eval memory isolation and judge-compatible baselines.
-4. **PR D:** Bounded tool-completion events and compaction trace fidelity.
-5. **PR E:** Remove the fixed TUI completion delay.
-6. **PR F:** Local performance harness and baseline report format.
-7. **PR G:** Complete cost ledger and task-tree aggregation.
-8. **PR H:** Rebuilt long-task baseline and recorded results; no behavioral
+1. **PR A:** Headless session-end lifecycle and bounded memory drain.
+2. **PR B:** Eval memory isolation and judge-compatible baselines.
+3. **PR C:** Bounded tool-completion events and compaction trace fidelity.
+4. **PR D:** Remove the fixed TUI completion delay.
+5. **PR E:** Local performance harness and baseline report format.
+6. **PR F:** Complete cost ledger and task-tree aggregation.
+7. **PR G:** Rebuilt long-task baseline and recorded results; no behavioral
    change.
-9. **PR I:** Memory failure instrumentation and deterministic reproductions.
-10. **PR J:** Memory extraction/consolidation safeguards, gated by memory
+8. **PR H:** Memory failure instrumentation and deterministic reproductions.
+9. **PR I:** Memory extraction/consolidation safeguards, gated by memory
     benchmarks.
-11. **PR K:** Subagent capability-envelope spec and implementation.
-12. **PR L:** Instruction hierarchy in separately gated phases.
+10. **PR J:** Subagent capability-envelope spec and implementation.
+11. **PR K:** Instruction hierarchy in separately gated phases.
 
 Do not combine the memory, permissions, and instruction changes. Each changes
 what the model sees or what tools can do and therefore needs isolated evidence.
 
-## 11. Definition of done
+## 10. Definition of done
 
 This plan is complete when:
 
-- the backlog no longer lists the confirmed built items above;
 - headless memory work, eval memory, judge baselines, tool payloads, and
-  compaction traces satisfy Workstream 2's integrity gates;
+  compaction traces satisfy Workstream 1's integrity gates;
 - local performance and complete task-cost baselines are reproducible;
 - the repaired long-task benchmark has replaced the broken-tool baseline;
 - memory merges cannot silently discard taught facts;
@@ -523,7 +482,7 @@ This plan is complete when:
 - every behavioral default change has the tests and eval evidence required by
   its governing spec.
 
-## 12. References
+## 11. References
 
 - `docs/specs/2026-05-25-architecture-v4.md`
 - `docs/specs/2026-07-18-permission-rules.md`

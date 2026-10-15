@@ -41,39 +41,6 @@ The working state ends half a second after the backend has finished, on every
 turn. Fix: keep the final stats in a settled row and end the working indicator
 immediately. See `docs/2026-10-11-performance-recommendations.md` §1.
 
-### `freecode eval` does not exit after printing its results (found 2026-09-24)
-
-**Status:** confirmed, wastes wall-clock only, not money. Pre-dates the
-checkpoints branch.
-
-A `pnpm eval trajectory --trials 1` run printed `25/25 cases passed` and its
-cost summary, then sat for **18 minutes** without exiting, until killed. During
-the stall the process was idle in `do_epoll_wait` — 25s of CPU across 22
-minutes, **no open TCP sockets**, no child `git`. So it is not a provider call
-(and the 300s header timeout would have fired three times over); it is a
-non-daemon handle keeping the event loop alive after the suite is done.
-
-Prime suspect is the MCP stdio client. The run spawns `npm exec
-@agentmemory/mcp` — imported from Claude Code's config by
-`mcp/claude-code-config.ts` — and that child was still alive, idle, with 0s of
-CPU. Nothing in the eval path appears to call a shutdown/`close()` on the MCP
-clients when a suite finishes.
-
-Why it matters beyond patience: `.github/workflows/eval.yml` runs `trajectory
---gate` nightly. A job that never exits burns the runner's whole timeout and
-reports as a timeout failure, not as the green run it actually was.
-
-**Cause: confirmed 2026-09-24.** `FREECODE_MCP_CLAUDE_CODE=0 pnpm eval:gate`
-ran all three suites to completion. Without it the `&&` chain cannot advance
-past the first suite at all, because the chain only proceeds when trajectory
-*exits* — so this bug does not merely delay `eval:gate`, it prevents coding and
-judged from ever running.
-
-Fix: close the MCP clients when a suite finishes (or open them lazily, since
-no eval case uses an MCP tool). Reproduce with `pnpm eval trajectory --trials
-1` and Claude Code MCP servers present in `~/.claude.json`.
-
-
 ### The compaction eval cases are 20KB JSONL lines (added 2026-09-08, updated 2026-09-29)
 
 **Status:** known, cosmetic, needs a paid run to fix.
@@ -188,21 +155,6 @@ Each is also listed in that page's **Known gaps** section. Deliberate behaviour 
 - [ ] **Blocked-compaction retry threshold is hardcoded** — fixed 5,000 tokens
       (`service.ts:34`, flagged `ponytail` in-code); make it a `CompactionConfig`
       field if a hook ever needs tighter control.
-- [ ] **`METHODS` declares 24 of 49 implemented IPC methods** — all of `memory.*`,
-      `config.*`, `models.*`, and `session.{fork,switch,archive,delete,export,
-      import,upload,download,getInterrupted}` exist in `server.ts` but not in
-      `packages/shared/src/ipc/protocol.ts`. Frontends calling them get zero
-      compile-time checking, which is the entire purpose of that map.
-      (`CLAUDE.md` describes it as the source of truth — it isn't yet.)
-- [ ] **`METHODS["session.send"]` is wrong** — declares
-      `StreamResponse | { queued, id }` as the result; the handler resolves a
-      `LoopResult` (`agent/types.ts:309`). Declared params also omit `model` and
-      `agentMode`, both read by the handler (`server.ts:376`).
-- [ ] **No `-32602` invalid-params validation** — every handler does
-      `params as { … }` with no runtime check, so a missing or mistyped field
-      becomes `undefined` deep inside and surfaces as a confusing `-32603`.
-      A one-line guard per handler (or a shared validator keyed off `METHODS`)
-      would move the failure to the boundary where it belongs.
 - [ ] **TUI client can only stream one session at a time** — single
       `activeStreamId` + single `onStreamEvent` slot (`apps/tui/src/ipc/client.ts:46`),
       even though `bus/bridge.ts` stamps `sessionId` specifically to allow
@@ -744,17 +696,6 @@ Found while reading the `OpenHands/OpenHands` Agent Canvas frontend (`ca4024e3a`
 for what makes its long-running sessions survivable.
 
 ### Long-session fidelity
-
-- [ ] **Compaction summarizes the original task away.** `selectForCompaction`
-      preserves only the tail — last `preserveRecentTurns: 2` user turns capped
-      at `maxPreserveRecentTokens: 8_000` (`compaction/types.ts:62-63`) — and
-      takes `messages.slice(0, firstPreservedIndex)` for the summary
-      (`compaction/selector.ts:54`). No head carve-out, so the founding
-      instruction is compacted first and, on the next compaction, the summary of
-      it is re-summarized. Lossy compounding on the oldest content, which is a
-      plausible mechanism for long-session drift off the brief. OpenHands'
-      `CondensationEvent.summary_offset` implies a head-preserving condenser
-      (inference — their SDK is a separate repo, not readable locally).
 
 - [ ] **`compact.occurred` records magnitude, not content.**
       `rollout/types.ts:125` carries `beforeTokens`/`afterTokens` only. When a

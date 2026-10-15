@@ -19,14 +19,10 @@ and `CLAUDE.md`/`AGENTS.md` instructions. Ranked by value per line of work.
       and glob-scoped rules (the Cursor `.mdc` model — "apply only for `**/*.tsx`").
       Nested-directory rules would also give scoped skills somewhere to live.
 
-- [ ] **5. Multimodal input** — `MessagePart` (`packages/shared/src/types.ts:12-19`) is
-      text/code/tool only, and `read` cannot return an image. Blocks screenshots, design
-      mocks, and diagram debugging. Touches the shared protocol + every provider adapter.
-
 - [ ] **7. MCP server (expose)** — serve FreeCode's tools *as* an MCP server. The client
       side is done. Already listed as deferred in `CLAUDE.md`.
 
-**Suggested order:** 4 first. Item 5 is a larger, self-contained project.
+**Suggested order:** 4 first.
 
 ## Subagent permission profiles (added 2026-09-08)
 
