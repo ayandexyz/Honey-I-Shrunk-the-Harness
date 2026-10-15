@@ -125,6 +125,12 @@ export type StreamEvent =
       toolName: string;
       result: string;
       success: boolean;
+      /** True when result is a bounded view of the full output in the output store. */
+      truncated?: boolean;
+      /** Output-store handle for retrieving the omitted/full result. */
+      outputId?: string;
+      /** Full result length in characters, when known. */
+      totalChars?: number;
       duration_ms?: number;
     }
   | { type: "thinking"; sessionId?: string; content: string } // full thinking, emitted at turn end (non-stream path)
@@ -738,7 +744,11 @@ export const METHODS = {
   // nothing. `deferred`: a turn was running, so it is written when that ends.
   "session.bash": {
     params: {} as { sessionId: string; command: string; exclude?: boolean },
-    result: {} as { output: string; exitCode: number | null; deferred: boolean },
+    result: {} as {
+      output: string;
+      exitCode: number | null;
+      deferred: boolean;
+    },
   },
   // Checkpoints / rewind (spec 2026-09-23-checkpoints-rewind). A checkpoint is
   // the working tree as it stood before a user turn, keyed by that turn's

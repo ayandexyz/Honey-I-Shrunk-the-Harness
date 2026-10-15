@@ -314,11 +314,6 @@ page's **Known gaps**.
 - [ ] **`executeTool` in `factory.ts:88` is dead code**, exported and re-exported
       from `tools/index.ts` but called by nothing; it also implements a different
       result contract from the orchestrator's.
-- [ ] **`tool_complete` streams the full untruncated output over IPC.** The
-      event carries `result.stdout` (`loop.ts:2280`), correct for rendering but
-      uncapped — a 10 MB `bash` result crosses the boundary in one message.
-      Consider a display cap with a "show more" fetch, mirroring the `output`
-      tool.
 - [ ] **`read`'s image path pays before the visibility check.** The tool
       base64-encodes any supported image up to 10 MB and returns it as
       `metadata.image`; whether the model can see images is only decided later in

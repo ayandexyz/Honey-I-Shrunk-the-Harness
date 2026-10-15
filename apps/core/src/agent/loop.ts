@@ -87,12 +87,20 @@ import { envInt } from "../utils/env.js";
 import { Effect } from "effect";
 import { createToolOrchestrator, getTool } from "../tools/index.js";
 import {
+  boundDisplayOutput,
+  getOutputStore,
+} from "../tools/output-store/index.js";
+import {
   getTodos,
   isOpenTodo,
   renderTodoPromptBlock,
   type TodoItem,
 } from "../tools/todo.js";
-import { createRepeatedErrors, errorLocation, isBashWrite } from "./repeated-error.js";
+import {
+  createRepeatedErrors,
+  errorLocation,
+  isBashWrite,
+} from "./repeated-error.js";
 import { checkUnwired, unwiredReminder, type Declaration } from "./unwired.js";
 import {
   failingTestLines,
@@ -120,7 +128,10 @@ import {
   verifyFailureReminder,
   MAX_VERIFY_ATTEMPTS,
 } from "./verify.js";
-import { drainEditDiagnostics, editDiagnosticsEnabled } from "../tools/lsp/feedback.js";
+import {
+  drainEditDiagnostics,
+  editDiagnosticsEnabled,
+} from "../tools/lsp/feedback.js";
 import {
   verifyChanges,
   verifierFailureReminder,
@@ -1133,7 +1144,12 @@ export class AgentLoop {
             if (top.line) {
               this.healthWarned.add(healthAction.reason);
               this.pendingReminders.push(
-                repeatedErrorReminder(top.n, top.line, top.others, errorLocation(top.line)),
+                repeatedErrorReminder(
+                  top.n,
+                  top.line,
+                  top.others,
+                  errorLocation(top.line),
+                ),
               );
             }
           }
@@ -1330,8 +1346,7 @@ export class AgentLoop {
           // wants to stop", it is a failure the model can recover from.
           // executeTurn has already queued the reminder that says so; give it
           // the turn.
-          const interrupted =
-            turnResult.truncatedToolCall || turnResult.cutOff;
+          const interrupted = turnResult.truncatedToolCall || turnResult.cutOff;
           if (
             interrupted &&
             this.truncatedRetries < MAX_TRUNCATED_TOOL_RETRIES
@@ -1437,26 +1452,53 @@ export class AgentLoop {
           ) {
             const settings = loadVerifySettings(this.state.projectPath);
             const commands = settings.tests
-              ? resolveTestCommands(this.state.projectPath, [...this.mutatedFiles], settings)
+              ? resolveTestCommands(
+                  this.state.projectPath,
+                  [...this.mutatedFiles],
+                  settings,
+                )
               : [];
             if (commands.length === 0) {
-              this.lastTestResult = settings.tests ? "skipped (no test script found)" : "skipped (turned off)";
+              this.lastTestResult = settings.tests
+                ? "skipped (no test script found)"
+                : "skipped (turned off)";
             } else {
               this.testAttempts += 1;
               const failures: { label: string; raw: string }[] = [];
               for (const c of commands) {
-                console.log(`[AgentLoop] Test gate ${this.testAttempts}/${MAX_TEST_ATTEMPTS}: running \`${c.command}\``);
-                const r = await this.runGateCommand("tests", c.command, c.label, TEST_TIMEOUT_MS);
+                console.log(
+                  `[AgentLoop] Test gate ${this.testAttempts}/${MAX_TEST_ATTEMPTS}: running \`${c.command}\``,
+                );
+                const r = await this.runGateCommand(
+                  "tests",
+                  c.command,
+                  c.label,
+                  TEST_TIMEOUT_MS,
+                );
                 if (this.abort.signal.aborted)
-                  return await this.complete("Interrupted", undefined, undefined, usageSoFar());
+                  return await this.complete(
+                    "Interrupted",
+                    undefined,
+                    undefined,
+                    usageSoFar(),
+                  );
                 if (!r.ok) failures.push({ label: c.label, raw: r.raw });
               }
               this.lastTestResult = failures.length
-                ? `failed: ${failures.flatMap((f) => failingTestLines(f.raw)).slice(0, 10).join("; ") || "see output"}`
+                ? `failed: ${
+                    failures
+                      .flatMap((f) => failingTestLines(f.raw))
+                      .slice(0, 10)
+                      .join("; ") || "see output"
+                  }`
                 : `passed (${commands.map((c) => c.label).join(", ")})`;
               if (failures.length) {
                 this.pendingReminders.push(testFailureReminder(failures));
-                this.state = { ...this.state, iterationCount: this.state.iterationCount + 1, turnCount: this.state.turnCount + 1 };
+                this.state = {
+                  ...this.state,
+                  iterationCount: this.state.iterationCount + 1,
+                  turnCount: this.state.turnCount + 1,
+                };
                 continue;
               }
             }
@@ -1470,11 +1512,18 @@ export class AgentLoop {
             process.env.FREECODE_UNWIRED_CHECK !== "0"
           ) {
             this.unwiredChecked = true;
-            this.lastUnwired = checkUnwired(this.state.projectPath, this.preEditContent);
+            this.lastUnwired = checkUnwired(
+              this.state.projectPath,
+              this.preEditContent,
+            );
             this.recorder.recordUnwiredFlagged(this.lastUnwired.length);
             if (this.lastUnwired.length > 0) {
               this.pendingReminders.push(unwiredReminder(this.lastUnwired));
-              this.state = { ...this.state, iterationCount: this.state.iterationCount + 1, turnCount: this.state.turnCount + 1 };
+              this.state = {
+                ...this.state,
+                iterationCount: this.state.iterationCount + 1,
+                turnCount: this.state.turnCount + 1,
+              };
               continue;
             }
           }
@@ -2102,7 +2151,11 @@ export class AgentLoop {
         const diagnostics = await drainEditDiagnostics(this.state.sessionId);
         if (diagnostics) {
           this.pendingReminders.push(diagnostics.text);
-          this.recorder.recordDiagnosticsDelivered(diagnostics.files, diagnostics.errors, diagnostics.waitedMs);
+          this.recorder.recordDiagnosticsDelivered(
+            diagnostics.files,
+            diagnostics.errors,
+            diagnostics.waitedMs,
+          );
         }
       }
       // Drain any queued <system-reminder> blocks (todo nudge / completion
@@ -2299,7 +2352,9 @@ export class AgentLoop {
         logger.warn(
           `[AgentLoop] dropped ${truncatedToolCalls.length} unparseable tool call(s): ` +
             `${truncatedToolCalls.join(", ")} — ` +
-            (hitOutputLimit ? "output token limit reached" : "malformed JSON arguments"),
+            (hitOutputLimit
+              ? "output token limit reached"
+              : "malformed JSON arguments"),
         );
         this.pendingReminders.push(
           hitOutputLimit
@@ -2314,7 +2369,9 @@ export class AgentLoop {
         toolCalls.length === 0 &&
         truncatedToolCalls.length === 0;
       if (cutOff) {
-        logger.warn("[AgentLoop] reply cut off at the output token limit — continuing");
+        logger.warn(
+          "[AgentLoop] reply cut off at the output token limit — continuing",
+        );
         this.pendingReminders.push(cutOffReplyReminder());
       }
 
@@ -2408,9 +2465,16 @@ export class AgentLoop {
           toolResults[start + k] = result;
           this.updateLoopHealth(tc, result);
           const skillName = (tc.args as { name?: unknown } | undefined)?.name;
-          if (tc.tool === "skill" && !result.error && typeof skillName === "string") {
+          if (
+            tc.tool === "skill" &&
+            !result.error &&
+            typeof skillName === "string"
+          ) {
             this.invokedSkills.delete(skillName);
-            this.invokedSkills.set(skillName, result.modelOutput ?? result.stdout ?? "");
+            this.invokedSkills.set(
+              skillName,
+              result.modelOutput ?? result.stdout ?? "",
+            );
           }
           // Track file mutations so the verification gate only runs when this
           // run actually changed something.
@@ -3470,6 +3534,16 @@ export class AgentLoop {
       };
     }
 
+    // Hooks can replace or extend output after the orchestrator's normal
+    // output-store write. Refresh the full store here so the completion event's
+    // retrieval handle always points at exactly what the user sees, including
+    // hook-modified success and error output.
+    const completionOutput = result.stdout ?? result.error ?? "";
+    if (this.state.sessionId) {
+      getOutputStore(this.state.sessionId).put(toolCall.id, completionOutput);
+    }
+    const completion = boundDisplayOutput(completionOutput);
+
     // Record function.output event
     this.recorder.recordFunctionOutput(
       toolCall.tool,
@@ -3487,8 +3561,11 @@ export class AgentLoop {
       type: "tool_complete",
       toolCallId: toolCall.id,
       toolName: toolCall.tool,
-      result: result.stdout || result.error || "",
+      result: completion.displayOutput,
       success,
+      truncated: completion.truncated,
+      outputId: toolCall.id,
+      totalChars: completion.totalChars,
       duration_ms,
     });
 
@@ -3563,9 +3640,13 @@ export class AgentLoop {
     for (const m of this.history) {
       for (const part of m.parts) {
         if (part.type !== "tool") continue;
-        const args = part.tool.args as { filePath?: unknown; name?: unknown } | undefined;
-        if (part.tool.tool === "read" && typeof args?.filePath === "string") kept.add(args.filePath);
-        if (part.tool.tool === "skill" && typeof args?.name === "string") keptSkills.add(args.name);
+        const args = part.tool.args as
+          | { filePath?: unknown; name?: unknown }
+          | undefined;
+        if (part.tool.tool === "read" && typeof args?.filePath === "string")
+          kept.add(args.filePath);
+        if (part.tool.tool === "skill" && typeof args?.name === "string")
+          keptSkills.add(args.name);
       }
     }
     const recent = recentReads(this.state.sessionId);
@@ -3583,7 +3664,9 @@ export class AgentLoop {
       [...this.invokedSkills].reverse().map(([name, text]) => ({ name, text })),
       keptSkills,
     );
-    this.restoredFiles = [block?.text, touched, skills?.text].filter(Boolean).join("\n\n");
+    this.restoredFiles = [block?.text, touched, skills?.text]
+      .filter(Boolean)
+      .join("\n\n");
     if (!this.restoredFiles) return;
     for (const f of block?.files ?? []) {
       if (!f.dedupSafe) continue;
@@ -3845,16 +3928,33 @@ export class AgentLoop {
     timeoutMs?: number,
   ) {
     const notice = (content: string) =>
-      BusEvents.stream(this.state.sessionId, { type: "notice", level: "info", content });
+      BusEvents.stream(this.state.sessionId, {
+        type: "notice",
+        level: "info",
+        content,
+      });
     notice(`Verifying: ${command}`);
     const startedAt = Date.now();
-    const r = await runVerify(command, this.state.projectPath, this.abort.signal, timeoutMs);
+    const r = await runVerify(
+      command,
+      this.state.projectPath,
+      this.abort.signal,
+      timeoutMs,
+    );
     const ms = Date.now() - startedAt;
     // A test label carries a package path, which stays out of the log.
     const script = kind === "typecheck" ? label : undefined;
-    this.recorder.recordVerifyRan(kind, r.ok, ms, failingTestLines(r.raw).length, script);
+    this.recorder.recordVerifyRan(
+      kind,
+      r.ok,
+      ms,
+      failingTestLines(r.raw).length,
+      script,
+    );
     if (!this.abort.signal.aborted)
-      notice(`${label} ${r.ok ? "passed" : "failed"} (${Math.round(ms / 1000)}s)`);
+      notice(
+        `${label} ${r.ok ? "passed" : "failed"} (${Math.round(ms / 1000)}s)`,
+      );
     return r;
   }
 

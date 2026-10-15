@@ -10,6 +10,30 @@
 // ponytail: char cap, not token-aware — matches the old 30 KB behaviour.
 import { MAX_MODEL_OUTPUT_CHARS, HEAD_CHARS, TAIL_CHARS } from "./config.js";
 
+/** Hard cap for frontend tool-completion events. Full text stays in OutputStore. */
+export const MAX_DISPLAY_CHARS = 500_000;
+
+export function boundDisplayOutput(output: string): {
+  displayOutput: string;
+  truncated: boolean;
+  totalChars: number;
+} {
+  if (output.length <= MAX_DISPLAY_CHARS) {
+    return {
+      displayOutput: output,
+      truncated: false,
+      totalChars: output.length,
+    };
+  }
+  return {
+    displayOutput:
+      `[showing last ${MAX_DISPLAY_CHARS} chars; full output available via the output tool]\n` +
+      output.slice(-MAX_DISPLAY_CHARS),
+    truncated: true,
+    totalChars: output.length,
+  };
+}
+
 export function adaptiveTruncate(
   output: string,
   toolCallId: string,

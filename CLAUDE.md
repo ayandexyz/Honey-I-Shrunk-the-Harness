@@ -220,7 +220,7 @@ Built-in tools live in `apps/core/src/tools/` and are registered in `tools/index
 type StreamEvent =
   | { type: "tool_start"; toolCallId: string; toolName: string; args: Record<string, unknown> }
   | { type: "tool_output"; toolCallId: string; content: string }
-  | { type: "tool_complete"; toolCallId: string; toolName: string; result: string; success: boolean; duration_ms?: number }
+  | { type: "tool_complete"; toolCallId: string; toolName: string; result: string; success: boolean; truncated?: boolean; outputId?: string; totalChars?: number; duration_ms?: number }
   | { type: "thinking"; content: string }        // full reasoning (turn end)
   | { type: "thinking_delta"; delta: string }    // incremental reasoning (streaming)
   | { type: "text"; content: string }            // full assistant text (turn end)

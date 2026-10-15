@@ -10,6 +10,7 @@ import { MAX_SESSIONS } from "./config.js";
 
 export { OutputStore } from "./store.js";
 export { adaptiveTruncate } from "./truncate.js";
+export { boundDisplayOutput, MAX_DISPLAY_CHARS } from "./truncate.js";
 
 const stores = new Map<string, OutputStore>();
 

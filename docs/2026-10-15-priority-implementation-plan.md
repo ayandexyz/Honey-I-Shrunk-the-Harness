@@ -56,24 +56,7 @@ should not be combined into one implementation PR.
 These items are independently shippable. They are grouped because each makes a
 successful-looking run less trustworthy than it appears.
 
-### 4.1 Bound frontend tool-completion payloads
-
-The orchestrator caps `displayOutput` and preserves full output in the pageable
-output store, but the loop's `tool_complete` event still sends raw
-`result.stdout` or `result.error`. A large command can therefore cross IPC in a
-single message even though model and display paths already have bounded views.
-
-Implementation requirements:
-
-- Send the bounded display view, truncation metadata, and output-store handle in
-  the completion event.
-- Preserve the full value only in the per-session output store.
-- Make “show more” use the existing `output` tool or a presentation-safe fetch;
-  do not add a second full-output store.
-- Define a bounded error path too—errors can be as large as stdout.
-- Test large built-in, MCP, and hook-modified outputs.
-
-### 4.2 Make compaction traces describe the real transition
+### 4.1 Make compaction traces describe the real transition
 
 `compact.occurred` still carries only estimated `beforeTokens` and
 `afterTokens`. The apply path already knows message counts and compacted message
@@ -91,7 +74,7 @@ Implementation requirements:
 - Update the trace fold, JSON output, OTLP attributes, and eval scorers together.
 - Preserve backwards compatibility for older rollout logs.
 
-### 4.3 Remove the fixed TUI completion delay
+### 4.2 Remove the fixed TUI completion delay
 
 The TUI still waits 500 ms after the backend returns so the final token state is
 briefly visible, then removes the progress row. Preserve the statistics in a
@@ -101,7 +84,6 @@ eval if deterministic TUI tests cover the state transition.
 
 ### Acceptance gate
 
-- No single tool-completion event carries unbounded output.
 - Compaction traces expose comparable token measures and the body-free message
   transition.
 - The TUI exits its working state without the fixed half-second pause.
@@ -385,7 +367,7 @@ Before implementation, settle:
 
 Keep review and rollback simple:
 
-1. **PR A:** Bounded tool-completion events and compaction trace fidelity.
+1. **PR A:** Compaction trace fidelity.
 2. **PR B:** Remove the fixed TUI completion delay.
 3. **PR C:** Local performance harness and baseline report format.
 4. **PR D:** Complete cost ledger and task-tree aggregation.
@@ -404,7 +386,7 @@ what the model sees or what tools can do and therefore needs isolated evidence.
 
 This plan is complete when:
 
-- tool payloads and compaction traces satisfy Workstream 1's integrity gates;
+- compaction traces satisfy Workstream 1's integrity gates;
 - local performance and complete task-cost baselines are reproducible;
 - the repaired long-task benchmark has replaced the broken-tool baseline;
 - memory merges cannot silently discard taught facts;
