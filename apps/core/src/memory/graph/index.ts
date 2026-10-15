@@ -899,7 +899,13 @@ export class MemoryGraphService {
 
   // Drop a session's prepared-memory cache (e.g. on session end).
   disposeSession(sessionId: string): void {
-    this.sessions.delete(sessionId);
+    if (this.sessions.delete(sessionId)) {
+      // Citation counters are debounced because they are updated during the
+      // turn. A short-lived `freecode run` can end before that timer fires, so
+      // persist them synchronously while the shared session-end path still
+      // owns the process lifecycle.
+      this.usage.flush();
+    }
   }
 
   // Full rebuild from files (maintenance). Clears vectors + graph, re-syncs.

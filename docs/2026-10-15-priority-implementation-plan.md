@@ -21,7 +21,7 @@ the next extensibility feature after those foundations are trustworthy.
 
 | Order | Workstream                                             | Why it is here                                                                                                         |
 | ----- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
-| 1     | Close runtime and eval integrity gaps                  | Headless memory, eval isolation, judge identity, output bounds, and compaction traces affect correctness and trust.    |
+| 1     | Close runtime and eval integrity gaps                  | Eval isolation, judge identity, output bounds, and compaction traces affect correctness and trust.                    |
 | 2     | Build measurement foundations                          | Performance and cost changes cannot be evaluated credibly without complete accounting and repeatable fixtures.         |
 | 3     | Diagnose and prevent memory fact loss                  | Existing long-horizon evidence shows missing and lost facts; new memory features should not be layered on top of that. |
 | 4     | Scope writable subagents                               | Read-only subagents are confined, but writable subagents lack path and network boundaries.                             |
@@ -56,29 +56,7 @@ should not be combined into one implementation PR.
 These items are independently shippable. They are grouped because each makes a
 successful-looking run less trustworthy than it appears.
 
-### 4.1 Complete background memory work in headless runs
-
-`freecode run` calls `process.exit()` immediately after the loop returns. The
-memory system tracks fire-and-forget work and exposes `drainMemoryJobs`, while
-session exit already gives final extraction a bounded wait, but the headless
-command does not run that lifecycle before exiting.
-
-Implementation requirements:
-
-- Route both success and error exits through the shared session-end path.
-- Give final extraction, citation persistence, and consolidation a single
-  bounded drain budget; do not wait forever on a provider outage.
-- Report pending or timed-out work explicitly rather than silently treating it
-  as complete.
-- Stop MCP servers, hooks, shells, agents, and other process-owned resources
-  before choosing the exit code.
-- Preserve pipe semantics: assistant stdout must not gain lifecycle chatter.
-
-Acceptance requires a short headless session to persist an eligible final
-memory before exit, a timed-out auxiliary call to exit within the configured
-budget, and no leaked child process.
-
-### 4.2 Make eval memory deterministic for every case
+### 4.1 Make eval memory deterministic for every case
 
 Cases with explicit memory fixtures already receive an isolated store. Ordinary
 unsandboxed cases still run with `projectPath: process.cwd()` and may receive
@@ -99,7 +77,7 @@ Implementation requirements:
 Acceptance requires the same case and commit to receive the same initial memory
 corpus on clean and memory-heavy developer machines.
 
-### 4.3 Key judged baselines by judge identity
+### 4.2 Key judged baselines by judge identity
 
 `SuiteReport` records the judge, but `baselineFor` currently filters by suite,
 subject model, and auth mode only. A run graded by one judge can therefore be
@@ -117,7 +95,7 @@ Implementation requirements:
 - Calibrate any release-blocking judge against human labels before trusting its
   numeric floor.
 
-### 4.4 Bound frontend tool-completion payloads
+### 4.3 Bound frontend tool-completion payloads
 
 The orchestrator caps `displayOutput` and preserves full output in the pageable
 output store, but the loop's `tool_complete` event still sends raw
@@ -134,7 +112,7 @@ Implementation requirements:
 - Define a bounded error path too—errors can be as large as stdout.
 - Test large built-in, MCP, and hook-modified outputs.
 
-### 4.5 Make compaction traces describe the real transition
+### 4.4 Make compaction traces describe the real transition
 
 `compact.occurred` still carries only estimated `beforeTokens` and
 `afterTokens`. The apply path already knows message counts and compacted message
@@ -152,7 +130,7 @@ Implementation requirements:
 - Update the trace fold, JSON output, OTLP attributes, and eval scorers together.
 - Preserve backwards compatibility for older rollout logs.
 
-### 4.6 Remove the fixed TUI completion delay
+### 4.5 Remove the fixed TUI completion delay
 
 The TUI still waits 500 ms after the backend returns so the final token state is
 briefly visible, then removes the progress row. Preserve the statistics in a
@@ -162,7 +140,6 @@ eval if deterministic TUI tests cover the state transition.
 
 ### Acceptance gate
 
-- Headless exits do not discard bounded background memory work.
 - Eval cases cannot read undeclared developer memory.
 - Judged baselines never cross a known judge switch.
 - No single tool-completion event carries unbounded output.
@@ -449,19 +426,18 @@ Before implementation, settle:
 
 Keep review and rollback simple:
 
-1. **PR A:** Headless session-end lifecycle and bounded memory drain.
-2. **PR B:** Eval memory isolation and judge-compatible baselines.
-3. **PR C:** Bounded tool-completion events and compaction trace fidelity.
-4. **PR D:** Remove the fixed TUI completion delay.
-5. **PR E:** Local performance harness and baseline report format.
-6. **PR F:** Complete cost ledger and task-tree aggregation.
-7. **PR G:** Rebuilt long-task baseline and recorded results; no behavioral
+1. **PR A:** Eval memory isolation and judge-compatible baselines.
+2. **PR B:** Bounded tool-completion events and compaction trace fidelity.
+3. **PR C:** Remove the fixed TUI completion delay.
+4. **PR D:** Local performance harness and baseline report format.
+5. **PR E:** Complete cost ledger and task-tree aggregation.
+6. **PR F:** Rebuilt long-task baseline and recorded results; no behavioral
    change.
-8. **PR H:** Memory failure instrumentation and deterministic reproductions.
-9. **PR I:** Memory extraction/consolidation safeguards, gated by memory
+7. **PR G:** Memory failure instrumentation and deterministic reproductions.
+8. **PR H:** Memory extraction/consolidation safeguards, gated by memory
     benchmarks.
-10. **PR J:** Subagent capability-envelope spec and implementation.
-11. **PR K:** Instruction hierarchy in separately gated phases.
+9. **PR I:** Subagent capability-envelope spec and implementation.
+10. **PR J:** Instruction hierarchy in separately gated phases.
 
 Do not combine the memory, permissions, and instruction changes. Each changes
 what the model sees or what tools can do and therefore needs isolated evidence.
@@ -470,8 +446,8 @@ what the model sees or what tools can do and therefore needs isolated evidence.
 
 This plan is complete when:
 
-- headless memory work, eval memory, judge baselines, tool payloads, and
-  compaction traces satisfy Workstream 1's integrity gates;
+- eval memory, judge baselines, tool payloads, and compaction traces satisfy
+  Workstream 1's integrity gates;
 - local performance and complete task-cost baselines are reproducible;
 - the repaired long-task benchmark has replaced the broken-tool baseline;
 - memory merges cannot silently discard taught facts;

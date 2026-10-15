@@ -630,13 +630,7 @@ Spec `specs/2026-08-23-memory-consolidation.md`; benchmark findings that contrad
 It also found two bugs every unit test passed through — a citation tag that
 streamed to the user, and citations parsed and then dropped by an `unref`'d
 debounce on a short-lived process. Both are fixed; the fixes are in
-`CitationStreamFilter` and `UsageStore`'s synchronous exit flush. One
-limitation is still open:
-
-- [ ] **Headless runs never complete background memory work.** `freecode run`
-      exits before fire-and-forget extraction or consolidation lands. Fine for
-      the daemon (the TUI stays alive), but it means scripted runs never
-      consolidate. Consider awaiting them on the headless path with a budget.
+`CitationStreamFilter` and `UsageStore`'s synchronous exit flush.
 
 ### Still open
 

@@ -31,6 +31,10 @@ import { clearInvalidations } from "../providers/cache-invalidation.js";
 import { resetCacheTracking } from "../providers/cache-miss.js";
 import { logger } from "../utils/logger.js";
 import { envInt } from "../utils/env.js";
+import {
+  drainMemoryJobs,
+  trackMemoryJob,
+} from "../memory/background-jobs.js";
 
 export type SessionEndReason =
   | "switch"
@@ -61,7 +65,19 @@ export interface EndSessionOptions {
   flush?: () => Promise<unknown>;
   /** Extra per-session cleanup owned by the caller (e.g. the message queue). */
   also?: () => void;
+  /** Test/embedding override; production exit paths use the configured budget. */
+  memoryDrainTimeoutMs?: number;
 }
+
+export interface EndSessionResult {
+  pendingMemoryJobs: number;
+  memoryDrainTimedOut: boolean;
+}
+
+const NO_PENDING_MEMORY: EndSessionResult = {
+  pendingMemoryJobs: 0,
+  memoryDrainTimedOut: false,
+};
 
 // Sessions already ended, so a switch away and back does not flush twice.
 // Bounded: a long-lived daemon must not accumulate one string per session
@@ -107,8 +123,8 @@ export function resetEndedSessions(): void {
 export async function endSession(
   sessionId: string,
   options: EndSessionOptions,
-): Promise<void> {
-  if (!markEnded(sessionId)) return;
+): Promise<EndSessionResult> {
+  if (!markEnded(sessionId)) return NO_PENDING_MEMORY;
   // Before the disposers kill its background tasks: a task stopped by the
   // session ending must be reported on resume, not quietly erased. A deleted
   // session has no resume to report to.
@@ -116,7 +132,7 @@ export async function endSession(
   else markSessionEnding(sessionId, options.reason);
 
   // Disposers first, and each independently: one throwing must not strand the
-  // other five, which is the failure this consolidation is meant to prevent.
+  // others, which is the failure this consolidation is meant to prevent.
   const disposers: Array<[string, () => void]> = [
     ["memory", () => disposeSessionMemory(sessionId)],
     ["extractPolicy", () => resetExtractPolicy(sessionId)],
@@ -147,22 +163,29 @@ export async function endSession(
   }
   options.also?.();
 
-  if (!options.flush) return;
-
-  // The extract policy was just reset, which is deliberate: the flush passes
-  // `force` and so bypasses the interval gate anyway, and leaving stale
-  // per-session counters behind is what leaked in the first place.
-  const flushing = options.flush().catch((error: unknown) => {
-    logger.debug("[EndSession] final extraction failed", { error });
-  });
-
-  if (options.reason === "exit") {
-    await Promise.race([
-      flushing,
-      new Promise<void>((resolve) => {
-        const t = setTimeout(resolve, EXIT_FLUSH_BUDGET_MS);
-        t.unref?.();
-      }),
-    ]);
+  if (options.flush) {
+    // The extract policy was just reset, which is deliberate: the flush passes
+    // `force` and so bypasses the interval gate anyway, and leaving stale
+    // per-session counters behind is what leaked in the first place.
+    const flushing = Promise.resolve()
+      .then(options.flush)
+      .catch((error: unknown) => {
+        logger.debug("[EndSession] final extraction failed", { error });
+      });
+    // An exit has one budget for every memory job: extraction/consolidation
+    // already in flight plus this final forced extraction. Tracking the flush
+    // before draining prevents two independent timeout windows from stacking.
+    if (options.reason === "exit") trackMemoryJob(sessionId, flushing);
   }
+
+  if (options.reason !== "exit") return NO_PENDING_MEMORY;
+
+  const drained = await drainMemoryJobs(
+    sessionId,
+    options.memoryDrainTimeoutMs ?? EXIT_FLUSH_BUDGET_MS,
+  );
+  return {
+    pendingMemoryJobs: drained.pending,
+    memoryDrainTimedOut: drained.timedOut,
+  };
 }
