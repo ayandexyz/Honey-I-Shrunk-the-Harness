@@ -7,18 +7,18 @@ export function PermissionFlow() {
       {/* Permission -> Tools */}
       <path
         id="flow-permission-tools"
-        d="M 625 182 L 625 210 Q 625 220 612 220 L 600 220"
+        d="M 675 136 L 750 136 Q 760 136 760 146 L 760 240"
         stroke="rgba(244,63,94,0.7)"
         strokeWidth="2.5"
         strokeDasharray="6 4"
         className={styles.flowLineSlow}
         fill="none"
       />
-      <polygon points="600,220 610,216 610,224" fill="#f43f5e" />
+      <polygon points="760,240 755,230 765,230" fill="#f43f5e" />
 
       <text
-        x="612"
-        y="208"
+        x="716"
+        y="128"
         className={styles.connectionLabel}
         fill="#f43f5e"
         textAnchor="middle"

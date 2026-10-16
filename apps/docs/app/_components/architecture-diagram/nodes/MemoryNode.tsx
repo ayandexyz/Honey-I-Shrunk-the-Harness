@@ -77,7 +77,7 @@ export function MemoryNode({ selectedNode, onSelectNode }: MemoryNodeProps) {
       </g>
 
       <text
-        x="760"
+        x="680"
         y="583"
         className={styles.dbCompactLabel}
         textAnchor="middle"

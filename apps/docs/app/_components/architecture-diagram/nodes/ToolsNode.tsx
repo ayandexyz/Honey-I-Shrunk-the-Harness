@@ -16,7 +16,7 @@ export function ToolsNode({ selectedNode, onSelectNode }: ToolsNodeProps) {
       onClick={() => onSelectNode("tools")}
     >
       <rect
-        x="600"
+        x="690"
         y="240"
         width="140"
         height="130"
@@ -25,16 +25,16 @@ export function ToolsNode({ selectedNode, onSelectNode }: ToolsNodeProps) {
         filter="url(#glow-purple)"
       />
       <text
-        x="670"
+        x="760"
         y="295"
         className={styles.nodeHeaderTools}
         textAnchor="middle"
       >
         TOOLS
       </text>
-      <line x1="620" y1="307" x2="720" y2="307" stroke="rgba(168,85,247,0.3)" />
+      <line x1="710" y1="307" x2="810" y2="307" stroke="rgba(168,85,247,0.3)" />
       <text
-        x="670"
+        x="760"
         y="340"
         className={styles.nodeHeaderTools}
         textAnchor="middle"
