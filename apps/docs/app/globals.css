@@ -15,6 +15,14 @@ body {
   padding: 0;
   background: var(--paper);
   color: var(--ink);
+  color-scheme: light;
+}
+
+/* Docs are light-only: even if a stray dark class slips in, keep the
+   light tokens. */
+.dark {
+  --nextra-bg: 242 241 236;
+  color-scheme: light;
 }
 
 /* Brand-red focus ring across the docs surface. */
@@ -37,10 +45,6 @@ body {
     var(--nextra-primary-hue) var(--nextra-primary-saturation)
       var(--nextra-primary-lightness)
   );
-}
-
-.dark {
-  --nextra-bg: 12 23 20; /* --surface-dark #0c1714 */
 }
 
 /* Mermaid diagrams: bump text size 15% for legibility */

@@ -48,6 +48,8 @@ export default async function RootLayout({
         <Layout
           navbar={navbar}
           pageMap={await getPageMap()}
+          darkMode={false}
+          nextThemes={{ defaultTheme: "light", forcedTheme: "light" }}
         >
           {children}
         </Layout>
