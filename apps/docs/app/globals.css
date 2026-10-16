@@ -1,11 +1,11 @@
-/* Departure Mono everywhere. Nextra's font tokens are declared inside
-   @layer theme, so these unlayered rules win regardless of import order. */
+/* Shared tokens define --sans (Inter) and --mono. Bind them to Nextra's
+   font tokens — declared unlayered so they win against
+   nextra-theme-docs/style.css regardless of import order. */
 @import "@repo/tokens";
 
 :root {
-  --x-font-sans: var(--font-departure-mono), ui-monospace, SFMono-Regular, Menlo,
-    Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  --x-font-mono: var(--x-font-sans);
+  --x-font-sans: var(--sans);
+  --x-font-mono: var(--mono);
 }
 
 /* Minimal app-level overrides. Nextra theme handles the rest. */
