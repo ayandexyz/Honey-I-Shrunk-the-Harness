@@ -1,7 +1,8 @@
-/* The web app defines these tokens globally; the docs site doesn't, so they are
-   scoped to the diagram and follow Nextra's `.dark` class on <html>. */
+/* Tokens scoped to the diagram so the dark-on-light SVG fills read correctly
+   over the docs surface. --card is transparent so the page's --paper shows
+   through; --border still separates the diagram region from the prose. */
 .container {
-  --card: oklch(1 0 0);
+  --card: transparent;
   --card-foreground: oklch(0 0 0);
   --foreground: oklch(0 0 0);
   --muted: oklch(0.97 0 0);
@@ -10,7 +11,7 @@
 }
 
 :global(.dark) .container {
-  --card: oklch(0.14 0 0);
+  --card: transparent;
   --card-foreground: oklch(1 0 0);
   --foreground: oklch(1 0 0);
   --muted: oklch(0.23 0 0);
@@ -22,12 +23,10 @@
   display: flex;
   flex-direction: column;
   background: var(--card);
-  backdrop-filter: blur(16px);
   border-radius: 0;
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
   padding: 24px 0;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.15);
   overflow: hidden;
 }
 
@@ -80,7 +79,6 @@
 .svg {
   width: 100%;
   height: auto;
-  min-width: 850px;
   display: block;
 }
 

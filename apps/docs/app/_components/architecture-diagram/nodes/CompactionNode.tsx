@@ -17,7 +17,7 @@ export function CompactionNode({
       onClick={() => onSelectNode("compaction")}
     >
       <rect
-        x="845"
+        x="710"
         y="430"
         width="120"
         height="140"
@@ -26,7 +26,7 @@ export function CompactionNode({
         filter="url(#glow-teal)"
       />
       <text
-        x="905"
+        x="770"
         y="452"
         className={styles.compactionHeader}
         textAnchor="middle"
@@ -34,16 +34,16 @@ export function CompactionNode({
         COMPACTION
       </text>
       <line
-        x1="857"
+        x1="722"
         y1="460"
-        x2="953"
+        x2="818"
         y2="460"
         stroke="rgba(45,212,191,0.3)"
       />
 
       {/* Token meter — fills toward the threshold, then collapses */}
       <rect
-        x="857"
+        x="722"
         y="470"
         width="96"
         height="12"
@@ -52,7 +52,7 @@ export function CompactionNode({
         stroke="rgba(45,212,191,0.35)"
       />
       <rect
-        x="859"
+        x="724"
         y="472"
         height="8"
         rx="2"
@@ -60,15 +60,15 @@ export function CompactionNode({
         className={styles.compactionMeterFill}
       />
       <line
-        x1="933"
+        x1="798"
         y1="468"
-        x2="933"
+        x2="798"
         y2="484"
         stroke="rgba(45,212,191,0.8)"
         strokeWidth="1.5"
       />
       <text
-        x="905"
+        x="770"
         y="496"
         className={styles.compactionSubtext}
         textAnchor="middle"
@@ -78,7 +78,7 @@ export function CompactionNode({
 
       {/* Collapse arrow into the summary chip */}
       <path
-        d="M 898 503 L 905 511 L 912 503"
+        d="M 763 503 L 770 511 L 777 503"
         fill="none"
         stroke="#2dd4bf"
         strokeWidth="2"
@@ -87,7 +87,7 @@ export function CompactionNode({
       />
 
       <rect
-        x="875"
+        x="740"
         y="517"
         width="60"
         height="20"
@@ -96,7 +96,7 @@ export function CompactionNode({
         stroke="rgba(45,212,191,0.45)"
       />
       <text
-        x="905"
+        x="770"
         y="531"
         className={styles.compactionChipText}
         textAnchor="middle"
@@ -105,7 +105,7 @@ export function CompactionNode({
       </text>
 
       <text
-        x="905"
+        x="770"
         y="555"
         className={styles.nodeInfoLabel}
         textAnchor="middle"
