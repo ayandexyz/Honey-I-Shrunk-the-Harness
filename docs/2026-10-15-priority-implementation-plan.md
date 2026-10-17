@@ -158,15 +158,17 @@ provide the authoritative operation and target.
 
 ### Phases
 
-1. Write or amend the agent-control specification with envelope semantics,
-   precedence, MCP behavior, and inheritance.
-2. Add the envelope to user-defined agent types and validation without changing
+The specification is `docs/specs/2026-09-27-agent-control-and-definitions.md`
+§5 — the envelope's semantics, precedence, MCP and inheritance rules, and the
+questions its own §6 leaves open. What remains:
+
+1. Add the envelope to user-defined agent types and validation without changing
    defaults.
-3. Apply it in tool-definition filtering and again at execution time to prevent
+2. Apply it in tool-definition filtering and again at execution time to prevent
    stale-definition or dynamic-tool bypasses.
-4. Cover built-ins, extension tools, MCP tools, background shells, and nested
+3. Cover built-ins, extension tools, MCP tools, background shells, and nested
    agents.
-5. Expose clear denial events without adding denied calls to `toolSpans`.
+4. Expose clear denial events without adding denied calls to `toolSpans`.
 
 ### Acceptance gate
 
