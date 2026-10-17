@@ -36,7 +36,6 @@ export interface ToolContext {
    */
   unattended?: import("../autonomous/types.js").UnattendedContext;
   fileCache?: FileCache;
-  permissionProfile?: PermissionProfile;
   hooks?: unknown;
   startTime?: number;
 }
@@ -56,16 +55,6 @@ export interface FileCache {
   set(path: string, entry: FileCacheEntry): void;
   invalidate(path: string): void;
   clear(): void;
-}
-
-// =============================================================================
-// Permission Profile
-// =============================================================================
-
-export interface PermissionProfile {
-  allow: string[];
-  deny: string[];
-  alwaysAsk: string[];
 }
 
 export interface ToolResult {

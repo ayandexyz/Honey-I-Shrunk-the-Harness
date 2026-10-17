@@ -54,6 +54,12 @@ export interface SubagentConfig {
   maxIterations?: number;
   /** Whether this subagent can modify files */
   readOnly?: boolean;
+  /**
+   * The spawning run's effective envelope — a ceiling this subagent inherits
+   * and cannot widen (spec §5.4). Absent only for the exported helpers that
+   * predate the envelope; the finish-gate verifier passes its parent's.
+   */
+  envelope?: AgentEnvelope;
   /** System prompt additions */
   systemPrompt?: string;
   /** Task-specific prompt */

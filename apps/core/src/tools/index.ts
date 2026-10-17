@@ -29,7 +29,6 @@ import type {
   JsonSchema,
   FileCache,
   FileCacheEntry,
-  PermissionProfile,
 } from "./types.js";
 import type {
   Tool,
@@ -51,7 +50,6 @@ export type {
   JsonSchema,
   FileCache,
   FileCacheEntry,
-  PermissionProfile,
 };
 export type {
   Tool,

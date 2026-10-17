@@ -1554,6 +1554,7 @@ export class AgentLoop {
               priorReport: this.lastVerifierReport,
               testResult: this.lastTestResult,
               unwired: this.lastUnwired,
+              envelope: this.state.envelope,
               parentSessionId: this.state.sessionId,
               parentRecorder: this.recorder,
             });

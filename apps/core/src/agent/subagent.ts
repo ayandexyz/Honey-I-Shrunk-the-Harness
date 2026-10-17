@@ -8,6 +8,7 @@ import * as path from "path";
 import * as os from "os";
 import type { SubagentType, SubagentConfig } from "./types.js";
 import { SUBAGENT_DEFINITIONS } from "./types.js";
+import type { AgentEnvelope } from "./definitions/types.js";
 import { createAgentLoop } from "./loop.js";
 import { BusEvents } from "../bus/index.js";
 import { createSessionStore, type SessionStore } from "../session/store.js";
@@ -145,10 +146,9 @@ export async function executeSubagent(
     const readOnly =
       config.readOnly ?? SUBAGENT_DEFINITIONS[config.type].defaultReadOnly;
 
-    // No `role` and no `envelope`: this path is the loop's own finish-gate
-    // spawn, and every loop that can hold a ceiling sets `finishTests: false`,
-    // so an enveloped agent never reaches it. Threading one through is phase 2's
-    // breadth work (spec §5.4).
+    // The parent's ceiling, when it has one: the verifier inherits it and
+    // cannot widen it. No `role` — the verifier is its own read-only identity,
+    // so only the ceiling passes down (spec §5.4).
     const result = await loop.run({
       prompt,
       sessionId: id,
@@ -156,6 +156,7 @@ export async function executeSubagent(
       provider,
       model: config.model ?? model,
       agentMode: readOnly ? "explore" : "build",
+      envelope: config.envelope,
     });
     // The loop reports an interrupt as success; a subagent killed from the
     // /agents panel is a failure to whoever delegated to it.
@@ -320,6 +321,8 @@ export async function verifyChanges(input: {
   priorReport?: string;
   testResult?: string;
   unwired?: VerifierTaskInput["unwired"];
+  /** The parent run's ceiling, inherited and never widened (spec §5.4). */
+  envelope?: AgentEnvelope;
   /** The session being verified, so the verifier shows up in /agents. */
   parentSessionId?: string;
   parentRecorder?: RolloutRecorder;
@@ -332,6 +335,7 @@ export async function verifyChanges(input: {
       taskPrompt: task,
       readOnly: true,
       maxIterations: 15,
+      envelope: input.envelope,
     },
     input.projectPath,
     input.provider,
