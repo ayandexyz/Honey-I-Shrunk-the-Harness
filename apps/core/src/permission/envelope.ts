@@ -91,8 +91,10 @@ export function envelopeDecision(query: EnvelopeQuery): EnvelopeVerdict {
     const roots = rootsFor(envelope, axes);
     if (!roots.some((root) => matchPath(root, query.target, query.projectRoot))) {
       const axis = axes.join("/");
+      // The spec's own wording: "write to X", "read of X" (§5.7).
+      const verb = axis === "write" ? "to" : "of";
       return deny(
-        `${axis} of ${query.target} is outside this agent's ${axis} roots (${
+        `${axis} ${verb} ${query.target} is outside this agent's ${axis} roots (${
           roots.join(", ") || "none"
         })`,
       );

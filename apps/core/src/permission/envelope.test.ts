@@ -192,6 +192,22 @@ test("a read outside the read roots is denied with the axis, target and roots", 
   assert.match(reason, /read/);
   assert.match(reason, /other\/a\.md/);
   assert.match(reason, /docs\/\*\*/);
+  // The exact shape spec §5.7 quotes.
+  assert.equal(reason, "read of other/a.md is outside this agent's read roots (docs/**)");
+});
+
+test("a write outside the write roots names the write axis", () => {
+  const verdict = decide(
+    { operations: ["file.write"], write: ["docs/**"] },
+    "write",
+    ["file.write"],
+    "path",
+    "etc/hosts",
+  );
+  assert.equal(
+    reasonOf(verdict),
+    "write to etc/hosts is outside this agent's write roots (docs/**)",
+  );
 });
 
 test("an absolute root is matched against an absolute target", () => {
