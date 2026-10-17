@@ -252,5 +252,8 @@
       }
     }
   ],
-  "window": null
+  "window": {
+    "since": "2026-06-02",
+    "until": null
+  }
 }
