@@ -110,11 +110,25 @@ function parseProposals(raw: string): Proposal[] {
   return out;
 }
 
+function userTexts(transcript: string): string[] {
+  return [
+    ...transcript.matchAll(
+      /(?:^|\n)user:\s*([\s\S]*?)(?=\n(?:user|assistant):|$)/gi,
+    ),
+  ]
+    .map((match) => match[1]?.trim() ?? "")
+    .filter(Boolean);
+}
+
 function latestUserText(transcript: string): string {
+  return userTexts(transcript).at(-1) ?? "";
+}
+
+function latestConcreteUserText(transcript: string): string {
   return (
-    [...transcript.matchAll(/(?:^|\n)user:\s*([\s\S]*?)(?=\n(?:user|assistant):|$)/gi)]
-      .at(-1)?.[1]
-      ?.trim() ?? ""
+    userTexts(transcript)
+      .reverse()
+      .find((text) => anchorClaims(text).length >= 2) ?? ""
   );
 }
 
@@ -127,7 +141,8 @@ function latestUserText(transcript: string): string {
  */
 function prioritizeLatest(proposals: Proposal[], transcript: string): Proposal[] {
   if (proposals.length <= MAX_SAVES_PER_RUN) return proposals;
-  const latestUser = latestUserText(transcript);
+  const latestUser =
+    latestConcreteUserText(transcript) || latestUserText(transcript);
   if (!latestUser) return proposals;
   const ranked = proposals
     .map((proposal, index) => ({
@@ -198,18 +213,19 @@ export async function extractMemories(input: ExtractInput): Promise<number> {
       `Session transcript:\n\n${transcript.slice(-MAX_TRANSCRIPT_CHARS)}`,
     );
     let parsed = parseProposals(raw);
-    const latestUser = latestUserText(transcript);
+    const latestConcreteUser = latestConcreteUserText(transcript);
     // A cheap extractor occasionally returns [] for an explicit value-bearing
     // fact even though the latest user message contains several concrete
     // anchors (for example `ap-northeast-1` and `10`). Give only that narrow
     // contradiction one second look. Generic chatter and genuine empty turns
     // still cost one call, and the hard write cap remains unchanged.
-    if (parsed.length === 0 && anchorClaims(latestUser).length >= 2) {
+    if (parsed.length === 0 && latestConcreteUser) {
       raw = await complete(
         SYSTEM,
         `Re-evaluate the latest user message. It contains concrete identifiers ` +
           `or values, so returning [] is correct only if they are not durable. ` +
           `Do not save turn-local no-edit or acknowledgement instructions.\n\n` +
+          `Latest concrete user message:\n${latestConcreteUser}\n\n` +
           `Session transcript:\n\n${transcript.slice(-MAX_TRANSCRIPT_CHARS)}`,
       );
       parsed = parseProposals(raw);

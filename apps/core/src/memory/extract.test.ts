@@ -161,7 +161,8 @@ test("an empty result retries once for a concrete identifier and value", async (
   try {
     const saved = await extractMemories({
       transcript:
-        "user: The region table also needs ap-northeast-1 at 10 percent. Just acknowledge.\nassistant: noted",
+        "user: The region table also needs ap-northeast-1 at 10 percent.\n" +
+        "assistant: noted\nuser: Just acknowledge, no edits.\nassistant: acknowledged",
       projectPath,
       provider: "anthropic",
       complete: async (_system, prompt) => {
