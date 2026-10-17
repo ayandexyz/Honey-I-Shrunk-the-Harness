@@ -44,6 +44,7 @@ import {
 } from "../providers/cache-warmer.js";
 import type { PermissionRequestResult } from "../hooks/PermissionRequest.js";
 import { evaluatePermission } from "../permission/evaluate.js";
+import { intersectEnvelopes } from "../permission/envelope.js";
 import { isReadOnlyMode } from "../permission/mode-policy.js";
 import { promptForPermission } from "../permission/prompt.js";
 import { extractTarget } from "../permission/rules.js";
@@ -852,6 +853,9 @@ export class AgentLoop {
       agentMode: input.agentMode ?? "build",
       effort: input.effort,
       role: input.role,
+      // Parent ∩ child (spec §5.4): a caller that passes only `role` still gets
+      // that definition's own ceiling, and a spawn narrows what it inherits.
+      envelope: intersectEnvelopes(input.envelope, input.role?.envelope),
       // Loop health is per-run: carrying a previous run's counters across
       // prompts would let its history stop the *next* run at the health check
       // before it ever reached the provider.
@@ -3374,50 +3378,64 @@ export class AgentLoop {
     }
 
     // Permission pipeline (spec: 2026-07-18-permission-rules.md §5)
-    // danger bypass → mode enforcement + rules → PermissionRequest hooks
-    // (which may override ask→allow or anything→deny) → interactive ask.
+    // envelope ceiling → danger bypass → mode enforcement + rules →
+    // PermissionRequest hooks (which may override ask→allow or anything→deny) →
+    // interactive ask.
     let permResult: PermissionRequestResult = {
       decision: "allow",
       modifiedInput: undefined,
     };
-    if (this.state.agentMode !== "danger") {
-      const args = toolCall.args as Record<string, unknown>;
-      const evaluation = evaluatePermission({
-        toolName: toolCall.tool,
-        args,
-        mode: this.state.agentMode,
-        rules: this.permissionSettings?.getRuleSet() ?? {
-          allow: [],
-          ask: [],
-          deny: [],
-        },
-        projectRoot: this.state.projectPath,
-      });
+    const args = toolCall.args as Record<string, unknown>;
+    // The evaluator runs even in danger mode: an enveloped agent's ceiling is
+    // above that bypass, and evaluatePermission returns allow/danger for every
+    // other danger-mode call, so nothing else changes.
+    const evaluation = evaluatePermission({
+      toolName: toolCall.tool,
+      args,
+      mode: this.state.agentMode,
+      rules: this.permissionSettings?.getRuleSet() ?? {
+        allow: [],
+        ask: [],
+        deny: [],
+      },
+      projectRoot: this.state.projectPath,
+      envelope: this.state.envelope,
+      operations: getTool(toolCall.tool)?.permissions?.operations ?? [],
+    });
 
-      // Rule/mode deny is absolute — hooks cannot override deny→allow
-      if (evaluation.decision === "deny") {
-        // The envelope's own deny rules land here, before any ask. Record them
-        // too, or the morning report would show only the path refusals.
-        this.unattended?.record({
-          kind: "denied",
-          iteration: this.unattended.iteration,
-          at: Date.now(),
-          tool: toolCall.tool,
-          target: extractTarget(toolCall.tool, args),
-          rule: evaluation.matchedRule ?? evaluation.source,
-        });
-        const modeRule =
-          evaluation.source === "mode-enforced"
-            ? evaluation.matchedRule
-            : undefined;
+    // Rule/mode/envelope deny is absolute — hooks cannot override deny→allow
+    if (evaluation.decision === "deny") {
+      // The envelope's own deny rules land here, before any ask. Record them
+      // too, or the morning report would show only the path refusals.
+      this.unattended?.record({
+        kind: "denied",
+        iteration: this.unattended.iteration,
+        at: Date.now(),
+        tool: toolCall.tool,
+        target: extractTarget(toolCall.tool, args),
+        rule: evaluation.matchedRule ?? evaluation.source,
+      });
+      if (evaluation.source === "envelope") {
         return this.denyToolCall(
           toolCall,
-          modeRule ? "mode" : "rule",
-          modeRule ??
-            `Permission denied${evaluation.matchedRule ? ` by rule: ${evaluation.matchedRule}` : ` (${evaluation.source})`}`,
+          "envelope",
+          evaluation.reason ??
+            `Denied by the ${this.state.role?.name ?? "agent"}'s envelope`,
         );
       }
+      const modeRule =
+        evaluation.source === "mode-enforced"
+          ? evaluation.matchedRule
+          : undefined;
+      return this.denyToolCall(
+        toolCall,
+        modeRule ? "mode" : "rule",
+        modeRule ??
+          `Permission denied${evaluation.matchedRule ? ` by rule: ${evaluation.matchedRule}` : ` (${evaluation.source})`}`,
+      );
+    }
 
+    if (this.state.agentMode !== "danger") {
       permResult = await this.hooks.runPermissionRequest(toolCall, hookContext);
       // No hook matched: the rules-engine decision stands
       const decision =
@@ -3523,6 +3541,7 @@ export class AgentLoop {
       // whole of a build (see bash.ts).
       toolCallId: toolCall.id,
       agentMode: this.state.agentMode,
+      envelope: this.state.envelope,
       provider: this.runModel.provider,
       model: this.runModel.model,
       unattended: this.unattended,

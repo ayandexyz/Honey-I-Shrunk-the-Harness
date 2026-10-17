@@ -112,14 +112,16 @@ export interface FunctionOutputEvent extends BaseEvent {
 }
 
 /** Which gate refused the call. Kept distinct so "the mode forbids this" and
- *  "the user said no" do not read as the same event. */
+ *  "the user said no" do not read as the same event. `envelope` is the agent's
+ *  own declared ceiling, which outranks every other gate. */
 export type DenySource =
   | "hook"
   | "mode"
   | "rule"
   | "permission-hook"
   | "user"
-  | "role";
+  | "role"
+  | "envelope";
 
 /**
  * A tool call the model made that never ran.

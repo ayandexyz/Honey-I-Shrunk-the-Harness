@@ -21,6 +21,11 @@ export interface ToolContext {
    * turned off, in the middle of somebody else's turn.
    */
   agentMode?: import("../agent/types.js").AgentMode;
+  /**
+   * The spawning loop's effective agent envelope, when it has one. Only the
+   * `agent` tool reads it: what a subagent inherits, and cannot widen (§5.4).
+   */
+  envelope?: import("../agent/definitions/types.js").AgentEnvelope;
   /** The spawning run's provider and model — what a subagent inherits. */
   provider?: string;
   model?: string;
