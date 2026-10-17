@@ -2519,15 +2519,23 @@ export class AgentLoop {
             );
           }
           // Track file mutations so the verification gate only runs when this
-          // run actually changed something.
+          // run actually changed something. `bash` is unconditionally
+          // isDestructive (any command might write), so a read-only call
+          // (e.g. `git log`) must not flip this — isBashWrite() is the same
+          // heuristic signal E uses to tell a `tsc` run from a `sed -i`.
+          const mutationArgs = tc.args as Record<string, unknown> | undefined;
+          const bashCommand =
+            tc.tool === "bash" && typeof mutationArgs?.command === "string"
+              ? mutationArgs.command
+              : undefined;
           if (
             getTool(tc.tool)?.behavior?.isDestructive === true &&
-            !result.error
+            !result.error &&
+            (bashCommand === undefined || isBashWrite(bashCommand))
           ) {
             this.filesMutatedThisRun = true;
             madeFileChange = true;
-            const a = tc.args as Record<string, unknown> | undefined;
-            const fp = a && (a.filePath ?? a.path);
+            const fp = mutationArgs && (mutationArgs.filePath ?? mutationArgs.path);
             if (typeof fp === "string") this.mutatedFiles.add(fp);
           }
           const part = assistantMessage.parts.find(
