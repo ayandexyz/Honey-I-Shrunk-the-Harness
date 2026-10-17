@@ -1054,7 +1054,7 @@ interface PreLoopContext {
   skills: Skill[]; // from .freecode/skills/ (system + user + repo)
   activeSkills: Skill[]; // skills triggered implicitly by prompt patterns
   recentHistory: string; // recent actions for orientation
-  permissionProfile: PermissionProfile; // current sandbox permissions
+  permissionProfile: PermissionProfile; // retired 2026-10-17 — the agent envelope, spec 2026-09-27-agent-control-and-definitions.md §5
   vcsInfo: VCSInfo; // git remote, branch, worktree info
 }
 ```

@@ -16,7 +16,7 @@
 - A definition with a bad envelope is **skipped with a warning naming the error**, never loaded with the envelope silently dropped — dropping it would run without the containment the file asks for (spec §5.8).
 - Claude Code's `.claude/agents/*.md` files keep loading unchanged: flat keys, comma lists, block lists, `model` aliases, `mode` inference.
 - Only `agent/definitions/loader.ts`'s copy of `parseFrontmatter` changes. `skills/loader.ts` and `commands/loader.ts` have independent copies and are not touched.
-- Operations come from `tools/tool.types.ts`: its `PermissionOperation` union becomes derived from a runtime list, so there is exactly one vocabulary. `permission/profiles.ts` holds its own **duplicate** `PermissionOperation` (line 205) and a stale `TOOL_PERMISSIONS` map; both are left alone (that file is deleted in the enforcement phase, spec §5.2) and nothing here imports from it.
+- Operations come from `tools/tool.types.ts`: its `PermissionOperation` union becomes derived from a runtime list, so there is exactly one vocabulary. `permission/profiles.ts` held its own **duplicate** `PermissionOperation` (line 205) and a stale `TOOL_PERMISSIONS` map; both were left alone here (that file was deleted 2026-10-17, spec §5.2 — done) and nothing here imported from it.
 - `grants` entries validate against `knownTools`, plus any name starting `mcp__`. The MCP registry is empty at load time (MCP tools register dynamically), so a server's existence is deferred to execution.
 - The loader stays synchronous and uncached.
 - Each task ends green: `cd apps/core && FREECODE_EDIT_DIAGNOSTICS=0 npx tsx --test <file>` and `npx tsc --noEmit`.
@@ -47,7 +47,7 @@
 | `docs/specs/2026-09-27-agent-control-and-definitions.md` (modify) | Record the absolute-root refusal in §5.3 |
 | `docs/2026-10-15-priority-implementation-plan.md` (modify) | Delete the delivered phase; renumber |
 
-Deliberately **not** in this slice: enforcement (the predicate, its two call sites, the sandbox), deleting `permission/profiles.ts`, and showing the envelope in `freecode agents list`.
+Deliberately **not** in this slice: enforcement (the predicate, its two call sites, the sandbox), deleting `permission/profiles.ts` (done 2026-10-17), and showing the envelope in `freecode agents list`.
 
 ---
 

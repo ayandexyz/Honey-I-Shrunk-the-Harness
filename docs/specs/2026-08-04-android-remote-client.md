@@ -379,7 +379,7 @@ Every control below assumes that.
 | Application | 256-bit bearer token, `timingSafeEqual`, `0600` on disk, `EncryptedSharedPreferences` on device. |
 | CORS | Origin echo restricted to loopback + configured host. No wildcard. |
 | Default | `127.0.0.1` bind remains the default. Remote exposure requires an explicit `--host`. |
-| Agent | Existing permission profiles (`permission/profiles.ts`) still apply. Remote does not imply elevated. |
+| Agent | Existing permission rules (`permission/rules.ts`) still apply. Remote does not imply elevated. |
 
 **Explicitly accepted risk:** anyone holding the token and tailnet access has
 shell on the machine. That is inherent to the feature. Mitigation is scope
