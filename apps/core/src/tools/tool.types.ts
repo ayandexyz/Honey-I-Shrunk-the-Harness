@@ -33,15 +33,19 @@ export interface ToolBehavior {
 // PermissionOperation - Types of operations that require permissions
 // =============================================================================
 
-export type PermissionOperation =
-  | "file.read"
-  | "file.write"
-  | "file.delete"
-  | "network"
-  | "shell"
-  | "subprocess"
-  | "mcp"
-  | "agent.spawn";
+/** The eight operations a tool, or an agent envelope, can be granted. */
+export const PERMISSION_OPERATIONS = [
+  "file.read",
+  "file.write",
+  "file.delete",
+  "network",
+  "shell",
+  "subprocess",
+  "mcp",
+  "agent.spawn",
+] as const;
+
+export type PermissionOperation = (typeof PERMISSION_OPERATIONS)[number];
 
 // =============================================================================
 // ToolPermissions - Permission requirements for a tool

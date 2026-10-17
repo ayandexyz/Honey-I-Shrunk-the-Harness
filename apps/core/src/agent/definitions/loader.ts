@@ -9,6 +9,9 @@
 //   tools: Read, Grep, Glob          # optional allowlist (comma list or YAML list)
 //   model: inherit                   # optional: inherit | provider/model
 //   mode: explore                    # optional FreeCode extension: explore | build
+//   envelope:                        # optional FreeCode extension: capability ceiling
+//     operations: [file.read]        #   spec 2026-09-27-agent-control-and-definitions.md §5.3
+//     read: ["**"]
 //   ---
 //   System prompt for the agent.
 //
@@ -26,7 +29,8 @@ import * as os from "os";
 import * as path from "path";
 import { logger } from "../../utils/logger.js";
 import { BUILTIN_AGENT_DEFINITIONS } from "./builtin.js";
-import type { AgentDefinition, AgentDefinitionScope } from "./types.js";
+import { parseEnvelope } from "./envelope.js";
+import type { AgentDefinition, AgentDefinitionScope, AgentEnvelope } from "./types.js";
 
 const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
 const NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
@@ -185,7 +189,20 @@ export function parseAgentFile(
   const writes = tools?.some((t) => t === "write" || t === "edit" || t === "bash") ?? false;
   const mode = (rawMode as "explore" | "build" | undefined) ?? (writes ? "build" : "explore");
 
-  return { name, description, prompt: body, tools, model, mode, scope, location: file };
+  // A definition whose ceiling does not validate is refused outright — loading
+  // it without the envelope would silently grant the mode's full set.
+  const rawEnvelope = fields.envelope;
+  let envelope: AgentEnvelope | undefined;
+  if (rawEnvelope !== undefined) {
+    const parsed = parseEnvelope(rawEnvelope, knownTools);
+    if ("error" in parsed) {
+      logger.warn(`[agents] ${file}: ${parsed.error}, skipped`);
+      return null;
+    }
+    envelope = parsed;
+  }
+
+  return { name, description, prompt: body, tools, model, mode, scope, location: file, envelope };
 }
 
 function readScope(
