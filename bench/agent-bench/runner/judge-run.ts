@@ -4,9 +4,14 @@
 // §4.4 step 5, §4.5, §4.6, §5.
 //
 //   pnpm bench:judge bench/agent-bench/results/<run> [--panel] [--rejudge] [--concurrency N] [--tasks <file>]
+//                       [--judges haiku,gpt,deepseek,glm] [--judge-timeout <minutes>]
 //
 // Audit mode by default (Haiku scores, GPT audits 20% and falls back);
 // `--panel` runs BuffBench's full two-judge panel on every trial instead.
+// `--judges` picks the panel by name (default: both subscriptions' judges;
+// `deepseek` and `glm` are the free ones, through `opencode run`).
+// `--judge-timeout` raises BuffBench's 20 minutes per judge, which a free-tier
+// judge needs (§4.6: one timed-out judge in a panel trial is one judge short).
 // Resumable: a trial that already has `judging` is skipped unless --rejudge,
 // and report.json is rewritten after every verdict. Writes judging.json per
 // trial (the full analysis) and judged-report.json per run (§5's numbers).
@@ -17,7 +22,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { judgeComplete, type JudgeUsage } from "./core-complete.js";
 import { auditAgreement, judgeAudited, MAX_AUDIT_GAP, MIN_AUDITS } from "./judge-audit.js";
-import { JUDGES, assertNoCollision, judgePanel } from "./judge.js";
+import { assertNoCollision, judgePanel, resolveJudges } from "./judge.js";
 import type { FinalCheckOutput, JudgeInput } from "./judge-prompt.js";
 import { INSTANCE_PREFIX, REPO_DIR, loadJudgedTasks } from "./judged-instances.js";
 import { BASELINE_FILE } from "./judged-trial.js";
@@ -85,7 +90,8 @@ async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<v
 
 async function main(): Promise<void> {
   const runDir = process.argv[2];
-  if (!runDir || runDir.startsWith("--")) throw new Error("usage: pnpm bench:judge <results/run> [--panel] [--rejudge]");
+  if (!runDir || runDir.startsWith("--"))
+    throw new Error("usage: pnpm bench:judge <results/run> [--panel] [--rejudge] [--judges haiku,gpt,deepseek] [--tasks <file>] [--concurrency N]");
   const reportFile = path.join(runDir, "report.json");
   const report = JSON.parse(fs.readFileSync(reportFile, "utf-8")) as Report;
   if (report.set !== "freecode-commits") {
@@ -96,15 +102,23 @@ async function main(): Promise<void> {
   // --tasks: an alternative approved task file (a smoke test, or a frozen copy
   // of the set a published run used).
   const tasks = new Map(loadJudgedTasks(arg("tasks")).map((t) => [`${INSTANCE_PREFIX}${t.id}`, t]));
-  // Before any spend: a judge from the agents' own family is refused (§4.6).
-  for (const model of new Set(report.trials.map((t) => t.model))) assertNoCollision(JUDGES, model);
+  // Before any spend: an unknown judge name, or a judge from the agents' own
+  // family, is refused (§4.6).
+  const judges = resolveJudges(arg("judges"));
+  for (const model of new Set(report.trials.map((t) => t.model))) assertNoCollision(judges, model);
+  if (judges.length < 2) {
+    console.warn(
+      `⚠️  one judge (${judges.map((j) => j.id).join(", ")}): a published number needs two — ` +
+        `${panel ? "the full panel" : "audit mode"} will report ${panel ? "DEGRADED" : "UNMEASURED"}`,
+    );
+  }
 
   const usage: JudgeUsage = {};
   const complete = judgeComplete(usage);
   const todo = report.trials.filter((t) => rejudge || !t.judging);
   console.log(
     `${report.trials.length} trials, judging ${todo.length} — ${panel ? "full panel" : "audit mode"}: ` +
-      JUDGES.map((j) => `${j.provider}/${j.model}`).join(" + "),
+      judges.map((j) => `${j.provider}/${j.model}`).join(" + "),
   );
 
   let done = 0;
@@ -117,8 +131,12 @@ async function main(): Promise<void> {
     }
     const input = judgeInput(task, trial);
     const verdict = panel
-      ? { ...(await judgePanel(input, complete, { label })), scoredBy: "panel" }
-      : await judgeAudited(input, complete, { auditKey: `${task.id}|${trial.agent}|${trial.trial}`, label });
+      ? { ...(await judgePanel(input, complete, { label, judges })), scoredBy: "panel" }
+      : await judgeAudited(input, complete, {
+          auditKey: `${task.id}|${trial.agent}|${trial.trial}`,
+          label,
+          judges,
+        });
     fs.writeFileSync(path.join(ROOT, trial.artifactDir, "judging.json"), JSON.stringify(verdict, null, 2));
     const summary: TrialJudging = {
       overallScore: verdict.overallScore,
@@ -155,8 +173,8 @@ async function main(): Promise<void> {
       };
     });
   const summary = summarize(rows);
-  const agreement = auditAgreement(rows.map((r) => r.judging));
-  const pv = panelVerdict(summary.counts, rows.length);
+  const agreement = auditAgreement(rows.map((r) => r.judging), judges);
+  const pv = panelVerdict(summary.counts, rows.length, judges.length);
   const verdictLine = panel
     ? pv.ok
       ? `full panel: ${(pv.share * 100).toFixed(0)}% of trials scored by fewer than two judges (≤ ${MAX_ONE_JUDGE_SHARE * 100}%)`
@@ -164,7 +182,7 @@ async function main(): Promise<void> {
     : agreement.n < MIN_AUDITS
       ? `audit UNMEASURED (${agreement.n} two-sided audits, need ${MIN_AUDITS}): a published number needs --panel`
       : agreement.passes
-        ? `scored by ${JUDGES[0].id}, audited by ${JUDGES[1].id}: n=${agreement.n}, mean gap ${agreement.meanAbsGap.toFixed(2)} ≤ ${MAX_AUDIT_GAP}`
+        ? `scored by ${judges[0].id}, audited by ${judges[1].id}: n=${agreement.n}, mean gap ${agreement.meanAbsGap.toFixed(2)} ≤ ${MAX_AUDIT_GAP}`
         : `audit FAILED: mean gap ${agreement.meanAbsGap.toFixed(2)} > ${MAX_AUDIT_GAP} over n=${agreement.n}; a published number needs --panel`;
   const judgingVerified = panel ? pv.ok : agreement.passes;
   const contaminationChecked = report.contamination?.checked === true;
@@ -175,7 +193,7 @@ async function main(): Promise<void> {
     JSON.stringify(
       {
         mode: panel ? "panel" : "audit",
-        judges: JUDGES,
+        judges,
         isolation: report.isolation,
         contamination: report.contamination ?? null,
         publishable,

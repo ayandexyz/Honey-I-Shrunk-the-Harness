@@ -221,7 +221,10 @@ Their **output schema, verbatim**: `analysis`, `strengths[]`, `weaknesses[]`,
 
 ### 4.6 The panel (their arithmetic, exactly)
 
-- **Two judges, run in parallel** (`runner/judge.ts` `JUDGES`, pinned 2026-09-29):
+- **Two judges, run in parallel** (`runner/judge.ts` `JUDGE_REGISTRY` / `JUDGES`, pinned
+  2026-09-29; since 2026-10-17 `--judges haiku,gpt,deepseek` selects the panel by name, in
+  that order — the first named judge is the primary, and a one-judge panel can never clear
+  the two-judge bar below):
   - **`judge-haiku`: `claude-haiku-4-5`** (primary since 2026-10-13), through `claude -p` on
     the owner's Claude subscription (`runner/claude-complete.ts`): BuffBench's system prompt in
     `--system-prompt`, the reply constrained by `--json-schema`, no owner settings, hooks,
@@ -238,8 +241,23 @@ Their **output schema, verbatim**: `analysis`, `strengths[]`, `weaknesses[]`,
   - **Not MiniMax**, while MiniMax-M3 is the pinned model under test. It would grade its own
     output, and freecode's prompts and evals have been tuned on M3, so a MiniMax judge is
     the one most likely to prefer freecode. `assertNoCollision` refuses any judge from the
-    model under test's **family** (the `codex` transport counts as `openai`), so pinning the
-    agents to an OpenAI model would also retire the GPT judge.
+    model under test's **family** (the `codex` transport counts as `openai`, and `deepseek`
+    was added to `familyOf` on 2026-10-17 with the DeepSeek judge), so pinning the agents to
+    an OpenAI — or DeepSeek — model retires the matching judge.
+  - **`judge-deepseek`: `deepseek-v4.1-flash-free`** (2026-10-17), through `opencode run`
+    (`runner/opencode-complete.ts`) — the judge that needs no subscription. It is reachable
+    **only** through OpenCode's own binary: OpenCode Zen's free tier answers any other client
+    with `FreeTierError` ("OpenCode's free tier can only be used from within OpenCode",
+    re-measured 2026-10-17 with and without an API key), and no Zen credential exists on this
+    machine. The disclosure it forces: OpenCode's own `build` agent preamble and tool
+    definitions sit in this judge's context, so unlike `claude -p` and `codex exec` it is not
+    a bare completion, and `opencode run --format json` reports no token usage (v2.0.32), so
+    its `judgeTokens` row counts `calls` only. Its reply is also the least reliable of the
+    three: on the 2026-10-17 judged set it failed `parseJudging` twice in 12 calls (both times
+    on the task with the largest diff, but not the same trial twice), and `aggregatePanel`
+    counts each miss as a **blackout** — that trial scores 0. So it is usable beside Haiku
+    (which covers the blackout) and not on its own, which is what `--judges deepseek` reports:
+    DEGRADED.
   - Both ids are written into every judged report. A retired id is how a judge dies quietly
     (`EVAL.md`'s retired-Gemini incident, BuffBench's dead Gemini judge).
 - **Transport** (`core-complete.ts` `judgeComplete` routes by `provider`):
@@ -256,7 +274,11 @@ Their **output schema, verbatim**: `analysis`, `strengths[]`, `weaknesses[]`,
     skills must not run inside a judgement.** Before those flags, a judge call fired the
     owner's SessionEnd hook. `codex exec` has no system-prompt flag, so BuffBench's system
     prompt leads the message.
-  - Both paths go through `parseJudging`. A reply that fails the schema counts as that judge
+  - DeepSeek goes through `opencode run -m opencode/deepseek-v4.1-flash-free --format json`,
+    message on stdin (a judge prompt is over argv's 128KB cap), in an empty scratch dir and
+    without `--auto`, so a tool that asks for permission is never approved from under the
+    operator. The reply is the concatenation of the stream's `text` parts.
+  - All paths go through `parseJudging`. A reply that fails the schema counts as that judge
     failing, which is BuffBench's `structuredOutput` check. So does a reply on the **wrong
     scale**: every score ≤1 with one of them fractional. GPT-5.5 answered 0.88 for a correct
     patch when a test prompt left out the 0–10 instruction, and the bounds check alone would

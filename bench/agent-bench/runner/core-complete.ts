@@ -6,13 +6,17 @@
 // rate table on purpose), because that rule protects a published NUMBER. A
 // judge's transport is not a number, and core already owns provider auth,
 // catalogue and fetch timeouts. Imported lazily, so the tests never load core.
-// Both current judges are exceptions: GPT runs through `codex exec` on the
-// owner's Codex subscription (codex-complete.ts) and Haiku through `claude -p`
-// on the Claude subscription (claude-complete.ts), which core cannot reach.
+// Both session-login judges are exceptions: GPT runs through `codex exec` on
+// the owner's Codex subscription (codex-complete.ts) and Haiku through
+// `claude -p` on the Claude subscription (claude-complete.ts), which core
+// cannot reach — and so is the DeepSeek judge through `opencode run`
+// (opencode-complete.ts): OpenCode Zen's free tier refuses every client that is
+// not OpenCode itself.
 // =============================================================================
 
 import { claudeComplete } from "./claude-complete.js";
 import { codexComplete } from "./codex-complete.js";
+import { opencodeComplete } from "./opencode-complete.js";
 import type { Complete } from "./judge.js";
 
 /** Judge tokens per judge id. The Codex-subscription judge has no USD price (§6.6). */
@@ -46,12 +50,20 @@ export function coreComplete(usage: JudgeUsage): Complete {
 
 /**
  * The panel's transport: `codex` judges through `codex exec`, `claude` judges
- * through `claude -p` (both on the owner's subscriptions), the rest through core.
+ * through `claude -p`, `opencode` judges through `opencode run` (OpenCode's own
+ * client — its free tier refuses everyone else), the rest through core.
  */
 export function judgeComplete(usage: JudgeUsage): Complete {
   const core = coreComplete(usage);
   const codex = codexComplete(usage);
   const claude = claudeComplete(usage);
+  const opencode = opencodeComplete(usage);
   return (judge, ...rest) =>
-    (judge.provider === "codex" ? codex : judge.provider === "claude" ? claude : core)(judge, ...rest);
+    (judge.provider === "codex"
+      ? codex
+      : judge.provider === "claude"
+        ? claude
+        : judge.provider === "opencode"
+          ? opencode
+          : core)(judge, ...rest);
 }
