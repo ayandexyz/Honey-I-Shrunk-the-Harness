@@ -9,7 +9,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -281,4 +281,142 @@ test("a child that declares no ceiling of its own still inherits its parent's", 
     false,
     "the parent's ceiling reaches a child that declares none",
   );
+});
+
+// -----------------------------------------------------------------------------
+// The link between them: a real parent loop, and the `agent` tool it calls
+// -----------------------------------------------------------------------------
+
+/** The rollout log the layer's recorder writes. */
+function readEvents(dir: string): Array<Record<string, unknown>> {
+  const file = join(dir, "events.jsonl");
+  if (!existsSync(file)) return [];
+  return readFileSync(file, "utf-8")
+    .split("\n")
+    .filter((line) => line.trim())
+    .map((line) => JSON.parse(line));
+}
+
+test("a spawn from a real loop carries the loop's ceiling into the child", async () => {
+  const projectPath = mkdtempSync(join(tmpdir(), "freecode-envelope-loop-"));
+  // The child declares no ceiling of its own, so only the parent's can bind it.
+  definition(projectPath, "ploughman", [
+    "name: ploughman",
+    "description: Inherits whatever it is given",
+    "mode: build",
+    "tools: [write]",
+  ]);
+
+  // One provider for both loops. Which loop is calling is read off the tool
+  // list it was offered: only the parent has `agent`. The first call from each
+  // loop is its tool call; every later one stops the turn.
+  const calls = new Map<string, number>();
+  registerProvider("nest-loop" as ProviderId, {
+    info: info("nest-loop", true),
+    create: (): AIProvider => ({
+      info: info("nest-loop", true),
+      execute: async (): Promise<ExecuteResult> => ({
+        content: "done",
+        toolCalls: [],
+        stopReason: "stop",
+        provider: "nest-loop",
+        model: "nest-model",
+      }),
+      stream: async function* (options: ExecuteOptions) {
+        const child = !(options.tools ?? []).some((tool) => tool.name === "agent");
+        const key = child ? "child" : "parent";
+        const nth = (calls.get(key) ?? 0) + 1;
+        calls.set(key, nth);
+        if (nth > 1) {
+          yield { type: "text_delta", delta: "moving on" };
+          yield { type: "usage", usage: { inputTokens: 1, outputTokens: 1 } };
+          yield { type: "done", stopReason: "stop" };
+          return;
+        }
+        yield child
+          ? {
+              type: "tool_call",
+              id: "child-1",
+              name: "write",
+              args: { filePath: "outside.txt", content: "escaped\n" },
+            }
+          : {
+              type: "tool_call",
+              id: "parent-1",
+              name: "agent",
+              args: { task: "t", prompt: "write outside.txt", subagent_type: "ploughman" },
+            };
+        yield { type: "usage", usage: { inputTokens: 1, outputTokens: 1 } };
+        yield { type: "done", stopReason: "tool_use" };
+      },
+    }),
+  });
+
+  const sessionId = "envelope-loop-parent";
+  const rolloutDir = mkdtempSync(join(tmpdir(), "freecode-envelope-loop-log-"));
+  const runtime = makeRuntime(
+    makeTestLayer({
+      memoryFactory: {
+        forSession: () =>
+          new MemoryService(sessionId, {
+            storage: {
+              save: () => {},
+              load: () => undefined,
+              listSessions: () => [],
+              delete: () => {},
+            } as never,
+          }),
+      },
+      recorderFactory: { forSession: (id: string) => createRecorder(id, { rolloutDir }) },
+    }),
+  );
+  try {
+    const store = await runtime.runPromise(SessionStoreTag);
+    await store.createSession(
+      { title: "t", projectPath, provider: "nest-loop" },
+      sessionId,
+    );
+    const loop = await runtime.runPromise(
+      createAgentLoopEffect(sessionId, { maxIterations: 3 }),
+    );
+    const role: AgentRole = {
+      name: "root",
+      prompt: "",
+      // The parent declares the ceiling; `agent.spawn` is what its own call to
+      // the `agent` tool needs, `file.write` is what it hands the child.
+      tools: ["agent", "write"],
+      envelope: { operations: ["agent.spawn", "file.write"], write: ["docs/**"] },
+    };
+    await loop.run({
+      prompt: "delegate",
+      sessionId,
+      provider: "nest-loop",
+      projectPath,
+      agentMode: "danger",
+      role,
+    });
+  } finally {
+    getAgentRegistry().disposeRoot(sessionId);
+    await runtime.dispose();
+  }
+
+  assert.equal(
+    existsSync(join(projectPath, "outside.txt")),
+    false,
+    "the child inherits the ceiling through the loop's ToolContext",
+  );
+
+  // The child writes its own rollout log (its loop is built directly, not from
+  // the test layer), so the evidence for "it tried and was refused" is there.
+  const spawned = String(
+    readEvents(rolloutDir).find((e) => e.type === "function.output")?.output ?? "",
+  );
+  const childId = /Agent id: (\S+)/.exec(spawned)?.[1];
+  assert.ok(childId, "the parent must have spawned a child, not just looked busy");
+  const denied = readEvents(join(home, ".freecode", "rollout", "sessions", childId)).find(
+    (e) => e.type === "function.denied",
+  );
+  assert.ok(denied, "the child's write must be refused by the envelope, not skipped");
+  assert.equal(denied.source, "envelope");
+  assert.equal(denied.tool, "write");
 });

@@ -575,3 +575,75 @@ test("a child with no grants has none", () => {
   );
   assert.equal(merged?.grants, undefined);
 });
+
+// -----------------------------------------------------------------------------
+// The grant's own grammar
+// -----------------------------------------------------------------------------
+
+test("an `mcp__server` grant covers that server's tools", () => {
+  const envelope: AgentEnvelope = { operations: ["mcp"], grants: ["mcp__linear"] };
+  assert.equal(
+    decide(envelope, "mcp__linear__issues", [], "none").decision,
+    "allow",
+    "a server grant is the documented way to allow its tools (spec §5.3)",
+  );
+  assert.equal(
+    decide(envelope, "mcp__github__create_pr", [], "none").decision,
+    "deny",
+    "another server is another grant",
+  );
+  assert.equal(
+    reasonOf(
+      decide(
+        { operations: ["file.read"], read: ["docs/**"], grants: ["ls"] },
+        "lsp",
+        ["file.read"],
+        "none",
+      ),
+    ),
+    "this agent was not granted lsp",
+    "a non-MCP grant is never a stem",
+  );
+});
+
+test("a parent's server grant covers a child's tool grant, not the reverse", () => {
+  const parent: AgentEnvelope = { operations: ["mcp"], grants: ["mcp__linear"] };
+  const child: AgentEnvelope = { operations: ["mcp"], grants: ["mcp__linear__issues"] };
+  assert.deepEqual(
+    intersectEnvelopes(parent, child)?.grants,
+    ["mcp__linear__issues"],
+    "the child's narrower grant survives",
+  );
+  assert.equal(
+    intersectEnvelopes(child, parent)?.grants,
+    undefined,
+    "the child may not widen a tool grant back to the whole server",
+  );
+});
+
+// -----------------------------------------------------------------------------
+// A path tool's target when the model omits (or mangles) the argument
+// -----------------------------------------------------------------------------
+
+test("a path tool with no path argument is judged at the project root", () => {
+  // `ls`, `glob` and `grep` default to the working directory, so omitting the
+  // argument must not skip the root check — the tool would still read outside.
+  assert.deepEqual(resolveEnvelopeTarget("grep", { pattern: "AKIA" }, ROOT), {
+    kind: "path",
+    target: ROOT,
+  });
+  assert.deepEqual(resolveEnvelopeTarget("ls", {}, ROOT), { kind: "path", target: ROOT });
+});
+
+test("a malformed path argument does not throw out of the gate", () => {
+  // A number or boolean reaches the resolver untyped (`targetKind` is name-based);
+  // `path.resolve` would throw, taking the whole turn down with it.
+  assert.deepEqual(resolveEnvelopeTarget("read", { filePath: 123 }, ROOT), {
+    kind: "path",
+    target: ROOT,
+  });
+  assert.deepEqual(resolveEnvelopeTarget("grep", { path: true }, ROOT), {
+    kind: "path",
+    target: ROOT,
+  });
+});

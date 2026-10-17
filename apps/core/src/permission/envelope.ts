@@ -61,9 +61,7 @@ export function envelopeDecision(query: EnvelopeQuery): EnvelopeVerdict {
 
   if (ENVELOPE_EXEMPT_TOOLS.has(tool)) return { decision: "allow" };
 
-  const granted = (envelope.grants ?? []).some(
-    (grant) => grant.toLowerCase() === tool,
-  );
+  const granted = (envelope.grants ?? []).some((grant) => grantCovers(grant, tool));
 
   // `buildTool` defaults an undeclared list to empty, and a forgotten
   // declaration is indistinguishable from an honest one: fail closed (§5.6).
@@ -113,9 +111,19 @@ export function envelopeDecision(query: EnvelopeQuery): EnvelopeVerdict {
     : deny(`this agent was not granted ${toolName}`);
 }
 
+/**
+ * A grant names a tool exactly, or an MCP server's tools as `mcp__server` —
+ * the same grammar permission rules use (`rules.ts` `ruleMatches`), so a
+ * `grants: [mcp__linear]` entry covers `mcp__linear__issues` and a plain name
+ * covers only itself.
+ */
+function grantCovers(grant: string, tool: string): boolean {
+  const name = grant.toLowerCase();
+  return name === tool || (name.startsWith("mcp__") && tool.startsWith(`${name}__`));
+}
+
 /** Which root lists a tool's operations answer to. */
-function rootAxes(operations: readonly PermissionOperation[]): Array<"read" | "write"> {
-  const axes: Array<"read" | "write"> = [];
+function rootAxes(operations: readonly PermissionOperation[]): Array<"read" | "write"> {  const axes: Array<"read" | "write"> = [];
   if (operations.includes("file.read")) axes.push("read");
   if (operations.includes("file.write") || operations.includes("file.delete")) {
     axes.push("write");
@@ -146,7 +154,12 @@ function rootsFor(
  * Resolution is deliberately here and not inside `envelopeDecision`: the
  * decision stays pure and lexical, while this walks the filesystem so a symlink
  * out of the roots is judged by where it points. `projectRoot` is the base a
- * relative target resolves against.
+ * relative target resolves against — and, for a path tool that was called
+ * without a usable path argument, the target itself: `ls`, `glob` and `grep`
+ * default to the working directory, so treating a missing argument as "nothing
+ * to check" let a model read outside the roots by simply omitting it. A
+ * malformed argument (a number, a boolean) is the same case, and must not reach
+ * `path.resolve`, which throws and would take the turn down with it.
  */
 export function resolveEnvelopeTarget(
   toolName: string,
@@ -154,10 +167,11 @@ export function resolveEnvelopeTarget(
   projectRoot: string,
 ): { kind: EnvelopeQuery["kind"]; target?: string } {
   const kind = targetKind(toolName) ?? "none";
+  if (kind === "none") return { kind };
   const raw = extractTarget(toolName, args);
-  if (kind === "none" || raw === undefined) return { kind };
-  if (kind !== "path") return { kind, target: raw };
-  const resolved = realpathOrSelf(path.resolve(projectRoot, raw));
+  const target = typeof raw === "string" ? raw : undefined;
+  if (kind !== "path") return target === undefined ? { kind } : { kind, target };
+  const resolved = realpathOrSelf(path.resolve(projectRoot, target ?? projectRoot));
   return { kind, target: resolved };
 }
 
@@ -211,7 +225,9 @@ function grantsOnly(
 ): string[] | undefined {
   const parentGrants = parent.grants;
   if (child.grants === undefined || parentGrants === undefined) return undefined;
-  const kept = child.grants.filter((grant) => parentGrants.includes(grant));
+  const kept = child.grants.filter((grant) =>
+    parentGrants.some((parentGrant) => grantCovers(parentGrant, grant.toLowerCase())),
+  );
   return kept.length > 0 ? kept : undefined;
 }
 

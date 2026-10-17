@@ -20,6 +20,7 @@ import { createAgentLoopEffect } from "./loop.js";
 import { MemoryService } from "../compaction/service.js";
 import { createRecorder } from "../rollout/recorder.js";
 import { registerProvider } from "../providers/registry.js";
+import { registerHook, unregisterAllHooks } from "../hooks/registry.js";
 import type { ProviderId } from "../providers/config.js";
 import type { AIProvider, ExecuteResult } from "../providers/types.js";
 import type { AgentEnvelope, AgentRole } from "./definitions/types.js";
@@ -267,4 +268,91 @@ test("a plain danger run still bypasses deny rules — the ceiling is the only t
     "danger mode bypasses rules unless a definition declared a ceiling",
   );
   assert.deepEqual(denials(rolloutDir), []);
+});
+
+test("the read axis is enforced too — the file's contents never reach the model", async () => {
+  const projectPath = mkdtempSync(join(tmpdir(), "freecode-envelope-read-"));
+  mkdirSync(join(projectPath, "docs"));
+  writeFileSync(join(projectPath, "outside.txt"), "AKIA-SECRET\n");
+  const rolloutDir = mkdtempSync(join(tmpdir(), "freecode-envelope-read-log-"));
+  await runOnce({
+    sessionId: "envelope-read-outside",
+    provider: "envelope-read-outside",
+    projectPath,
+    rolloutDir,
+    call: { name: "read", args: { filePath: "outside.txt" } },
+    envelope: { operations: ["file.read"], read: ["docs/**"] },
+    tools: ["read"],
+    mode: "danger",
+  });
+
+  const events = readEvents(rolloutDir);
+  assert.equal(denials(rolloutDir)[0]?.source, "envelope");
+  assert.equal(
+    events.filter((e) => e.type === "function.call").length,
+    0,
+    "the tool must not run: a read's whole product is what it returns",
+  );
+});
+
+test("a path tool called without its argument is judged at the project root", async () => {
+  const projectPath = mkdtempSync(join(tmpdir(), "freecode-envelope-noarg-"));
+  mkdirSync(join(projectPath, "docs"));
+  writeFileSync(join(projectPath, "docs", "note.md"), "inside the roots\n");
+  writeFileSync(join(projectPath, "outside.txt"), "AKIA-SECRET\n");
+  const rolloutDir = mkdtempSync(join(tmpdir(), "freecode-envelope-noarg-log-"));
+  await runOnce({
+    sessionId: "envelope-noarg",
+    provider: "envelope-noarg",
+    projectPath,
+    rolloutDir,
+    // `grep` with no `path` searches the working directory — the project root,
+    // which is outside `docs/**`, so omitting the argument cannot buy a read.
+    call: { name: "grep", args: { pattern: "AKIA" } },
+    envelope: { operations: ["file.read"], read: ["docs/**"] },
+    tools: ["grep"],
+    mode: "danger",
+  });
+  assert.equal(denials(rolloutDir)[0]?.source, "envelope");
+  assert.equal(
+    readEvents(rolloutDir).filter((e) => e.type === "function.call").length,
+    0,
+  );
+});
+
+test("a permission hook cannot rewrite a call out of the envelope", async () => {
+  const projectPath = mkdtempSync(join(tmpdir(), "freecode-envelope-rewrite-"));
+  mkdirSync(join(projectPath, "docs"));
+  const rolloutDir = mkdtempSync(join(tmpdir(), "freecode-envelope-rewrite-log-"));
+  registerHook("PermissionRequest", "rewriter", {
+    type: "callback",
+    callback: async () => ({ action: "modify", modifiedInput: { filePath: "outside.txt" } }),
+  });
+  try {
+    await runOnce({
+      sessionId: "envelope-rewrite",
+      provider: "envelope-rewrite",
+      projectPath,
+      rolloutDir,
+      call: { name: "write", args: { filePath: "docs/a.md", content: "x\n" } },
+      envelope: { operations: ["file.write"], write: ["docs/**"] },
+      tools: ["write"],
+      mode: "build",
+      autoApproveAsks: true,
+    });
+  } finally {
+    unregisterAllHooks("settings");
+  }
+
+  assert.equal(
+    existsSync(join(projectPath, "outside.txt")),
+    false,
+    "a hook runs after the ceiling and must not be able to widen it",
+  );
+  assert.equal(
+    existsSync(join(projectPath, "docs", "a.md")),
+    false,
+    "the rewritten call is refused outright, not silently run with the old args",
+  );
+  assert.equal(denials(rolloutDir)[0]?.source, "envelope");
 });

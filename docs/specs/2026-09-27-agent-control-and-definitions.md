@@ -1,6 +1,6 @@
 # Agent control, definitions, stall notices and continuation
 
-**Status:** Phases 1, 2 and 4 built 2026-09-27 (`tools/agent-control.ts`; `agent/definitions/`; `tools/agent-continue.ts`). Phase 3 dropped after its §3.2 check found no stalls (§3.0). Phase 5 specified 2026-10-17, not built.
+**Status:** Phases 1, 2 and 4 built 2026-09-27 (`tools/agent-control.ts`; `agent/definitions/`; `tools/agent-continue.ts`). Phase 3 dropped after its §3.2 check found no stalls (§3.0). Phase 5 built 2026-10-17 — §5.3–§5.7 enforcement live (one pure predicate, both call sites, the parent ∩ child intersection, and the denial event); §5.5's sandbox is the half still owed.
 **Branch:** `feat/background-subagents` (PR #38).
 **Source:** a read of `pi-herdsman` (a Pi extension for asynchronous subagents,
 `~/Projects/githubProjects/pi-herdsman`). Most of it coordinates separate Pi
@@ -365,7 +365,9 @@ of operations and targets that a spawn may not exceed.
   is unreachable, and its `TOOL_PERMISSIONS` map (`profiles.ts:263-275`)
   contradicts what the tools declare for themselves — `question: ["network"]`,
   `agent: ["subprocess"]`, `edit: ["file.read","file.write"]` against `[]`,
-  `agent.spawn` and `["file.write"]`. It is a second map, and a stale one.
+  `agent.spawn` and `["file.write"]`. It is a second map, and a stale one. Still
+  present after the enforcement landing, and still unreachable: deleting it is
+  owed (priority plan §6).
 - The operations a tool needs are **already declared per tool**:
   `permissions.operations` (`tools/tool.types.ts:36-53`), read by nothing today,
   alongside `extractTarget` (`permission/rules.ts:56-71`), which already answers
@@ -377,8 +379,10 @@ of operations and targets that a spawn may not exceed.
 
 Operations: the tool's declared `permissions.operations`. Target:
 `extractTarget`. No new tool metadata and no second map — so `TOOL_PERMISSIONS`
-and the unused `ToolContext.permissionProfile` (`tools/types.ts:34`) are deleted
-as part of this phase rather than left as a parallel vocabulary.
+and the unused `ToolContext.permissionProfile` (`tools/types.ts:34`) are
+superseded by the envelope and are owed a deletion rather than left as a parallel
+vocabulary. Until they go, `createToolOrchestrator` staying option-less is what
+keeps that map unreachable.
 
 ### 5.3 File format
 
@@ -472,6 +476,17 @@ envelope:
   It walks symlinks — including a file that does not exist yet, judged by its
   nearest existing ancestor — so a symlink out of the roots is judged by where it
   points. A caller that passes a raw target string instead re-opens that escape.
+- A **path tool called without a path argument** — `ls …`, `glob {pattern}`,
+  `grep {pattern}`, all of which default to the working directory — is judged at
+  the project root, not skipped. "No target to check" is only true at filter time,
+  where there are no arguments at all; at execution a missing or malformed
+  argument means the tool is about to read the session's own directory, which the
+  roots then bound. A malformed argument (a number, a boolean — models emit both)
+  takes the same path, and never reaches `path.resolve`.
+- A **PermissionRequest hook** runs after the ceiling, and may rewrite the call's
+  arguments. The rewritten call is judged again; if it leaves the envelope it is
+  refused outright, and the denial names the hook. Otherwise "nothing downstream
+  can widen it" would be false at the one place a user's own hook runs.
 
 ### 5.5 Shell and the sandbox
 
@@ -514,6 +529,10 @@ envelope:
 - MCP permission rules keep working inside the envelope: name-prefix rules
   match, and an argument pattern on an MCP tool still fails closed
   (`permission/rules.ts:79-84`).
+- A grant matches a tool name exactly, or a server's tools as `mcp__server` — the
+  same grammar `ruleMatches` uses (`permission/rules.ts:94-96`), so
+  `grants: [mcp__linear]` covers `mcp__linear__issues`, and a plain name is never
+  a stem (`grants: [ls]` does not grant `lsp`).
 
 ### 5.7 Denials and observability
 
@@ -552,12 +571,18 @@ envelope:
   inside/outside/below/undeterminable, plus `..` and symlink symmetry, plus the
   parent/child intersection.
 - **Loader**: each rejection case (unknown operation, missing root for a granted
-  path operation, unknown grant name, malformed glob) asserted against its error
-  text, and one accepted definition round-tripped.
+  path operation, unknown grant name) asserted against its error text, and one
+  accepted definition round-tripped. There is no malformed-glob case to assert: a
+  root *is* a glob, so any string is a legal one, and a root that matches nothing
+  simply denies — fail-closed, and pinned by a unit case rather than by a loader
+  error.
 - **Integration**, in a temp tree: a spawn with `write: [docs/**]` writes inside,
   is denied outside by absolute path, `..` and symlink, cannot `cd` outside in a
   shell, cannot background a shell outside, and is denied `lsp` and MCP until
-  they are granted.
+  they are granted. The read axis gets the same treatment, since a read's whole
+  product is what it returns; so does a path tool called with no path argument
+  (`grep {pattern}` over the project root), and a PermissionRequest hook that
+  rewrites a target out of the roots.
 - **Shell**: an ordinary command still runs under the sandbox, and a simulated
   platform without one denies `shell` with the platform reason.
 - **Evals**: the denial path is deterministic, so these tests carry it. A

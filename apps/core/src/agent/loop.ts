@@ -44,7 +44,7 @@ import {
 } from "../providers/cache-warmer.js";
 import type { PermissionRequestResult } from "../hooks/PermissionRequest.js";
 import { evaluatePermission } from "../permission/evaluate.js";
-import { envelopeDecision, intersectEnvelopes } from "../permission/envelope.js";
+import { envelopeDecision, intersectEnvelopes, resolveEnvelopeTarget } from "../permission/envelope.js";
 import { isReadOnlyMode } from "../permission/mode-policy.js";
 import { promptForPermission } from "../permission/prompt.js";
 import { extractTarget, targetKind } from "../permission/rules.js";
@@ -3528,6 +3528,33 @@ export class AgentLoop {
           ...permResult.modifiedInput,
         },
       };
+      // The ceiling was decided against the arguments the model sent, and a
+      // PermissionRequest hook may rewrite them. Judge the rewritten call too:
+      // the envelope is the one thing nothing downstream may widen (§5.4).
+      // Refused outright rather than run with the original arguments — silently
+      // discarding a hook's rewrite is the more surprising half-measure.
+      if (this.state.envelope) {
+        const { kind, target } = resolveEnvelopeTarget(
+          toolCall.tool,
+          toolCall.args as Record<string, unknown>,
+          this.state.projectPath,
+        );
+        const verdict = envelopeDecision({
+          envelope: this.state.envelope,
+          toolName: toolCall.tool,
+          operations: getTool(toolCall.tool)?.permissions?.operations ?? [],
+          kind,
+          ...(target === undefined ? {} : { target }),
+          projectRoot: this.state.projectPath,
+        });
+        if (verdict.decision === "deny") {
+          return this.denyToolCall(
+            toolCall,
+            "envelope",
+            `A permission hook rewrote this call — ${verdict.reason}`,
+          );
+        }
+      }
     }
 
     // Emit tool_start event for streaming

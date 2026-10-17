@@ -173,6 +173,11 @@ lands in `function.denied` with source `envelope`. What remains:
    production `loop.run` site that still takes neither a role nor an envelope. An
    enveloped agent cannot reach it today, because every loop that can hold a
    ceiling sets `finishTests: false`.
+3. Delete the second map. `permission/profiles.ts`'s `TOOL_PERMISSIONS` and the
+   unused `ToolContext.permissionProfile` are superseded by the envelope and are
+   still shipping (unreachable, because `createToolOrchestrator` is called with no
+   options everywhere) — spec §5.1–§5.2 say they go, and a stale map is one bad
+   call site away from becoming a policy again.
 
 ### Acceptance gate
 
