@@ -65,6 +65,26 @@ yet — it records no contamination window and reports `publishable: false`. The
 earlier v2 numbers are historical evidence, not a baseline: all 88 of their
 `grep` calls failed.
 
+**State as of 2026-10-17.** The rerun has happened: `pathology-commits-v4/` holds 9
+trials (3 tasks × 3) of freecode v0.46.1 against `minimax/MiniMax-M3`, harness
+head `12287ced`, isolation container, judged timeout 60 min/trial — 8 trials with
+patches and one empty (`freecode__add-agent-control t1`, 4 s, exit 1). The
+contamination window is fixed. **Judging is deliberately deferred**, so there are
+still no publishable numbers: the first panel run scored every trial with one
+judge (the pinned `gpt-5.5` is retired for this account, so all nine `judge-gpt`
+calls failed) and the harness correctly reported `DEGRADED` /
+`publishable: false` rather than a score. The id is fixed
+(`bench/agent-bench/runner/judge.ts` → `gpt-5.6-luna`). To finish:
+
+```
+pnpm bench:judge bench/agent-bench/results/pathology-commits-v4 --panel --rejudge
+```
+
+Judging is resumable (trials are not). Record the setup table, per-task numbers,
+judge config and a reproduce block in `2026-10-13-long-task-bench-results.md`,
+noting that the gpt half of the panel is `gpt-5.6-luna` where v3-rerun used
+`gpt-5.5`.
+
 ### 4.2 Measurement-gated optimization queue
 
 Do not implement every candidate at once. Use the harness to admit one change at
