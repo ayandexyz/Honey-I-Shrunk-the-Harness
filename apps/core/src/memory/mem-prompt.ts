@@ -160,7 +160,8 @@ function promptHeader(): string[] {
         "Stale or incomplete code does not override a remembered requirement.",
         "For a list, map, or rule set, scan every recalled entry before editing.",
         "Combine compatible facts; preserve every named case and unit, and do not",
-        "stop after the first matches. The current request overrides past turn-local directions",
+        "stop after the first matches. A percentage is not a multiplier: preserve",
+        "its unit and convert it exactly once. The current request overrides past turn-local directions",
         "like 'just acknowledge' or 'do not edit yet'.",
         "Act silently; mention memories only if asked. This block repeats each turn.",
       ];

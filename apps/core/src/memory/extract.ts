@@ -132,6 +132,35 @@ function latestConcreteUserText(transcript: string): string {
   );
 }
 
+function durablePartOfUserText(text: string): string {
+  return text
+    .replace(
+      /\b(?:do not|don't)\s+(?:change|edit|modify)\b[^.!?]*(?:[.!?]|$)/gi,
+      "",
+    )
+    .replace(
+      /\bjust\s+(?:acknowledge|confirm|tell me)\b[^.!?]*(?:[.!?]|$)/gi,
+      "",
+    )
+    .trim();
+}
+
+function proposalsCoverLatest(
+  proposals: Proposal[],
+  latestConcreteUser: string,
+): boolean {
+  const claims = anchorClaims(durablePartOfUserText(latestConcreteUser));
+  if (claims.length === 0) return true;
+  const proposed = new Set(
+    anchorClaims(
+      proposals
+        .map((proposal) => `${proposal.description}\n${proposal.content}`)
+        .join("\n"),
+    ),
+  );
+  return claims.every((claim) => proposed.has(claim));
+}
+
 /**
  * The provider is free to return proposals in any order.  When the bounded
  * write cap is hit, keeping the first N silently drops the fact from the last
@@ -218,26 +247,28 @@ export async function extractMemories(input: ExtractInput): Promise<number> {
     );
     let parsed = parseProposals(raw);
     const latestConcreteUser = latestConcreteUserText(transcript);
-    let retried = false;
     // A cheap extractor occasionally returns [] for an explicit value-bearing
     // fact even though the latest user message contains several concrete
     // anchors (for example `ap-northeast-1` and `10`). Give only that narrow
     // contradiction one second look. Generic chatter and genuine empty turns
     // still cost one call, and the hard write cap remains unchanged.
-    if (parsed.length === 0 && latestConcreteUser) {
-      retried = true;
+    if (
+      latestConcreteUser &&
+      !proposalsCoverLatest(parsed, latestConcreteUser)
+    ) {
       raw = await complete(
         SYSTEM,
-        `Re-evaluate the latest user message. It contains concrete identifiers ` +
-          `or values, so returning [] is correct only if they are not durable. ` +
+        `Re-evaluate the latest user message. The previous proposals omitted ` +
+          `one or more of its concrete identifiers or values. Returning no ` +
+          `proposal for that fact is correct only if it is not durable. ` +
           `Do not save turn-local no-edit or acknowledgement instructions.\n\n` +
           `Latest concrete user message:\n${latestConcreteUser}\n\n` +
           `Session transcript:\n\n${transcript.slice(-MAX_TRANSCRIPT_CHARS)}`,
       );
-      parsed = parseProposals(raw);
+      parsed = [...parsed, ...parseProposals(raw)];
     }
 
-    let proposals = prioritizeLatest(parsed, transcript);
+    const proposals = prioritizeLatest(parsed, transcript);
     const stage: ExtractionTrace = {
       candidates: proposals.map((p) => p.content),
       accepted: [],
@@ -293,8 +324,22 @@ export async function extractMemories(input: ExtractInput): Promise<number> {
         // is usually the extractor reusing a topic slug for a second fact. Keep
         // both bodies rather than silently destroying the first fact; later
         // consolidation can merge them once it has the full candidate set.
+        const existingAnchors = existing
+          ? new Set(anchorClaims(existing.content))
+          : new Set<string>();
+        const incomingAnchors = new Set(anchorClaims(p.content));
+        const independentAnchors =
+          existingAnchors.size > 0 &&
+          incomingAnchors.size > 0 &&
+          ![...existingAnchors].some((claim) => incomingAnchors.has(claim));
+        const correction =
+          /\b(?:correction|corrected|moved|now|instead|replaces?|retired|no longer)\b/i.test(
+            p.content,
+          );
         const collision =
-          existing && lexicalSimilarity(existing.content, p.content) < 0.12;
+          existing &&
+          (lexicalSimilarity(existing.content, p.content) < 0.12 ||
+            (independentAnchors && !correction));
         const content = collision
           ? `${existing.content}\n\n${p.content}`
           : p.content;
@@ -331,30 +376,6 @@ export async function extractMemories(input: ExtractInput): Promise<number> {
     };
 
     saveProposals(proposals);
-
-    // A non-empty model reply can still contribute nothing: cheap extractors
-    // sometimes repeat an existing memory instead of capturing the latest
-    // concrete fact. Treat an all-unchanged/lossy batch like an empty reply and
-    // spend the same single bounded retry on the explicit latest message.
-    const staleBatch =
-      stage.skipped.length > 0 &&
-      stage.skipped.every(
-        ({ reason }) => reason === "unchanged" || reason === "lossy",
-      );
-    if (!retried && saved === 0 && latestConcreteUser && staleBatch) {
-      retried = true;
-      raw = await complete(
-        SYSTEM,
-        `The previous proposals added no new durable information. Extract the ` +
-          `concrete fact in the latest user message instead of repeating an ` +
-          `existing memory. Do not save turn-local no-edit or acknowledgement ` +
-          `instructions.\n\nLatest concrete user message:\n${latestConcreteUser}\n\n` +
-          `Session transcript:\n\n${transcript.slice(-MAX_TRANSCRIPT_CHARS)}`,
-      );
-      proposals = prioritizeLatest(parseProposals(raw), transcript);
-      stage.candidates.push(...proposals.map((p) => p.content));
-      saveProposals(proposals);
-    }
 
     recordExtraction(input, stage);
 

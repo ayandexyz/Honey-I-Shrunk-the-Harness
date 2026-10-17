@@ -136,6 +136,7 @@ test("remembered requirements outrank stale or incomplete code", () => {
   assert.match(rendered, /stale or incomplete code does not override/i);
   assert.match(rendered, /preserve every named case and unit/i);
   assert.match(rendered, /scan every recalled entry before editing/i);
+  assert.match(rendered, /percentage is not a multiplier/i);
   assert.match(rendered, /current request overrides past turn-local directions/i);
   assert.doesNotMatch(rendered, /when the code disagrees, the code wins/i);
 });

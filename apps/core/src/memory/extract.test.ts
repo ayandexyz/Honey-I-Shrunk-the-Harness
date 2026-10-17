@@ -223,10 +223,7 @@ test("an unchanged result retries the latest concrete fact", async () => {
       complete: async (_system, prompt) => {
         calls++;
         if (calls === 1) return JSON.stringify([existing]);
-        assert.match(
-          prompt,
-          /previous proposals added no new durable information/i,
-        );
+        assert.match(prompt, /previous proposals omitted/i);
         return JSON.stringify([
           {
             type: "project",
@@ -500,6 +497,34 @@ test("a low-overlap same-name proposal preserves the earlier fact", async () => 
       "";
     assert.ok(content.includes("SSO is required for all internal tools"));
     assert.ok(content.includes("The SSO provider is Okta"));
+  } finally {
+    cleanup();
+  }
+});
+
+test("independent anchored facts survive a high-overlap topic rewrite", async () => {
+  const { projectPath, cleanup } = fixture();
+  try {
+    await teach(
+      projectPath,
+      withContent(
+        "regional-tax-rates",
+        "The tax rate for us-east-1 is 8.875 percent.",
+      ),
+    );
+    await teach(
+      projectPath,
+      withContent(
+        "regional-tax-rates",
+        "The tax rate for ap-northeast-1 is 10 percent.",
+      ),
+    );
+
+    const content =
+      getMemoryStore(projectPath).load("regional-tax-rates", "project")
+        ?.content ?? "";
+    assert.match(content, /us-east-1.*8\.875 percent/s);
+    assert.match(content, /ap-northeast-1.*10 percent/s);
   } finally {
     cleanup();
   }
