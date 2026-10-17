@@ -78,7 +78,7 @@ test("folds memory calls separately and includes them in total cost", () => {
   assert.equal(trace.memory_ms, 700);
   assert.equal(trace.memoryInputTokens, 1_000_000);
   assert.equal(traceCost(trace)?.usd, 3);
-  assert.match(renderTrace(trace), /memory.*retrieval_judge/);
+  assert.match(renderTrace(trace), /aux.*retrieval_judge/);
 });
 
 test("counts repeated memory exposure separately from unique turns", () => {
@@ -257,6 +257,22 @@ test("a denied call is recorded, and is not counted as a tool that ran", () => {
   // "tools that ran" starts seeing a mutation that never happened.
   assert.equal(trace.toolSpans.length, 0);
   assert.equal(trace.tool_ms, 0);
+});
+
+test("an envelope denial folds the same way, keeping its source", () => {
+  const trace = buildTrace("s1", [
+    event("function.denied", 500, {
+      turnId: "turn-0",
+      tool: "write",
+      args: { filePath: "outside.txt" },
+      source: "envelope",
+      reason: "write to outside.txt is outside this agent's write roots (docs/**)",
+    }),
+  ]);
+  assert.equal(trace.deniedSpans.length, 1);
+  assert.equal(trace.deniedSpans[0].source, "envelope");
+  assert.match(trace.deniedSpans[0].reason, /write roots/);
+  assert.equal(trace.toolSpans.length, 0, "an enveloped refusal is not a tool that ran");
 });
 
 test("denied calls do not consume the pairing state of a real call", () => {
@@ -514,11 +530,18 @@ test("compactions are folded, with the tokens they removed", () => {
     request(0),
     response(1_000, 1_000),
     event("compact.occurred", 1_100, {
-      beforeTokens: 30_000,
-      afterTokens: 8_000,
+      estimatedTranscriptTokensBefore: 30_000,
+      estimatedTranscriptTokensAfter: 8_000,
+      providerRequestTokensBefore: 196_000,
+      messagesBefore: 12,
+      messagesAfter: 4,
+      compactedMessageIds: ["m1", "m2"],
+      preservedMessageIds: ["m3"],
     }),
     request(1_200),
     response(2_000, 800),
+    // Legacy event: beforeTokens/afterTokens were also local estimates. The
+    // fold must keep old logs readable while exposing the explicit new shape.
     event("compact.occurred", 2_100, {
       beforeTokens: 26_000,
       afterTokens: 9_000,
@@ -526,6 +549,25 @@ test("compactions are folded, with the tokens they removed", () => {
   ]);
   assert.equal(trace.compactions, 2);
   assert.equal(trace.compactedTokens, 22_000 + 17_000);
+  assert.equal(trace.compactedEstimatedTranscriptTokens, 22_000 + 17_000);
+  assert.deepEqual(trace.compactionSpans[0], {
+    at: 1_100,
+    estimatedTranscriptTokensBefore: 30_000,
+    estimatedTranscriptTokensAfter: 8_000,
+    providerRequestTokensBefore: 196_000,
+    messagesBefore: 12,
+    messagesAfter: 4,
+    compactedMessageIds: ["m1", "m2"],
+    preservedMessageIds: ["m3"],
+  });
+  assert.equal(
+    trace.compactionSpans[1]?.estimatedTranscriptTokensBefore,
+    26_000,
+  );
+  const rendered = renderTrace(trace);
+  assert.match(rendered, /estimated transcript 30\.0k→8\.0k/);
+  assert.match(rendered, /provider request before=196\.0k/);
+  assert.match(rendered, /messages 12→4/);
 });
 
 test("a run that never compacted reports zero, not undefined", () => {
@@ -534,6 +576,7 @@ test("a run that never compacted reports zero, not undefined", () => {
   const trace = buildTrace("s1", [request(0), response(1_000, 1_000)]);
   assert.equal(trace.compactions, 0);
   assert.equal(trace.compactedTokens, 0);
+  assert.equal(trace.compactedEstimatedTranscriptTokens, 0);
 });
 
 test("a compaction that grew the transcript cannot cancel out a real saving", () => {

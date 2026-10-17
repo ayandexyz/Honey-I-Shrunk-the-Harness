@@ -109,13 +109,13 @@ test("live events render through the same rows as the main transcript", () => {
   assert.equal(v.messageCount(), 1, "deltas share one streaming row");
   assert.match(strip(v.render(80)), /half a sentence/);
 
-  // The preceding streamed text folds into the tool group as narration
+  // The preceding streamed text becomes a blank separator in the tool group
   // instead of staying a standalone row.
   v.apply(toolStart("t1", "read"));
   assert.equal(v.messageCount(), 1, "the preamble folds into the tool group");
   v.apply(toolDone("t1", "read"));
   assert.equal(v.messageCount(), 1, "its completion replaces the progress row");
-  assert.match(strip(v.render(80)), /half a sentence/);
+  assert.doesNotMatch(strip(v.render(80)), /half a sentence/);
 
   // Panel events are a side channel, not transcript rows.
   assert.equal(

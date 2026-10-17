@@ -56,6 +56,56 @@ test("keepLastNUserTurns falls back to the last N assistant turns on a single-pr
   assert.equal(keepLastNUserTurns(messages.slice(0, 3), 2).length, 3);
 });
 
+test("applyCompaction reports the exact persisted message boundary", async () => {
+  const { applyCompaction } = await import("./compact-apply.js");
+  const stored = [
+    msg("user", "u1"),
+    msg("assistant", "a1"),
+    msg("user", "u2"),
+    msg("assistant", "a2"),
+    msg("user", "u3"),
+    msg("assistant", "a3"),
+  ];
+  let replacement: SerializedMessage[] = [];
+
+  const outcome = await applyCompaction({
+    memory: {
+      compact: async () => ({
+        success: true,
+        summary: { content: "summary" },
+        tokenCountBefore: 12_000,
+        tokenCountAfter: 3_000,
+      }),
+    } as never,
+    store: {
+      getMessages: async () => stored,
+      replaceMessages: async (
+        _sessionId: string,
+        messages: SerializedMessage[],
+      ) => {
+        replacement = messages;
+      },
+    } as never,
+    sessionId: "s-boundary",
+    projectPath: "/p",
+    preserveRecentTurns: 1,
+  });
+
+  assert.equal(outcome.messagesBefore, 6);
+  assert.equal(outcome.messagesAfter, 2);
+  assert.deepEqual(outcome.compactedMessageIds, [
+    "user-u1",
+    "assistant-a1",
+    "user-u2",
+    "assistant-a2",
+  ]);
+  assert.deepEqual(outcome.preservedMessageIds, ["user-u3", "assistant-a3"]);
+  assert.deepEqual(
+    replacement.map((message) => message.id),
+    outcome.preservedMessageIds,
+  );
+});
+
 test("compaction forgets which reads are in context, so the next read is real", async () => {
   // Long-task run 2026-10-12: 89 of 100 "unchanged — scroll up" stubs pointed
   // at a read that compaction had already summarised away.
@@ -66,13 +116,31 @@ test("compaction forgets which reads are in context, so the next read is real", 
     const sessionId = `compact-reads-${summary ?? "none"}`;
     getReadState(sessionId).set("/p/a.ts", { ...shown, inContext: true });
     await applyCompaction({
-      memory: { compact: async () => ({ success: true, summary, tokenCountBefore: 9, tokenCountAfter: 1 }) } as never,
-      store: { getMessages: async () => [], replaceMessages: async () => {} } as never,
+      memory: {
+        compact: async () => ({
+          success: true,
+          summary,
+          tokenCountBefore: 9,
+          tokenCountAfter: 1,
+        }),
+      } as never,
+      store: {
+        getMessages: async () => [],
+        replaceMessages: async () => {},
+      } as never,
       sessionId,
       projectPath: "/p",
     });
     return canDedup(getReadState(sessionId).get("/p/a.ts"), shown);
   };
-  assert.equal(await run("summary"), false, "compacted: the stub would point at nothing");
-  assert.equal(await run(undefined), true, "nothing compacted: the earlier read is still there");
+  assert.equal(
+    await run("summary"),
+    false,
+    "compacted: the stub would point at nothing",
+  );
+  assert.equal(
+    await run(undefined),
+    true,
+    "nothing compacted: the earlier read is still there",
+  );
 });

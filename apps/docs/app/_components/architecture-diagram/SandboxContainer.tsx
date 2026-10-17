@@ -7,7 +7,7 @@ export function SandboxContainer() {
       <rect
         x="180"
         y="20"
-        width="800"
+        width="750"
         height="605"
         rx="14"
         className={styles.outerSandbox}

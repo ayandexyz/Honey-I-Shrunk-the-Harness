@@ -124,6 +124,23 @@ test("an empty set renders nothing at all, not an empty header", () => {
   assert.equal(renderRetrievedMemories([]), "");
 });
 
+test("remembered requirements outrank stale or incomplete code", () => {
+  const rendered = renderRetrievedMemories([
+    {
+      ...entry("production-endpoint"),
+      content: "Production moved to https://api.v2.example.invalid.",
+    },
+  ]);
+
+  assert.match(rendered, /unless the current request supersedes/i);
+  assert.match(rendered, /stale or incomplete code does not override/i);
+  assert.match(rendered, /preserve every named case and unit/i);
+  assert.match(rendered, /scan every recalled entry before editing/i);
+  assert.match(rendered, /percentage is not a multiplier/i);
+  assert.match(rendered, /current request overrides past turn-local directions/i);
+  assert.doesNotMatch(rendered, /when the code disagrees, the code wins/i);
+});
+
 test("the cap never truncates mid-memory", () => {
   // Degradation is by whole entries: a body is included or it is not. Half a
   // memory would read as a complete one and mislead the model.
@@ -184,7 +201,7 @@ test("the cap holds at every body size across the boundary", () => {
   // so an off-by-one in the budget check cannot hide between two sample sizes.
   let sawFull = false;
   let sawSummary = false;
-  for (let n = 1_500; n <= 2_100; n++) {
+  for (let n = 1_200; n <= 2_100; n++) {
     const rendered = renderRetrievedMemoriesDetailed([sized("edge", n)]);
     assert.ok(
       utf8(rendered.text) <= MAX_MEMORY_BLOCK_BYTES,
@@ -201,7 +218,7 @@ test("a block that fits exactly at the cap keeps the body", () => {
   // Find the largest body that still renders in full, then check it is exactly
   // at or under the cap and one more byte degrades it.
   let largest = 0;
-  for (let n = 1_500; n <= 2_100; n++) {
+  for (let n = 1_200; n <= 2_100; n++) {
     if (renderRetrievedMemoriesDetailed([sized("exact", n)]).fullCount === 1) {
       largest = n;
     }

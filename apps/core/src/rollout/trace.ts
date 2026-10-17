@@ -95,7 +95,14 @@ export interface ToolSpan {
 /** A background or retrieval model call made by the memory system. */
 export interface MemoryAuxiliarySpan {
   turnId?: string;
-  purpose: "retrieval_judge" | "extraction" | "consolidation" | "final_flush";
+  purpose:
+    | "retrieval_judge"
+    | "extraction"
+    | "consolidation"
+    | "compaction"
+    | "redirection"
+    | "hook"
+    | "final_flush";
   provider: string;
   /** Missing on old or failed events; it deliberately prices as unknown. */
   model?: string;
@@ -108,6 +115,20 @@ export interface MemoryAuxiliarySpan {
   cacheWriteTokens?: number;
   reasoningTokens?: number;
   authMode?: "oauth";
+}
+
+/** A cache-refresh provider attempt, kept separate from foreground turns. */
+export interface CacheWarmSpan {
+  purpose: "cache_warm";
+  provider: string;
+  model: string;
+  startedAt: number;
+  outcome: "succeeded" | "failed";
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  authMode?: "oauth" | "api-key";
 }
 
 /**
@@ -129,6 +150,20 @@ export interface DeniedSpan {
   reason: string;
 }
 
+/** A body-free description of one transcript compaction boundary. */
+export interface CompactionSpan {
+  at: number;
+  /** Local transcript estimates; comparable to each other, not provider usage. */
+  estimatedTranscriptTokensBefore?: number;
+  estimatedTranscriptTokensAfter?: number;
+  /** Measured inclusive input tokens for the provider request before the cut. */
+  providerRequestTokensBefore?: number;
+  messagesBefore?: number;
+  messagesAfter?: number;
+  compactedMessageIds: string[];
+  preservedMessageIds: string[];
+}
+
 export interface Trace {
   sessionId: string;
   startedAt: number;
@@ -137,10 +172,13 @@ export interface Trace {
   modelSpans: ModelSpan[];
   /** Memory retrieval and maintenance calls, separate from foreground turns. */
   auxiliarySpans: MemoryAuxiliarySpan[];
+  cacheWarmSpans: CacheWarmSpan[];
   /** Tools that RAN. A refused call is in `deniedSpans`, never here. */
   toolSpans: ToolSpan[];
   /** Calls refused before execution. Empty on logs predating the event. */
   deniedSpans: DeniedSpan[];
+  /** Compaction boundaries. Legacy events have token estimates only. */
+  compactionSpans: CompactionSpan[];
   /** Sum of model call time; the number that usually explains a slow session. */
   model_ms: number;
   /** Wall time spent in memory retrieval or maintenance model calls. */
@@ -181,7 +219,9 @@ export interface Trace {
    * cannot carry an expectation.
    */
   compactions: number;
-  /** Sum of `beforeTokens - afterTokens` across those compactions. */
+  /** Sum of comparable local transcript estimates removed by compaction. */
+  compactedEstimatedTranscriptTokens: number;
+  /** @deprecated Alias retained for existing trace JSON consumers. */
   compactedTokens: number;
 }
 
@@ -198,13 +238,15 @@ export function buildTrace(
 ): Trace {
   const modelSpans: ModelSpan[] = [];
   const auxiliarySpans: MemoryAuxiliarySpan[] = [];
+  const cacheWarmSpans: CacheWarmSpan[] = [];
   const toolSpans: ToolSpan[] = [];
   const deniedSpans: DeniedSpan[] = [];
+  const compactionSpans: CompactionSpan[] = [];
   const open: ModelSpan[] = [];
   let redirects = 0;
   let redirectsSkipped = 0;
   let compactions = 0;
-  let compactedTokens = 0;
+  let compactedEstimatedTranscriptTokens = 0;
   let memoryExposures = 0;
   let memoryExposureBytes = 0;
   let memoryEstimatedTokens = 0;
@@ -349,6 +391,28 @@ export function buildTrace(
           memoryEstimatedTokens += event.estimatedTokens;
         }
         break;
+      case "cache.warm":
+        cacheWarmSpans.push({
+          purpose: "cache_warm",
+          provider: event.provider,
+          model: event.model,
+          startedAt: event.timestamp,
+          outcome: event.outcome ?? "succeeded",
+          ...(event.inputTokens === undefined
+            ? {}
+            : { inputTokens: event.inputTokens }),
+          ...(event.outputTokens === undefined
+            ? {}
+            : { outputTokens: event.outputTokens }),
+          ...(event.cacheReadTokens === undefined
+            ? {}
+            : { cacheReadTokens: event.cacheReadTokens }),
+          ...(event.cacheWriteTokens === undefined
+            ? {}
+            : { cacheWriteTokens: event.cacheWriteTokens }),
+          ...(event.authMode ? { authMode: event.authMode } : {}),
+        });
+        break;
       case "redirect.triggered":
         redirects++;
         break;
@@ -357,9 +421,33 @@ export function buildTrace(
         break;
       case "compact.occurred":
         compactions++;
-        // A compaction that grew the transcript is not a thing, but clamp
-        // anyway: a negative would quietly cancel out a real saving.
-        compactedTokens += Math.max(0, event.beforeTokens - event.afterTokens);
+        {
+          // Old logs used ambiguous names, but both values were produced by
+          // MemoryService and are therefore local transcript estimates.
+          const estimatedBefore =
+            event.estimatedTranscriptTokensBefore ?? event.beforeTokens;
+          const estimatedAfter =
+            event.estimatedTranscriptTokensAfter ?? event.afterTokens;
+          compactionSpans.push({
+            at: event.timestamp,
+            estimatedTranscriptTokensBefore: estimatedBefore,
+            estimatedTranscriptTokensAfter: estimatedAfter,
+            providerRequestTokensBefore: event.providerRequestTokensBefore,
+            messagesBefore: event.messagesBefore,
+            messagesAfter: event.messagesAfter,
+            compactedMessageIds: event.compactedMessageIds ?? [],
+            preservedMessageIds: event.preservedMessageIds ?? [],
+          });
+          // Only compare the two local estimates. The measured provider count
+          // includes system prompts, tools and other request material and is
+          // diagnostic context, never the other side of this subtraction.
+          if (estimatedBefore !== undefined && estimatedAfter !== undefined) {
+            compactedEstimatedTranscriptTokens += Math.max(
+              0,
+              estimatedBefore - estimatedAfter,
+            );
+          }
+        }
         break;
     }
   }
@@ -388,8 +476,10 @@ export function buildTrace(
     wall_ms: Math.max(0, (now ?? endedAt) - startedAt),
     modelSpans,
     auxiliarySpans,
+    cacheWarmSpans,
     toolSpans,
     deniedSpans,
+    compactionSpans,
     model_ms: modelSpans.reduce((n, s) => n + s.duration_ms, 0),
     memory_ms: auxiliarySpans.reduce((n, s) => n + s.duration_ms, 0),
     tool_ms: toolSpans.reduce((n, s) => n + s.duration_ms, 0),
@@ -409,7 +499,8 @@ export function buildTrace(
     redirects,
     redirectsSkipped,
     compactions,
-    compactedTokens,
+    compactedEstimatedTranscriptTokens,
+    compactedTokens: compactedEstimatedTranscriptTokens,
   };
 }
 

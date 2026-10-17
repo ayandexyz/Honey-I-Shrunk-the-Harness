@@ -1,0 +1,134 @@
+/* Web2 hero treatment — ported from apps/web2/src/styles/global.css.
+   Used only on the docs landing page (.hero-doc scope) so it doesn't
+   leak into the normal Nextra docs chrome. */
+
+.hero-doc {
+	position: relative;
+	isolation: isolate;
+	padding: 4.5rem 0 3rem;
+	display: grid;
+	gap: 1.5rem;
+	justify-items: center;
+	text-align: center;
+}
+
+.hero-doc .eyebrow {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.6rem;
+	padding: 0.4rem 0.8rem;
+	border: 1px solid var(--line);
+	border-radius: 999px;
+	background: var(--surface);
+	color: var(--muted-strong);
+	font-size: 0.85rem;
+}
+
+.hero-doc .eyebrow-dot {
+	width: 0.45rem;
+	height: 0.45rem;
+	border-radius: 50%;
+	background: var(--accent);
+	box-shadow: 0 0 0 3px rgb(167 212 111 / 25%);
+}
+
+.hero-doc .poster-title {
+	width: fit-content;
+	max-width: 100%;
+	margin: 0;
+	font-family: Impact, Haettenschweiler, "Arial Narrow Bold", "Arial Black", sans-serif;
+	font-size: clamp(3.2rem, 7vw, 6.5rem);
+	font-weight: 900;
+	font-stretch: condensed;
+	letter-spacing: -0.055em;
+	line-height: 0.78;
+	text-transform: uppercase;
+}
+
+.hero-doc .poster-title-art {
+	display: grid;
+	gap: 0.12em;
+}
+
+.hero-doc .poster-title-line {
+	display: block;
+	color: #ed001c;
+	filter: drop-shadow(0.075em 0.055em 0 #050505);
+}
+
+.hero-doc .poster-title-rule {
+	display: block;
+	height: 0.32em;
+	background: rgb(27 31 30 / 88%);
+	box-shadow: 0.045em 0.035em 0 rgb(0 0 0 / 75%);
+}
+
+.hero-doc .hero-copy {
+	max-width: 38rem;
+	margin: 0;
+	color: var(--muted-strong);
+	font-size: 1.05rem;
+	line-height: 1.55;
+}
+
+.hero-doc .hero-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.75rem;
+	justify-content: center;
+	margin-top: 0.75rem;
+}
+
+.hero-doc .button {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.45rem;
+	padding: 0.7rem 1.1rem;
+	border-radius: var(--radius-md);
+	font-weight: 600;
+	font-size: 0.95rem;
+	text-decoration: none;
+	transition: background-color 180ms ease, color 180ms ease;
+}
+
+.hero-doc .button-primary {
+	background: var(--brand);
+	color: white;
+}
+
+.hero-doc .button-primary:hover {
+	background: var(--brand-hover);
+}
+
+.hero-doc .button-ghost {
+	background: transparent;
+	color: var(--ink);
+	border: 1px solid var(--line);
+}
+
+.hero-doc .button-ghost:hover {
+	background: var(--surface);
+}
+
+/* Navbar brand: logo + wordmark, mirroring web2's .header-brand. */
+.navbar-brand {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.55rem;
+	height: 2.25rem;
+	color: inherit;
+}
+
+.navbar-brand img {
+	display: block;
+	width: auto;
+	height: 100%;
+	object-fit: contain;
+}
+
+.navbar-brand-wordmark {
+	font-family: var(--sans);
+	font-size: 1.05rem;
+	font-weight: 750;
+	letter-spacing: -0.045em;
+}

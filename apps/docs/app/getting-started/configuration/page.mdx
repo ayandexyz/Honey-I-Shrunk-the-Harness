@@ -108,13 +108,12 @@ FreeCode reads instruction files into the system prompt.
 
 | Location | File |
 | --- | --- |
-| `<project>/` | `CLAUDE.md`, or `AGENTS.md` if the first is absent |
+| Repository hierarchy | `CLAUDE.md`, or `AGENTS.md` if the first is absent, from repository root through the active project |
 | `~/.freecode/` | same pair, applied to every project |
 
-Per location the first non-empty match wins, global comes first in the prompt,
-and the two are capped at 40,000 characters combined
-(`context/instructions.ts:15`). Only the root of the project is read — there is
-no walk-up for monorepo subdirectories and no `@import`.
+Per directory the first non-empty match wins, global comes first in the prompt,
+and repository ancestors are ordered from root to active project. Bounded
+relative `@import`s and matching `.freecode/rules/*.md` files are supported.
 
 `/init` will write a first draft by reading the repository. Treat what it
 produces as a starting point: this file is where "run `pnpm check-types`, not

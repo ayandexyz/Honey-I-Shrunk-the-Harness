@@ -310,7 +310,7 @@ This set is reported **beside** the SWE-bench number, never instead of it.
 | Candidate commits (BuffBench's `basicFilter` + app scope) | `pnpm bench:commits` | built, free |
 | HARD screen + task generator (GPT-5.5 via `codex exec`) | `pnpm bench:tasks generate` | built; pilot made 10 drafts |
 | Owner review | `pnpm bench:tasks list` / `approve` | built |
-| Judging: Haiku scores, GPT audits 20% + fallback (default); full panel optional | `runner/judge-audit.ts`, `runner/judge.ts` | built; panel live-tested |
+| Judging: Haiku scores, GPT audits 20% + fallback (default); full panel optional; `--judges` swaps in the free DeepSeek judge (`opencode run`) | `runner/judge-audit.ts`, `runner/judge.ts`, `runner/{claude,codex,opencode}-complete.ts` | built; panel live-tested |
 | Trials on judged tasks (setup, 60-min timeout, final checks) | `pnpm bench:agents --set freecode-commits [--isolate]` | built |
 | Judging step + BuffBench's metrics | `pnpm bench:judge` | built; smoke-tested (real diff 10.0, empty 0.0) |
 | In-container install + checks for `--isolate` | (part of `bench:agents`) | built, unit-tested; **not yet run live** (needs the `docker` group and a rebuilt image) |
@@ -339,7 +339,9 @@ pnpm bench:tasks approve --by <you> <id|short-sha>...    # or --all
 #    image with pnpm in it: rebuild once with `pnpm bench:image` (online).
 pnpm bench:agents --set freecode-commits --trials 3 --isolate [--instances add-x,fix-y]
 
-# 5. Judge (resumable; --rejudge to redo, --panel for both judges on every trial)
+# 5. Judge (resumable; --rejudge to redo, --panel for both judges on every trial).
+#    --judges picks the panel by name: haiku,gpt (default) / deepseek,glm (free, no subscription)
+#    --judge-timeout <minutes> raises BuffBench's 20 per judge; a free-tier judge needs it
 pnpm bench:judge bench/agent-bench/results/<run>
 ```
 
@@ -385,18 +387,36 @@ minutes per run), per-app and co-author columns, cost on tasks both agents solve
 (≥7.5), wide trial spreads, saturated tasks, and audit and fallback counts. Its
 first line is the verdict: *scored by judge-haiku, audited by judge-gpt*, or audit
 **UNMEASURED** or **FAILED**, which means a published number needs `--panel`.
+`--judges haiku,deepseek` picks the panel by name (default `haiku,gpt`; first is
+the primary, and the pair that ran is written into `judged-report.json`).
 `publishable` is true only for an isolated run with verified judging (audit
 passed, or full panel with ≤10% of trials scored by fewer than two judges) and
 a passed contamination check.
 
 **Prerequisites.**
 - `codex` CLI installed and logged in (`codex login`). Screen, generator and
-  the GPT judge all run `codex exec -m gpt-5.5` on that login.
+  the GPT judge all run `codex exec -m gpt-5.6-luna` on that login.
 - `claude` CLI (Claude Code) logged in to your Claude subscription. The Haiku
   judge runs `claude -p --model claude-haiku-4-5` on that login — no API key.
+- Neither of those subscriptions? `--judges deepseek,glm` needs no login at all: the
+  DeepSeek and GLM judges run `opencode run -m opencode/deepseek-v4.1-flash-free` and
+  `-m opencode/glm-5.3-flash-free` on OpenCode's free tier. They have to go through
+  OpenCode's own binary — the free tier answers every other client (including core, and
+  including with an API key) with `FreeTierError` — so their context carries OpenCode's
+  `build` agent preamble and tools, and their `judgeTokens` rows count calls only. A free
+  judge is also slower, so raise the 20-minute cap with `--judge-timeout <minutes>`: a
+  judge that times out leaves its trial one judge short, and that shortfall is the only
+  thing the 10% bar counts. One judge cannot clear that bar at all: `--judges deepseek
+  --panel` runs, and reports DEGRADED, rather than a publishable number. Measured on the
+  2026-10-17 judged set (9 trials, twice): 12 calls, 10 scored, 2 came back unparseable —
+  both on `add-agent-control`, the task with the largest diff — and each is counted as a
+  **blackout**, which scores that trial 0. Which trial loses is not fixed, so it is noise
+  rather than one bad task; pair the free judges with Haiku rather than publishing from
+  them alone.
 - Neither judge may share a model family with the agents' pinned model:
   `assertNoCollision` refuses MiniMax judges while agents run MiniMax-M3, and
-  would refuse the GPT judge if agents were pinned to an OpenAI model.
+  would refuse the GPT judge if agents were pinned to an OpenAI model, or the
+  DeepSeek/GLM judges if they were pinned to a DeepSeek or GLM one.
 
 **Judging is audit mode by default.** Haiku 4.5 scores every trial (primary
 since 2026-10-13; it was Gemini 3.5 Flash until that key went invalid). GPT

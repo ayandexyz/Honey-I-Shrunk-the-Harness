@@ -112,8 +112,16 @@ export interface FunctionOutputEvent extends BaseEvent {
 }
 
 /** Which gate refused the call. Kept distinct so "the mode forbids this" and
- *  "the user said no" do not read as the same event. */
-export type DenySource = "hook" | "mode" | "rule" | "permission-hook" | "user" | "role";
+ *  "the user said no" do not read as the same event. `envelope` is the agent's
+ *  own declared ceiling, which outranks every other gate. */
+export type DenySource =
+  | "hook"
+  | "mode"
+  | "rule"
+  | "permission-hook"
+  | "user"
+  | "role"
+  | "envelope";
 
 /**
  * A tool call the model made that never ran.
@@ -141,8 +149,22 @@ export interface FunctionDeniedEvent extends BaseEvent {
 
 export interface CompactOccurredEvent extends BaseEvent {
   type: "compact.occurred";
-  beforeTokens: number;
-  afterTokens: number;
+  /** @deprecated Legacy local transcript estimate. */
+  beforeTokens?: number;
+  /** @deprecated Legacy local transcript estimate. */
+  afterTokens?: number;
+  /** Local MemoryService transcript estimate before compaction. */
+  estimatedTranscriptTokensBefore?: number;
+  /** Local MemoryService transcript estimate after compaction. */
+  estimatedTranscriptTokensAfter?: number;
+  /** Inclusive input-token count reported for the last provider request. */
+  providerRequestTokensBefore?: number;
+  messagesBefore?: number;
+  messagesAfter?: number;
+  /** Body-free session-store entry ids removed from the active transcript. */
+  compactedMessageIds?: string[];
+  /** Body-free session-store entry ids retained in the active transcript. */
+  preservedMessageIds?: string[];
 }
 
 /**
@@ -161,6 +183,8 @@ export interface SubagentStartEvent extends BaseEvent {
   type: "subagent.start";
   subagentId: string;
   task: string;
+  /** Definition/type used for cost attribution (for example `verifier`). */
+  agentType?: string;
 }
 
 export interface SubagentStopEvent extends BaseEvent {
@@ -225,6 +249,13 @@ export interface ModelRequestEvent extends BaseEvent {
   /** Approximate serialized prompt size; catches runaway context growth. */
   promptChars: number;
   streamed: boolean;
+  /**
+   * How the call will authenticate, stamped from the same resolution the
+   * request used. Recorded here because a request without a terminator (a
+   * killed process) has no `model.response` to carry it, and the cost ledger
+   * must not report a subscription call as API-key.
+   */
+  authMode?: "oauth" | "api-key";
 }
 
 /** Time to first chunk — separates "provider never started" from "died mid-stream". */
@@ -237,6 +268,12 @@ export interface ModelFirstTokenEvent extends BaseEvent {
 export interface ModelResponseEvent extends BaseEvent {
   type: "model.response";
   turnId: string;
+  /**
+   * The `id` of the `model.request` this call terminated. A turn can hold
+   * several attempts (recovery retries), so the turn alone cannot say which
+   * one a response belongs to.
+   */
+  requestId?: string;
   provider: string;
   /** What we asked for — the same id `model.request` carries. */
   model: string;
@@ -270,6 +307,9 @@ export interface ModelResponseEvent extends BaseEvent {
 export interface ModelErrorEvent extends BaseEvent {
   type: "model.error";
   turnId: string;
+  /** The `id` of the `model.request` this failure terminated. See
+   *  `ModelResponseEvent.requestId`. */
+  requestId?: string;
   provider: string;
   model: string;
   duration_ms: number;
@@ -293,7 +333,14 @@ export interface ModelErrorEvent extends BaseEvent {
 export interface MemoryAuxiliaryEvent extends BaseEvent {
   type: "memory.auxiliary";
   turnId?: string;
-  purpose: "retrieval_judge" | "extraction" | "consolidation" | "final_flush";
+  purpose:
+    | "retrieval_judge"
+    | "extraction"
+    | "consolidation"
+    | "compaction"
+    | "redirection"
+    | "hook"
+    | "final_flush";
   provider: string;
   model?: string;
   duration_ms: number;
@@ -331,7 +378,13 @@ export interface MemoryExposureEvent extends BaseEvent {
    * `unjudged`: retrieval's candidates, sent before the judge's verdict landed
    * (cold path only). `disabled`: automatic recall is off for this request.
    */
-  preparation: "fresh" | "carried" | "pending" | "empty" | "unjudged" | "disabled";
+  preparation:
+    | "fresh"
+    | "carried"
+    | "pending"
+    | "empty"
+    | "unjudged"
+    | "disabled";
   judgeDecision:
     | "judge_ran"
     | "disabled"
@@ -478,6 +531,8 @@ export interface CacheWarmEvent extends BaseEvent {
   cacheReadTokens?: number;
   cacheWriteTokens?: number;
   authMode?: "oauth" | "api-key";
+  /** Missing on older logs, where cache.warm meant success. */
+  outcome?: "succeeded" | "failed";
 }
 
 // ============================================================================

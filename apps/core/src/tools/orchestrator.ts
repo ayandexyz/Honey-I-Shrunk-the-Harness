@@ -5,7 +5,6 @@
 // OUTPUT: ToolResult (agent/types.ts format)
 // RESPONSIBILITIES:
 //   - Tool lookup via getTool()
-//   - Permission checking against profile
 //   - Param validation against JSON schema
 //   - Execution via tool.execute()
 //   - Error mapping (not found, validation, runtime)
@@ -14,10 +13,13 @@
 
 import type { ToolCall, ToolResult } from "../agent/types.js";
 import { getTool, type ToolContext } from "./index.js";
-import { isToolAllowed, type PermissionProfile } from "../permission/index.js";
 import type { Tool } from "./tool.types.js";
 import { isTransientError } from "../agent/recovery/manager.js";
-import { getOutputStore, adaptiveTruncate } from "./output-store/index.js";
+import {
+  getOutputStore,
+  adaptiveTruncate,
+  boundDisplayOutput,
+} from "./output-store/index.js";
 import { maybeCompressOutput } from "./output-compress.js";
 import { coerceArgs } from "./coerce-args.js";
 import { logger } from "../utils/logger.js";
@@ -25,7 +27,6 @@ import { logger } from "../utils/logger.js";
 // Cap on the UI-bound copy of a tool result (displayOutput/stdout). Formerly
 // bash's own 500KB pre-store cap; it lives here so it applies after the
 // OutputStore put and to every tool, not just bash.
-const MAX_DISPLAY_CHARS = 500_000;
 
 // =============================================================================
 // Orchestrator Interface
@@ -34,14 +35,6 @@ const MAX_DISPLAY_CHARS = 500_000;
 export interface ToolOrchestrator {
   execute(call: ToolCall, ctx: ToolContext): Promise<ToolResult>;
   canExecute(tool: string): boolean;
-}
-
-// =============================================================================
-// Orchestrator Options
-// =============================================================================
-
-export interface OrchestratorOptions {
-  permissionProfile?: PermissionProfile;
 }
 
 // =============================================================================
@@ -117,7 +110,8 @@ async function checkToolPermissions(
 }
 
 // =============================================================================
-// Default tool context when none provided
+// Default tool context for standalone, projectless calls. Session execution
+// must always pass an explicit context rooted at its projectPath.
 // =============================================================================
 
 const defaultToolContext: ToolContext = {
@@ -127,14 +121,10 @@ const defaultToolContext: ToolContext = {
 
 // =============================================================================
 // createToolOrchestrator()
-// Factory function with optional permission profile
+// Factory function for the tool orchestrator
 // =============================================================================
 
-export function createToolOrchestrator(
-  opts: OrchestratorOptions = {},
-): ToolOrchestrator {
-  const { permissionProfile } = opts;
-
+export function createToolOrchestrator(): ToolOrchestrator {
   return {
     // ===========================================================================
     // execute()
@@ -145,20 +135,6 @@ export function createToolOrchestrator(
       ctx: ToolContext = defaultToolContext,
     ): Promise<ToolResult> {
       const { id: toolId, tool } = call;
-
-      // 0. Permission check (orchestrator level)
-      if (permissionProfile) {
-        const permCheck = isToolAllowed(tool, permissionProfile);
-        if (!permCheck.allowed) {
-          return {
-            id: `result-${Date.now()}`,
-            toolCallId: toolId,
-            tool,
-            title: `Tool ${tool}`,
-            error: `Permission denied: ${permCheck.reason}`,
-          };
-        }
-      }
 
       // 1. Look up tool
       const toolDef = getTool(tool) as Tool | undefined;
@@ -267,7 +243,11 @@ export function createToolOrchestrator(
         const r = execResult.result as unknown;
         const structured =
           r && typeof r === "object" && typeof (r as any).output === "string"
-            ? (r as { title?: string; output: string; metadata?: Record<string, unknown> })
+            ? (r as {
+                title?: string;
+                output: string;
+                metadata?: Record<string, unknown>;
+              })
             : null;
         const output = structured
           ? structured.output
@@ -292,11 +272,7 @@ export function createToolOrchestrator(
         // (spec 2026-09-04-harness-cost-efficiency.md D1). Tail-keep: the end
         // of tool output (errors, summaries) is worth more on screen than the
         // head, which stays retrievable from the store.
-        const display =
-          output.length > MAX_DISPLAY_CHARS
-            ? `[showing last ${MAX_DISPLAY_CHARS} chars; full output available via the output tool]\n` +
-              output.slice(-MAX_DISPLAY_CHARS)
-            : output;
+        const display = boundDisplayOutput(output).displayOutput;
         return {
           id: `result-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
           toolCallId: toolId,
@@ -326,12 +302,6 @@ export function createToolOrchestrator(
     // Quick check if tool is registered
     // ===========================================================================
     canExecute(tool: string): boolean {
-      if (permissionProfile) {
-        return (
-          isToolAllowed(tool, permissionProfile).allowed &&
-          getTool(tool) !== undefined
-        );
-      }
       return getTool(tool) !== undefined;
     },
   };

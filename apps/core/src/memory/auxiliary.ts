@@ -13,6 +13,9 @@ export type MemoryAuxiliaryPurpose =
   | "retrieval_judge"
   | "extraction"
   | "consolidation"
+  | "compaction"
+  | "redirection"
+  | "hook"
   | "final_flush";
 
 export interface MemoryAuxiliaryCall {

@@ -18,16 +18,18 @@
 
 import { getProvider } from "../providers/index.js";
 import type { ProviderId } from "../providers/index.js";
-import { getMemoryStore } from "./mem-store.js";
+import { getMemoryStore, type MemoryStore } from "./mem-store.js";
 import {
   AUTHORABLE_MEMORY_TYPES,
   type MemoryEntry,
   type MemoryType,
 } from "./mem-types.js";
 import { containsSecret } from "./graph/secret-filter.js";
+import { uncoveredClaims } from "./claim-anchors.js";
 import { BusEvents } from "../bus/index.js";
 import { logger } from "../utils/logger.js";
 import type { MemoryAuxiliaryObserver } from "./auxiliary.js";
+import type { ConsolidationTrace, MemoryWriteTrace } from "./failure-trace.js";
 
 export const MAX_MERGES = 5;
 export const MAX_PROMOTES = 3;
@@ -106,6 +108,8 @@ export interface ConsolidateInput {
   complete?: (system: string, prompt: string) => Promise<string>;
   /** Reports provider usage when this path makes a real auxiliary call. */
   onAuxiliaryCall?: MemoryAuxiliaryObserver;
+  /** Records the write path for failure diagnosis (plan 2026-10-15 §5 Phase 0). */
+  trace?: MemoryWriteTrace;
 }
 
 export interface ConsolidationResult {
@@ -113,6 +117,8 @@ export interface ConsolidationResult {
   promoted: number;
   episodes: number;
   deleted: number;
+  /** Merges refused because the replacement did not carry a source's claims. */
+  skippedMerges: number;
   /** False when nothing was applied — the caller must not advance the baseline. */
   ok: boolean;
 }
@@ -122,6 +128,7 @@ const EMPTY: ConsolidationResult = {
   promoted: 0,
   episodes: 0,
   deleted: 0,
+  skippedMerges: 0,
   ok: false,
 };
 
@@ -269,9 +276,24 @@ export async function consolidateMemories(
     }
 
     const store = getMemoryStore(input.projectPath);
+    const stage: ConsolidationTrace = {
+      sources: [],
+      proposal: [],
+      live: [],
+      deleted: [],
+    };
+    // Captured before the merge, and only when a trace was asked for: this is
+    // the list of bodies the model was shown, which `live` no longer contains.
+    if (input.trace) {
+      stage.sources = store
+        .list()
+        .filter((e) => input.shownNames.has(e.name))
+        .map((e) => e.content);
+    }
     const saved: Array<{ type: string; name: string }> = [];
     let merged = 0;
     let deleted = 0;
+    let skippedMerges = 0;
 
     for (const m of plan.merges.slice(0, MAX_MERGES)) {
       // The model cannot delete something it was never shown.
@@ -287,6 +309,28 @@ export async function consolidateMemories(
         continue;
       }
 
+      // Phase 2 (plan 2026-10-15 §5): the replacement must carry every specific
+      // claim of the memories it consumes — the entry it rewrites and each one
+      // named in `supersedes`. A missing claim means the source is kept and the
+      // merge reported as skipped: a delete a retry cannot undo is the one act
+      // worth refusing on a guess.
+      const consumed = [
+        existing,
+        ...targets.map((name) => findByName(store.list(), name)),
+      ].filter((e): e is MemoryEntry => e !== undefined);
+      const uncovered = consumed.flatMap((e) =>
+        uncoveredClaims(e.content, m.content),
+      );
+      if (uncovered.length > 0) {
+        skippedMerges++;
+        logger.debug("[MemoryConsolidate] merge skipped: claims uncovered", {
+          into: m.into,
+          supersedes: targets,
+          uncovered,
+        });
+        continue;
+      }
+
       store.save({
         ...existing,
         description: m.description,
@@ -296,10 +340,14 @@ export async function consolidateMemories(
       });
       merged++;
       saved.push({ type: existing.type, name: existing.name });
+      stage.proposal.push(m.content);
 
       for (const name of targets) {
         const victim = findByName(store.list(), name);
-        if (victim && store.delete(victim.name, victim.type)) deleted++;
+        if (victim && store.delete(victim.name, victim.type)) {
+          deleted++;
+          stage.deleted.push(victim.name);
+        }
       }
     }
 
@@ -349,8 +397,13 @@ export async function consolidateMemories(
     // keeps its slot until a run actually gives it the fold-first pass.
     for (const name of input.overflowEpisodes ?? []) {
       if (!input.shownNames.has(name)) continue;
-      if (store.delete(name, "episode")) deleted++;
+      if (store.delete(name, "episode")) {
+        deleted++;
+        stage.deleted.push(name);
+      }
     }
+
+    recordConsolidation(input, stage, store);
 
     // Tell the user, on the wire that already exists. Emitted on the bus rather
     // than the turn stream: consolidation finishes after the turn's `done`, so
@@ -359,7 +412,7 @@ export async function consolidateMemories(
       BusEvents.memorySaved(input.sessionId, saved);
     }
 
-    return { merged, promoted, episodes, deleted, ok: true };
+    return { merged, promoted, episodes, deleted, skippedMerges, ok: true };
   } catch (error) {
     // `{ error }` serialises an Error to `{}`, which is what this line used to
     // do — useless exactly when it matters.
@@ -376,4 +429,22 @@ function findByName(
   // A name held by two types is ambiguous; guessing here can merge into — or
   // delete — the wrong-type memory, which a retry cannot undo. Refuse instead.
   return matches.length === 1 ? matches[0] : undefined;
+}
+
+/**
+ * Seal the consolidation stage. "Final live entries" is the whole store after
+ * the pass, so a fact the merge carried into the surviving body — or one it
+ * never touched — still reads as live.
+ *
+ * Skipped unless the caller asked for a trace: the list walk only exists to
+ * feed the record.
+ */
+function recordConsolidation(
+  input: ConsolidateInput,
+  stage: ConsolidationTrace,
+  store: MemoryStore,
+): void {
+  if (!input.trace) return;
+  stage.live = store.list().map((e) => e.content);
+  input.trace.consolidation = stage;
 }

@@ -239,31 +239,16 @@ the page would block the very page that carries the token to the API.
 
 ## Known gaps
 
-1. **`METHODS` covers 24 of 49 methods.** Everything under `memory.*`,
-   `config.*`, `models.*`, and half of `session.*` (`fork`, `switch`, `archive`,
-   `delete`, `export`, `import`, `upload`, `download`, `getInterrupted`) is
-   implemented in `server.ts` but absent from `protocol.ts`. A frontend calling
-   those gets no compile-time checking at all, which is exactly what the map
-   exists to provide.
-2. **`session.send`'s declared result is wrong.** `METHODS` says
-   `StreamResponse | { queued: true; id: string }`, but the handler resolves with
-   a `LoopResult` (`{ success, message, content, thinking, turnCount,
-   iterationCount, finalState }`). Its declared params also omit `model` and
-   `agentMode`, both of which the handler reads.
-3. **No `-32602` anywhere.** Handlers cast `params as { … }` with no runtime
-   validation, so a missing or mistyped field surfaces as `undefined` deep inside
-   a handler — usually as a confusing `-32603` — instead of "invalid params" at
-   the boundary. The protocol has a code for this; nothing uses it.
-4. **Stream events aren't JSON-RPC notifications.** A standard notification
+1. **Stream events aren't JSON-RPC notifications.** A standard notification
    (`{ jsonrpc, method, params }`, no `id`) would be self-describing; the current
    heuristic means any event needing a field called `jsonrpc` would be
    misclassified as a response, and any result object with a `type` field as an
    event.
-5. **One streaming call at a time per client.** The TUI holds a single
+2. **One streaming call at a time per client.** The TUI holds a single
    `activeStreamId` and a single `onStreamEvent` slot (`client.ts:46`), so
    although the bridge stamps `sessionId` for multiplexing, this client can't
    drive two concurrent sessions over one process.
-6. **No batch support.** JSON-RPC batch arrays are unspecified and unhandled on
+3. **No batch support.** JSON-RPC batch arrays are unspecified and unhandled on
    both transports.
 
 ## Where to look

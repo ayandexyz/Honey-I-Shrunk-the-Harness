@@ -16,7 +16,7 @@ export function MemoryNode({ selectedNode, onSelectNode }: MemoryNodeProps) {
       onClick={() => onSelectNode("memory")}
     >
       {/* Database cylinders */}
-      <g transform="translate(710, 440)">
+      <g transform="translate(630, 440)">
         <rect
           x="0"
           y="0"
@@ -77,7 +77,7 @@ export function MemoryNode({ selectedNode, onSelectNode }: MemoryNodeProps) {
       </g>
 
       <text
-        x="760"
+        x="680"
         y="583"
         className={styles.dbCompactLabel}
         textAnchor="middle"

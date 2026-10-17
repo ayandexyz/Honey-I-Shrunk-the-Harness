@@ -113,26 +113,27 @@ denials.
 
 ### Project instructions
 
-`compileInstructionsSection` (`context/instructions.ts:36`) reads two
-directories, in prompt order:
+`loadInstructions` (`context/instructions.ts`) reads instructions in this
+prompt order:
 
 1. Global — `~/.freecode/`
-2. Project root — the project directory
+2. Repository hierarchy — repository root through the active project
+3. Matching scoped rules — sorted `.freecode/rules/*.md` files
 
-Within each, `CLAUDE.md` wins over `AGENTS.md`, and only the **first non-empty
-match** is used — they don't merge. Each is rendered with its own header:
+Within each directory, `CLAUDE.md` wins over `AGENTS.md`, and only the **first
+non-empty match** is used. Explicit `@import path` directives expand relative
+to their source, subject to real-path boundary, cycle, depth, file-count, and
+byte-budget checks. Each source is rendered with its own header:
 
 ```
 Instructions from: /home/you/project/CLAUDE.md
 <contents>
 ```
 
-The joined section is capped at 40,000 characters. Note the cap applies *after*
-joining, and global comes first, so an oversized global file can crowd the
-project's own instructions out of the prompt entirely.
-
-There is no walk-up for monorepos, no `@imports`, and no glob-scoped rules —
-all deliberately deferred, and tracked in `TODO.md`.
+Scoped rules use frontmatter such as `globs: [src/**/*.ts]` and are included
+only when a matching file is in the frozen session scope. `/context` reports
+each source, scope, and byte/token estimate without returning instruction
+contents.
 
 ### Skills and memory guidance
 
@@ -298,17 +299,13 @@ there is what the tools are for.
    `CLAUDE.md` in particular also covers an edited `AGENTS.md`, a skill
    appearing or disappearing, and whatever joins that block later. The MCP
    tool-set gap is a separate site and is still open.
-6. ~~The 40,000-character instruction cap truncates mid-file, after joining.~~
-   **Fixed** (2026-09-08). `compileInstructionsSection` allocates the budget
-   most specific first, so a fat global `CLAUDE.md` can no longer push the
-   project's own file out. Every casualty is named: a cut file carries
-   `[Truncated: <path> did not fit …]`, one squeezed out entirely is still
-   listed with `[Omitted: …]` rather than vanishing, and both paths `logger.warn`.
-   Prompt order stays global-then-project regardless of allocation order.
-7. **Instruction resolution is root-only.** No walk-up for monorepos, no
-   `@imports`, no glob-scoped rules — so a package inside a monorepo cannot ship
-   instructions that apply only to it. Deferred deliberately; tracked in
-   `ROADMAP.md` as extensibility item 4.
+6. Instruction loading is now bounded by import depth/file/byte limits and
+   scoped-rule selection, while user-authored instruction files are not
+   truncated. `/context` exposes source metadata without contents.
+7. **Instruction hierarchy is implemented.** Resolution walks the repository
+   hierarchy, expands bounded imports, and applies matching `.freecode/rules/`
+   files. Static source ordering is frozen for the session to preserve
+   prompt-cache stability.
 8. **`invalidateSymbolCache` has no callers.** The repo-map's whole-project cache
    relies entirely on git HEAD plus a 5-minute TTL, so uncommitted edits inside
    that window return stale `workspaceSymbol` results. The tree-watcher already

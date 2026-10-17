@@ -6,6 +6,7 @@ import {
   assertNoCollision,
   judgePanel,
   parseJudging,
+  resolveJudges,
   type Judging,
 } from "./judge.js";
 import { JUDGE_SYSTEM, renderJudgePrompt, type JudgeInput } from "./judge-prompt.js";
@@ -140,6 +141,56 @@ test("the panel is two judges from two families, and never the model under test"
     () => assertNoCollision(JUDGES, "openai/gpt-5.5"),
     /model under test/,
     "the codex judge runs OpenAI's model, so an OpenAI agent model collides with it",
+  );
+});
+
+test("resolveJudges: the default pair, a panel named by --judges, and a typo refused", () => {
+  assert.deepEqual(resolveJudges(), JUDGES);
+  assert.deepEqual(
+    resolveJudges("deepseek").map((j) => j.id),
+    ["judge-deepseek"],
+  );
+  assert.deepEqual(
+    resolveJudges("haiku,deepseek").map((j) => j.id),
+    ["judge-haiku", "judge-deepseek"],
+  );
+  assert.deepEqual(
+    resolveJudges(" gpt, deepseek ").map((j) => j.provider),
+    ["codex", "opencode"],
+  );
+  assert.throws(() => resolveJudges("gpt5"), /unknown judge "gpt5": known judges: haiku, gpt, deepseek, glm/);
+  assert.throws(() => resolveJudges(""), /unknown judge ""/);
+});
+
+test("the second OpenCode judge is glm-5.3-flash-free, and glm is a family", () => {
+  const [glm] = resolveJudges("glm");
+  assert.deepEqual(glm, { id: "judge-glm", provider: "opencode", model: "glm-5.3-flash-free" });
+  assert.deepEqual(
+    resolveJudges("deepseek,glm").map((j) => j.id),
+    ["judge-deepseek", "judge-glm"],
+    "two free judges, both through opencode run",
+  );
+  assert.doesNotThrow(() => assertNoCollision([glm], "minimax/MiniMax-M3"));
+  assert.throws(() => assertNoCollision([glm], "glm-5.3"), /model under test/);
+});
+
+test("the deepseek judge is OpenCode's client, and the family rule knows deepseek", () => {
+  const [deepseek] = resolveJudges("deepseek");
+  assert.deepEqual(deepseek, {
+    id: "judge-deepseek",
+    provider: "opencode",
+    model: "deepseek-v4.1-flash-free",
+  });
+  assert.doesNotThrow(() => assertNoCollision([deepseek], "minimax/MiniMax-M3"));
+  assert.throws(
+    () => assertNoCollision([deepseek], "deepseek-v4.1-flash"),
+    /model under test/,
+    "a DeepSeek agent cannot be judged by the DeepSeek judge",
+  );
+  assert.throws(
+    () => assertNoCollision([deepseek], "ollama-cloud/deepseek-v4-pro:0813"),
+    /model under test/,
+    "the family is DeepSeek, not one id and not one provider",
   );
 });
 

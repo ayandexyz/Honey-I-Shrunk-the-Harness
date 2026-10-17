@@ -180,7 +180,17 @@ export function summarize(rows: JudgedRow[], versus = "freecode"): JudgedSummary
  * Spec §6.6, full-panel mode: two-judge only while at most 10% of trials were
  * scored by fewer than two judges. `ok` is false on no trials at all.
  */
-export function panelVerdict(counts: JudgedSummary["counts"], trials: number): { ok: boolean; share: number } {
-  const share = trials ? (counts.degraded + counts.blackout) / trials : 1;
+/**
+ * `judges` is how many the panel was configured with. A panel of one scores
+ * every trial with one judge by construction, and its counts look clean —
+ * nothing failed — so counting only failures would report it as a two-judge
+ * run. That silence is how BuffBench's panel quietly became one model.
+ */
+export function panelVerdict(
+  counts: JudgedSummary["counts"],
+  trials: number,
+  judges = 2,
+): { ok: boolean; share: number } {
+  const share = judges < 2 ? 1 : trials ? (counts.degraded + counts.blackout) / trials : 1;
   return { ok: trials > 0 && share <= MAX_ONE_JUDGE_SHARE, share };
 }

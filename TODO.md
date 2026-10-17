@@ -4,11 +4,10 @@ Debt only: bugs, dead code, stale docs, uncalibrated numbers. **This file is
 meant to shrink** — the "Real fixes" here are what must reach zero before
 1.0.0. Verify each entry against the code before fixing (several audit
 sections predate the provider refactor); delete an entry, and its twin in the
-docs page's *Known gaps*, in the same PR that fixes it.
+docs page's _Known gaps_, in the same PR that fixes it.
 
 Not here: unbuilt features → `ROADMAP.md`; deliberate behaviour that must not
 be "fixed" → `docs/DECISIONS.md`.
-
 
 ## Small known limitations
 
@@ -30,49 +29,6 @@ error, interrupt and session switch. Details and acceptance criteria are in
 `docs/2026-10-11-performance-recommendations.md` §2. Pair it with §4: smooth
 `scrollIntoView` on every update (`chat/MessageList.tsx:11`) and un-memoized
 `marked.parse` in `TextPart.tsx` will be hit far more often once deltas render.
-
-### TUI holds the progress row for 500ms after every reply (found 2026-10-11)
-
-**Status:** confirmed, presentation delay only.
-
-`submitPrompt` (`apps/tui/src/index.ts:2354`) sleeps 500ms after the final
-token stats arrive so the user can read them, then removes the in-progress row.
-The working state ends half a second after the backend has finished, on every
-turn. Fix: keep the final stats in a settled row and end the working indicator
-immediately. See `docs/2026-10-11-performance-recommendations.md` §1.
-
-### `freecode eval` does not exit after printing its results (found 2026-09-24)
-
-**Status:** confirmed, wastes wall-clock only, not money. Pre-dates the
-checkpoints branch.
-
-A `pnpm eval trajectory --trials 1` run printed `25/25 cases passed` and its
-cost summary, then sat for **18 minutes** without exiting, until killed. During
-the stall the process was idle in `do_epoll_wait` — 25s of CPU across 22
-minutes, **no open TCP sockets**, no child `git`. So it is not a provider call
-(and the 300s header timeout would have fired three times over); it is a
-non-daemon handle keeping the event loop alive after the suite is done.
-
-Prime suspect is the MCP stdio client. The run spawns `npm exec
-@agentmemory/mcp` — imported from Claude Code's config by
-`mcp/claude-code-config.ts` — and that child was still alive, idle, with 0s of
-CPU. Nothing in the eval path appears to call a shutdown/`close()` on the MCP
-clients when a suite finishes.
-
-Why it matters beyond patience: `.github/workflows/eval.yml` runs `trajectory
---gate` nightly. A job that never exits burns the runner's whole timeout and
-reports as a timeout failure, not as the green run it actually was.
-
-**Cause: confirmed 2026-09-24.** `FREECODE_MCP_CLAUDE_CODE=0 pnpm eval:gate`
-ran all three suites to completion. Without it the `&&` chain cannot advance
-past the first suite at all, because the chain only proceeds when trajectory
-*exits* — so this bug does not merely delay `eval:gate`, it prevents coding and
-judged from ever running.
-
-Fix: close the MCP clients when a suite finishes (or open them lazily, since
-no eval case uses an MCP tool). Reproduce with `pnpm eval trajectory --trials
-1` and Claude Code MCP servers present in `~/.claude.json`.
-
 
 ### The compaction eval cases are 20KB JSONL lines (added 2026-09-08, updated 2026-09-29)
 
@@ -120,7 +76,7 @@ header prefix to `RATE_LIMIT_HEADER_PREFIXES` so it waits the window out. Spec
 
 **Status:** known, bounded, low priority.
 
-`ShellRegistry` caps *running* shells at `MAX_SHELLS_PER_SESSION` (16) but does
+`ShellRegistry` caps _running_ shells at `MAX_SHELLS_PER_SESSION` (16) but does
 not cap settled ones — a completed shell keeps its record and up to
 `SHELL_BUFFER_CHARS` (256k) of output until the user presses `d` in `/shells`
 or the session ends. A long session that backgrounds many short commands
@@ -172,15 +128,6 @@ Each is also listed in that page's **Known gaps** section. Deliberate behaviour 
 - [ ] **Dangling wikilinks are invisible** — skipped correctly (`builder.ts:78`),
       but a typo'd `[[link]]` never surfaces anywhere. The explorer should list
       unresolved links.
-- [ ] **`compact.occurred` under-reports what compaction did** — it records
-      `MemoryService`'s ESTIMATED transcript sizes, while the real trim is
-      `keepLastNUserTurns` over the session store. Measured on the new
-      `compaction-boundary` eval case: the event says 872 → 748 tokens for a
-      request that measured 16K. So `freecode trace` and the harness's
-      `Trace.compactedTokens` understate compaction by an order of magnitude.
-      `ApplyCompactionResult` already carries `messagesBefore`/`messagesAfter`
-      and neither is recorded — record those, and the measured count alongside
-      the estimate.
 - [ ] **Dead export: `renderPromptMemoryContext()`** (`selector.ts:64`) —
       referenced only by `loop.ts` comments explaining why it must not be used.
 - [ ] **`getContextLimit(model)` ignores its argument** (`tokens.ts:20`) and
@@ -188,27 +135,13 @@ Each is also listed in that page's **Known gaps** section. Deliberate behaviour 
 - [ ] **Blocked-compaction retry threshold is hardcoded** — fixed 5,000 tokens
       (`service.ts:34`, flagged `ponytail` in-code); make it a `CompactionConfig`
       field if a hook ever needs tighter control.
-- [ ] **`METHODS` declares 24 of 49 implemented IPC methods** — all of `memory.*`,
-      `config.*`, `models.*`, and `session.{fork,switch,archive,delete,export,
-      import,upload,download,getInterrupted}` exist in `server.ts` but not in
-      `packages/shared/src/ipc/protocol.ts`. Frontends calling them get zero
-      compile-time checking, which is the entire purpose of that map.
-      (`CLAUDE.md` describes it as the source of truth — it isn't yet.)
-- [ ] **`METHODS["session.send"]` is wrong** — declares
-      `StreamResponse | { queued, id }` as the result; the handler resolves a
-      `LoopResult` (`agent/types.ts:309`). Declared params also omit `model` and
-      `agentMode`, both read by the handler (`server.ts:376`).
-- [ ] **No `-32602` invalid-params validation** — every handler does
-      `params as { … }` with no runtime check, so a missing or mistyped field
-      becomes `undefined` deep inside and surfaces as a confusing `-32603`.
-      A one-line guard per handler (or a shared validator keyed off `METHODS`)
-      would move the failure to the boundary where it belongs.
 - [ ] **TUI client can only stream one session at a time** — single
       `activeStreamId` + single `onStreamEvent` slot (`apps/tui/src/ipc/client.ts:46`),
       even though `bus/bridge.ts` stamps `sessionId` specifically to allow
       multiplexing. Blocks any multi-session UI over one core process.
 
         One thing I checked and didn't report as a bug: manual /compact builds its own MemoryService separate from the loop's. That would be a divergence risk,
+
   except a fresh loop (and service) is constructed per turn at server.ts:199 and reloads state from disk, so they stay consistent.
 
 ## Docs-audit findings (reference: CLI, settings, env, IPC, hooks — 2026-08-23)
@@ -262,7 +195,7 @@ that page's **Known gaps**.
       `compaction/tokens.ts:105`). `FREECODE_MAX_TURN_TOKENS` is unset unless the
       user sets it, so nothing caps actual spend. `freecode run` now has
       `--max-turns` for a turn cap, but nothing caps tokens by default, and
-      loop-health only *warns* on the stuck patterns most likely to burn quota
+      loop-health only _warns_ on the stuck patterns most likely to burn quota
       (stagnation never stops at all). Consider a default ceiling for headless
       runs.
 
@@ -353,20 +286,9 @@ page's **Known gaps**.
       at all.
 - [ ] **`checkPermissions` has no implementers.** The orchestrator calls it when
       present (`orchestrator.ts:107`); no tool defines it.
-- [ ] **Permission profiles are unreachable.** `createToolOrchestrator()` is
-      called with no arguments at all three production sites (`loop.ts:331`,
-      `effect/layers.ts:63`, `:179`), so `permissionProfile` is always `undefined`
-      and the `isToolAllowed` branch (`orchestrator.ts:145`, `:286`) never runs.
-      `CLAUDE.md` says profiles are "used for subagents" — they are used nowhere.
-      Either pass a profile when spawning a subagent or drop `profiles.ts`.
 - [ ] **`executeTool` in `factory.ts:88` is dead code**, exported and re-exported
       from `tools/index.ts` but called by nothing; it also implements a different
       result contract from the orchestrator's.
-- [ ] **`tool_complete` streams the full untruncated output over IPC.** The
-      event carries `result.stdout` (`loop.ts:2280`), correct for rendering but
-      uncapped — a 10 MB `bash` result crosses the boundary in one message.
-      Consider a display cap with a "show more" fetch, mirroring the `output`
-      tool.
 - [ ] **`read`'s image path pays before the visibility check.** The tool
       base64-encodes any supported image up to 10 MB and returns it as
       `metadata.image`; whether the model can see images is only decided later in
@@ -380,8 +302,8 @@ Found while writing `apps/docs/app/getting-started` (installation, quickstart,
 providers, configuration). Each is also listed in that page's **Known gaps**.
 Items already tracked elsewhere (`providers.list` returning models.dev's whole
 catalogue, the `gemini`/`google` id mismatch, hooks not loading under
-`freecode run`, MCP being user-scope only, root-only instruction files) are cited
-on the pages but not repeated here.
+`freecode run`, and MCP being user-scope only) are cited on the pages but not
+repeated here.
 
 ### Real fixes
 
@@ -520,11 +442,6 @@ From the first `pnpm bench:pathology` over 12,370 runs (HARNESS-BENCH.md §3b):
       `grep` calls in them failed (no `rg` in the image; tool, image and
       `bench:pathology` fixed 2026-10-13), so every v2 number carries that
       handicap. Rebuild with `pnpm bench:image` first.
-- [x] ~~**Measured input shrink per compaction is ~5% and sometimes negative**~~
-      Checked on real long sessions (v2 long-task trials): 61–70% shrink per
-      compaction, no compaction loops. The ~5% is the `compaction-boundary`
-      eval case's tiny thresholds, not a bug. The real compaction cost is the
-      rereads (item above). Full write-up: `docs/2026-10-13-long-task-bench-results.md`.
 
 ## Spec findings (eval harness — 2026-08-23)
 
@@ -533,12 +450,6 @@ spec's §12; these are the parts that are actionable independently of it.
 
 ### Real fixes
 
-- [ ] **There is no cost accounting in USD anywhere.** `usage/tracker.ts` records
-      tokens and `usage.get` serves them, but a price table exists in exactly one
-      file — `providers/minimax.ts`. A shared `providers/pricing.ts` keyed by
-      `provider/model` would give `freecode trace`, `usage.get`, and the eval
-      harness's efficiency scorer a real number. Without it, "this change made
-      every turn 18% more expensive" is undetectable.
 - [ ] **OTLP export has no session-level root span** (`rollout/otlp.ts`). Model
       spans are emitted per call, so a multi-turn session renders in Langfuse as N
       unrelated LLM calls. An `invoke_agent` root span plus
@@ -561,7 +472,7 @@ spec's §12; these are the parts that are actionable independently of it.
 
 ### Docs findings (eval Phase 2 — sandbox + outcome scorer, 2026-08-27)
 
-- [ ] **`bash` escapes the sandbox.** `eval/sandbox.ts` scopes the *file* tools
+- [ ] **`bash` escapes the sandbox.** `eval/sandbox.ts` scopes the _file_ tools
       and the runner's permission answers to the tmpdir, but a coding case needs
       `bash` and `bash` reaches the whole filesystem (spec §6.3 says so
       explicitly). Cases are trusted fixtures, so this is a limit rather than a
@@ -594,7 +505,7 @@ spec's §12; these are the parts that are actionable independently of it.
       keep sitting there looking like a source of truth. It already misled the
       eval spec (§5.1's table, corrected in §8.1).
 - [ ] **`eval add` cannot harvest a coding case.** A recorded session has no
-      `files` fixture, so `--suite coding` is refused. Harvesting a *sandboxed*
+      `files` fixture, so `--suite coding` is refused. Harvesting a _sandboxed_
       case would mean reconstructing the fixture from the tool calls that
       created it — possible in principle, not attempted.
 - [ ] **`expectMaxTurns` is harvested as the observed count exactly**, so a
@@ -611,7 +522,7 @@ spec's §12; these are the parts that are actionable independently of it.
       cannot be priced without threading that through.
 - [ ] **The built-in price table has no refresh path.** Six models, stamped
       `PRICES_AS_OF = "2026-05"`. Nothing warns when it goes stale, and a stale
-      table is only safe because the contract is *comparison, not billing* —
+      table is only safe because the contract is _comparison, not billing_ —
       which holds only while everyone remembers it.
 - [ ] **`attrs()` in `rollout/otlp.ts` rounds numerics to integers**, with an
       explicit `FRACTIONAL` exception set. Adding a future rate-valued
@@ -648,7 +559,7 @@ Closes the four items above that stood between "the harness runs" and "the
 harness can block a release". Remaining:
 
 - [ ] **`evalsDir()` is still CWD-relative.** `pnpm eval` covers a checkout and
-      the CI workflow sets nothing, but an *installed* binary run from anywhere
+      the CI workflow sets nothing, but an _installed_ binary run from anywhere
       but a repo root still needs `FREECODE_EVALS_DIR`.
 - [ ] **No shipped case pins `model`**, though spec §11 says every one should.
       The hazard — comparing across models — is now caught by `baselineFor`
@@ -678,21 +589,10 @@ Spec `specs/2026-08-23-memory-consolidation.md`; benchmark findings that contrad
 It also found two bugs every unit test passed through — a citation tag that
 streamed to the user, and citations parsed and then dropped by an `unref`'d
 debounce on a short-lived process. Both are fixed; the fixes are in
-`CitationStreamFilter` and `UsageStore`'s synchronous exit flush. One
-limitation is still open:
-
-- [ ] **Headless runs never complete background memory work.** `freecode run`
-      exits before fire-and-forget extraction or consolidation lands. Fine for
-      the daemon (the TUI stays alive), but it means scripted runs never
-      consolidate. Consider awaiting them on the headless path with a budget.
+`CitationStreamFilter` and `UsageStore`'s synchronous exit flush.
 
 ### Still open
 
-- [ ] **Wire up LongMemEval-S** (`bench/longmemeval.ts`). The committed corpus
-      was written by the same people who wrote the retriever; it catches
-      regressions and proves nothing about absolute quality. LongMemEval-S uses
-      `all-MiniLM-L6-v2`, the embedder we already run, so agentmemory's published
-      numbers are a directly comparable baseline.
 - [ ] **Measure the judge with a real model.** Every judge figure so far is from
       `--judge=oracle`, a perfect reader, and is therefore a ceiling.
 - [ ] **Watch the judge degradation rate.** It fails closed, so a provider
@@ -745,25 +645,6 @@ for what makes its long-running sessions survivable.
 
 ### Long-session fidelity
 
-- [ ] **Compaction summarizes the original task away.** `selectForCompaction`
-      preserves only the tail — last `preserveRecentTurns: 2` user turns capped
-      at `maxPreserveRecentTokens: 8_000` (`compaction/types.ts:62-63`) — and
-      takes `messages.slice(0, firstPreservedIndex)` for the summary
-      (`compaction/selector.ts:54`). No head carve-out, so the founding
-      instruction is compacted first and, on the next compaction, the summary of
-      it is re-summarized. Lossy compounding on the oldest content, which is a
-      plausible mechanism for long-session drift off the brief. OpenHands'
-      `CondensationEvent.summary_offset` implies a head-preserving condenser
-      (inference — their SDK is a separate repo, not readable locally).
-
-- [ ] **`compact.occurred` records magnitude, not content.**
-      `rollout/types.ts:125` carries `beforeTokens`/`afterTokens` only. When a
-      long session forgets something, "which events left the view" is the first
-      question `freecode trace` should answer. OpenHands' `CondensationEvent`
-      carries `forgotten_event_ids`. The ids are known at the call site and
-      contain no message bodies, so this does not threaten the leak-free OTLP
-      constraint.
-
 - [ ] **`rollout/history.ts` has no range query.** `loadSessionEvents` (whole
       file), `getEventsByType`, `getEventCount` — no cursor, no timestamp
       window. Prerequisite for backing SSE replay with the durable log rather
@@ -788,7 +669,7 @@ page's Known gaps.
 
 - [ ] **Tool names are forwarded unmapped on the OAuth path.** jcode renames
       tools to the ones Claude Code ships; freecode does not. Spec §9 Q1 — a
-      tool-use-*quality* question, not an access or billing one, and it waits on
+      tool-use-_quality_ question, not an access or billing one, and it waits on
       a real turn.
 
 ## Findings (ephemeral-tail cache fix — 2026-09-06)
@@ -805,7 +686,7 @@ anchors). Detector gained a one-sample deferral for provider blips
       from a real rewrite by usage numbers alone and produces the same warning.
       `FREECODE_DEBUG_CACHE=1` segment hashes are the manual tiebreak.
 - [ ] **The UserPromptSubmit hook no longer sees memory/todo/reminder text.**
-      The hook rewrites the joined *system* prompt, and those blocks are message
+      The hook rewrites the joined _system_ prompt, and those blocks are message
       content now. No known hook depended on them; if one surfaces, the hook
       contract needs a decision (expose the tail read-only, or accept the loss).
 - [ ] **`FREECODE_EPHEMERAL_TAIL=0` should eventually be deleted.** It existed
@@ -819,81 +700,16 @@ anchors). Detector gained a one-sample deferral for provider blips
       counts creep after this change, the nudge's salience as the final user
       message is the first suspect.
 
-## Eval-harness finding (memory-system review — 2026-09-06)
-
-- [ ] **Eval turns inject the developer's live memory store, so trajectory runs
-      are environment-dependent.** `eval/runner.ts` sets `projectPath:
-      process.cwd()` and the loop's `prepareMemories` runs against
-      `~/.freecode/projects/<repo>/memory` — a store that grows with every real
-      session on the machine. Measured 2026-09-06: the recorded 23/24 baseline
-      was unreproducible on the same commit (`main` re-run scored 23/24 but
-      flipped `no-tool-for-live-infra-data`, closing the gate; a fix branch with
-      byte-identical injection behavior scored 22 then 21). Off-topic prompts
-      like the live-infra case get a full 8-memory block (vector cosine floor,
-      see `memory/bench/README.md`), and that block differs per machine and per
-      week. Fix shape: the runner should isolate memory for unsandboxed cases
-      (point the store at an empty temp dir, or a committed fixture store) so a
-      case's verdict depends on the code, not on what the developer did
-      yesterday. Until then, cross-day gate deltas on trajectory are partly
-      memory-store drift.
-
 ## Found running the release gate on feat/memory-efficiency (2026-09-26)
 
-- [ ] **`bash` runs in the process cwd, not the session's project.**
-      `agent/loop.ts:3043` builds the tool context with `cwd: process.cwd()`
-      beside `projectPath: this.state.projectPath` (unchanged since May), and
-      `tools/bash.ts` runs in `ctx.cwd`. So a sandboxed eval case's shell
-      commands execute in the developer's repo — a `coding` trial on
-      2026-09-26 ran `node dump.mjs | grep -c ERR > answer.txt` and wrote
-      `answer.txt` (`0`) into the repo root ("Cannot find module
-      '/home/ayan-de/Projects/freecode/dump.mjs'"). The case still passed via
-      absolute paths, so scores were unaffected, but the isolation `CLAUDE.md`
-      describes for fixture cases does not hold for `bash`. In production it
-      bites a daemon serving a session whose `projectPath` differs from where
-      it started. Fix is `cwd: this.state.projectPath ?? process.cwd()`
-      (and the orchestrator default); it changes every `bash` call's cwd, so
-      it wants a test plus an `eval ab` per `CLAUDE.md`.
-- [ ] **The judged gate compares across a judge switch.** `baselineFor`
-      (`eval/report.ts:100`) refuses a baseline from a different `authMode`
-      but not from a different `judge`. With Gemini out of quota the judged
-      gate ran on `anthropic/claude-haiku-4-5` and reported "regression: 4/6
-      vs baseline 6/6" against Gemini-graded history. Key the baseline on
-      `SuiteReport.judge` the way it already keys on `authMode`.
 - [ ] **Haiku 4.5 misapplies the `answer-quality` rubric.** It scored
       `admit-what-is-not-there` 1–2 for correct, tool-free answers ("made
       claims without reading any files") that Gemini scored 5/5 seventeen
       times; the rubric says to penalise only a claim the tool list
-      *contradicts*. Do not use it as the judged-gate judge until
+      _contradicts_. Do not use it as the judged-gate judge until
       `freecode eval calibrate` has human labels showing it agrees.
 - [ ] **`frustrated-user-gets-no-padding` answers from `CLAUDE.md` without
       reading.** 3/3 tool-free with memory recall off too, occasionally wrong
       ("nothing is written to history") or self-contradicting ("No… Yes") —
       the same flakiness Gemini scored 0/1/3 on 2026-09-06/08. Pre-existing,
       not this branch; a candidate for `evals/quarantine.txt` with that reason.
-
-## Found running the memory long-horizon savings-curve experiment (2026-09-26)
-
-`evals/memory-long-horizon.jsonl`, `long-incremental-assembly` (three tax
-rates taught across six sessions, one probe that needs all three). Its fixture
-confound — `regions.mjs` was immutable although the teaching says "the rate
-table lives in regions.mjs" — is fixed (`595b9dd3`), and an oracle solution
-passes `verify`. The re-run (`evals/experiments.jsonl`
-`2026-09-26-memory-long-horizon-3`, rejected) is still 0/3 vs 0/3, now for
-memory reasons. Evidence is store sizes plus the model's stated recall; the
-stores are deleted after each trial, so contents were not read directly —
-set `FREECODE_EVAL_KEEP_SANDBOX=1` and keep the store to confirm.
-
-- [ ] **The last-taught fact is not retained.** Session 6 ("the region table
-      also needs ap-northeast-1 at 10 percent") grew the store in 0 of 3
-      candidate trials. In the one trial where consolidation did nothing, the
-      model used the first two rates correctly and had no ap-northeast-1 —
-      so the fact was either never extracted or overwritten in place under an
-      existing memory name (`extract.ts` saves over a same-name entry rather
-      than merging content). Distinguish the two before fixing.
-- [ ] **Consolidation lost a fact it had.** In 2 of 3 candidate trials the
-      forced pass merged 2 and deleted 2 memories right before the scored
-      turn, and the probe then used a rate taught earlier wrongly
-      (us-east-1 = 0) or not at all (eu-west-2 missing). Same shape as spec
-      §7.2's rejected `consolidate-production-endpoint` result — a merge that
-      drops content from the entries it folds together. Check what the merge
-      prompt keeps when combining entries that each hold part of a table.

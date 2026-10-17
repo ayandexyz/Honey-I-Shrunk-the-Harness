@@ -3,6 +3,7 @@
 // Spec: docs/specs/2026-07-18-permission-rules.md §1
 // =============================================================================
 
+import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import type { PermissionRule, PermissionRuleSet, PermissionSettings } from "./rule-types.js";
@@ -68,6 +69,21 @@ export function extractTarget(toolName: string, args: Record<string, unknown>): 
   return undefined;
 }
 
+/** Which argument family a tool's target belongs to. `undefined` means the tool
+ *  has no target an envelope can bound (spec §5.6), so it needs a grant. */
+export function targetKind(
+  toolName: string,
+): "path" | "url" | "command" | "agent" | undefined {
+  const tool = toolName.toLowerCase();
+  if (PATH_TOOLS.has(tool)) return "path";
+  if (URL_TOOLS.has(tool)) return "url";
+  if (COMMAND_TOOLS.has(tool)) return "command";
+  // The agent family is gated by its own `agent.spawn` operation: its "target"
+  // is a sub-agent type, which no root can bound.
+  if (tool === "agent" || tool === "agent_send" || tool === "agent_stop") return "agent";
+  return undefined;
+}
+
 export function ruleMatches(
   rule: PermissionRule,
   toolName: string,
@@ -114,7 +130,11 @@ function matchBash(pattern: string, command: unknown): boolean {
   return !SHELL_SEPARATORS.test(cmd);
 }
 
-function matchPath(pattern: string, target: string | undefined, projectRoot: string): boolean {
+/**
+ * The path-rule matcher, shared with the agent envelope's root check
+ * (`permission/envelope.ts`) so both read roots with one grammar (spec §5.3).
+ */
+export function matchPath(pattern: string, target: string | undefined, projectRoot: string): boolean {
   if (!target) return false;
   const absTarget = path.resolve(projectRoot, expandHome(target));
   let glob: string;
@@ -139,6 +159,30 @@ function matchPath(pattern: string, target: string | undefined, projectRoot: str
 
 function expandHome(p: string): string {
   return p.startsWith("~/") ? path.join(os.homedir(), p.slice(2)) : p;
+}
+
+/**
+ * `realpathSync`, except for a path that does not exist yet: it walks up to the
+ * nearest existing ancestor and re-appends the rest, so a file about to be
+ * created is judged by the directory it lands in.
+ *
+ * A symlink is the obvious way past a string comparison, so every caller that
+ * decides containment resolves through this first (`autonomous/envelope.ts`'s
+ * `insideTree`, `permission/envelope.ts`'s target check).
+ */
+export function realpathOrSelf(p: string): string {
+  let current = p;
+  const tail: string[] = [];
+  for (;;) {
+    try {
+      return path.join(fs.realpathSync(current), ...tail.reverse());
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return p; // hit the root; nothing resolvable
+      tail.push(path.basename(current));
+      current = parent;
+    }
+  }
 }
 
 /** Gitignore-style glob: `**` crosses directories, `*`/`?` do not */

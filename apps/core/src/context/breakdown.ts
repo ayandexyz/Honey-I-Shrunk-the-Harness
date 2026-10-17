@@ -20,11 +20,13 @@
 
 import type {
   ContextBreakdown,
+  ContextInstructionSource,
   ContextSegmentId,
   ContextSegmentStat,
 } from "@thisisayande/freecode-shared";
 import type { SerializedMessage } from "../session/store.js";
 import { PromptCompiler } from "./compiler.js";
+import { collectScopePaths } from "./instructions.js";
 import { getFrozenSessionContext } from "./session-context.js";
 import { estimateTokenCount } from "../compaction/tokens.js";
 import { MemoryService } from "../compaction/service.js";
@@ -106,8 +108,9 @@ export async function buildContextBreakdown(
   // Read the session's frozen project context up front — the compiler needs the
   // project name, and the dynamic-message section below needs the tree/clock.
   const frozen = getFrozenSessionContext(sessionId, projectPath);
-  const compiler = new PromptCompiler(projectPath, frozen.ctx.name, agentMode);
+  const compiler = new PromptCompiler(projectPath, frozen.ctx.name, agentMode, collectScopePaths(projectPath));
   const segments: ContextSegmentStat[] = [];
+  let instructionSources: ContextInstructionSource[] | undefined;
   const push = (id: ContextSegmentId, label: string, tokens: number): void => {
     if (tokens > 0) segments.push({ id, label, tokens });
   };
@@ -115,6 +118,7 @@ export async function buildContextBreakdown(
   // --- static system blocks -------------------------------------------------
   for (const segment of await compiler.buildStaticSegments(provider, model)) {
     push(segment.id, segment.label, estimateTokenCount(segment.text));
+    if (segment.id === "project-instructions") instructionSources = segment.sources;
   }
 
   // --- tool schemas ---------------------------------------------------------
@@ -189,5 +193,6 @@ export async function buildContextBreakdown(
     toolCount: tools.length,
     mcpToolCount: mcpCount,
     messageCount: messages.length,
+    instructionSources,
   };
 }

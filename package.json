@@ -38,7 +38,10 @@
     "test:jcode-bench": "tsc -p bench/jcode-bench/tsconfig.json && tsx --test bench/jcode-bench/runner/*.test.ts",
     "test:harness-signals": "tsc -p bench/harness-signals/tsconfig.json && tsx --test bench/harness-signals/*.test.ts",
     "bench:jcode:regrade": "tsx bench/jcode-bench/runner/regrade.ts",
-    "bench:unwired": "tsx bench/harness-signals/unwired-calibrate.ts"
+    "bench:unwired": "tsx bench/harness-signals/unwired-calibrate.ts",
+    "bench:local": "tsx bench/local-performance/run.ts",
+    "bench:local:publish": "tsx bench/local-performance/run.ts --json-out apps/web/app/data/performance/local.json",
+    "test:local-bench": "tsc -p bench/local-performance/tsconfig.json && tsx --test bench/local-performance/*.test.ts"
   },
   "devDependencies": {
     "@changesets/cli": "^2.31.0",

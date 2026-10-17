@@ -11,6 +11,7 @@ import type {
   PromptHook,
   ToolCallInput,
 } from "../types.js";
+import type { MemoryAuxiliaryObserver } from "../../memory/auxiliary.js";
 
 const PROMPT_HOOK_TIMEOUT_MS = 30 * 1000;
 
@@ -57,6 +58,10 @@ export async function executePromptHook(
   const userPrompt = `${hook.prompt}\n\nTool: ${input.toolName}\nInput: ${JSON.stringify(input.toolInput, null, 2)}`;
 
   const controller = new AbortController();
+  const startedAt = Date.now();
+  const onAuxiliaryCall = context.onAuxiliaryCall as
+    | MemoryAuxiliaryObserver
+    | undefined;
   const timeoutId = setTimeout(
     () => controller.abort(),
     timeout ?? PROMPT_HOOK_TIMEOUT_MS,
@@ -71,8 +76,24 @@ export async function executePromptHook(
       abortSignal: controller.signal,
     });
 
+    onAuxiliaryCall?.({
+      purpose: "hook",
+      provider: result.provider,
+      model: result.model,
+      duration_ms: Date.now() - startedAt,
+      outcome: "succeeded",
+      usage: result.usage,
+    });
+
     return parsePromptHookDecision(result.content);
   } catch (err) {
+    onAuxiliaryCall?.({
+      purpose: "hook",
+      provider: providerId,
+      model,
+      duration_ms: Date.now() - startedAt,
+      outcome: "failed",
+    });
     return {
       success: false,
       blocked: false,

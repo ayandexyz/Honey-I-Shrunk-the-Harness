@@ -17,7 +17,9 @@ import { buildTool } from "./factory.js";
 import { BASH_DESCRIPTION } from "./bash-prompt.js";
 import { classifyCommand } from "./output-compress.js";
 import { spawnShell } from "./shells/spawn.js";
-import type { SpawnedShell } from "./shells/spawn.js";
+import type { SpawnedShell, ShellSandbox } from "./shells/spawn.js";
+import { envelopeAxes, sandboxAvailable } from "../sandbox/index.js";
+import { SHELL_DENIED_NO_SANDBOX } from "../permission/envelope.js";
 import { getShellRegistry, shellSessionOf } from "./shells/index.js";
 import type { ShellRegistry, ShellStartOptions } from "./shells/registry.js";
 import type { ShellSummary } from "./shells/types.js";
@@ -137,6 +139,29 @@ function resolveCwd(params: BashParams, ctx: ToolContext): string {
     : path.resolve(ctx.cwd, params.workdir);
 }
 
+/**
+ * The mount boundaries for this shell, or undefined when nothing constrains it.
+ *
+ * An envelope owns the boundary when there is one: its write roots are mounted
+ * read-write and everything else stays read-only (spec §5.5). An unattended run
+ * without an envelope keeps its single writable tree. A boundary the planner
+ * cannot represent exactly, or a build with no bubblewrap, denies the shell
+ * instead of running it with a wider boundary than the agent declared.
+ *
+ * Throws rather than returning a reason: every caller already has a catch that
+ * turns it into a readable tool error, and a throw cannot be mistaken for "no
+ * sandbox wanted".
+ */
+function shellSandboxFor(ctx: ToolContext): ShellSandbox | undefined {
+  if (!ctx.envelope) return ctx.unattended?.sandbox;
+  // The loop's permission gate already denies an unsandboxable `shell` with
+  // this same reason; this covers a direct `tools.call`, which skips it.
+  if (!sandboxAvailable()) throw new Error(SHELL_DENIED_NO_SANDBOX);
+  const verdict = envelopeAxes(ctx.envelope, ctx.projectPath ?? ctx.cwd);
+  if (!verdict.ok) throw new Error(`shell is denied: ${verdict.reason}`);
+  return verdict.axes;
+}
+
 export async function _executeBash(
   params: BashParams,
   ctx: ToolContext,
@@ -203,7 +228,7 @@ export function trackShell(
     command: params.command,
     cwd,
     owner: sessionId,
-    sandbox: ctx.unattended?.sandbox,
+    sandbox: shellSandboxFor(ctx),
     onData: (id, chunk) => {
       BusEvents.stream(rootId, {
         type: "shell_output",
@@ -341,7 +366,7 @@ function runForeground(
     );
     let spawned: SpawnedShell;
     try {
-      spawned = spawnShell(params.command, cwd, ctx.unattended?.sandbox);
+      spawned = spawnShell(params.command, cwd, shellSandboxFor(ctx));
     } catch (error) {
       resolve({
         success: false,

@@ -8,7 +8,13 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTestLayer } from "../effect/layers.js";
@@ -19,7 +25,12 @@ import { MemoryService } from "../compaction/service.js";
 import { createRecorder } from "../rollout/recorder.js";
 import { registerProvider } from "../providers/registry.js";
 import type { ProviderId } from "../providers/config.js";
-import type { AIProvider, ExecuteOptions, ProviderChunk, SystemBlock } from "../providers/types.js";
+import type {
+  AIProvider,
+  ExecuteOptions,
+  ProviderChunk,
+  SystemBlock,
+} from "../providers/types.js";
 
 const MARKER = "export const restoredMarker = 42;";
 const info = {
@@ -42,14 +53,32 @@ registerProvider("restore-fake" as ProviderId, {
   info,
   create: (): AIProvider => ({
     info,
-    execute: async () => ({ content: "summary of the earlier work", stopReason: "stop", provider: "restore-fake", model: "fake-model" }),
+    execute: async () => ({
+      content: "summary of the earlier work",
+      stopReason: "stop",
+      provider: "restore-fake",
+      model: "fake-model",
+    }),
     // Each run: read one file, then stop.
-    stream: async function* (opts: ExecuteOptions): AsyncGenerator<ProviderChunk> {
+    stream: async function* (
+      opts: ExecuteOptions,
+    ): AsyncGenerator<ProviderChunk> {
       const sys = opts.system;
-      systems.push(typeof sys === "string" ? sys : ((sys as SystemBlock[] | undefined) ?? []).map((b) => b.text).join("\n"));
+      systems.push(
+        typeof sys === "string"
+          ? sys
+          : ((sys as SystemBlock[] | undefined) ?? [])
+              .map((b) => b.text)
+              .join("\n"),
+      );
       calls++;
       if (calls % 2 === 1) {
-        yield { type: "tool_call", id: `c${calls}`, name: "read", args: { filePath: reading } };
+        yield {
+          type: "tool_call",
+          id: `c${calls}`,
+          name: "read",
+          args: { filePath: reading },
+        };
       } else {
         yield { type: "text_delta", delta: "done" };
       }
@@ -75,18 +104,36 @@ async function scenario(restore: boolean) {
       memoryFactory: {
         forSession: () =>
           new MemoryService(sessionId, {
-            storage: { save: () => {}, load: () => undefined, listSessions: () => [], delete: () => {} } as never,
+            storage: {
+              save: () => {},
+              load: () => undefined,
+              listSessions: () => [],
+              delete: () => {},
+            } as never,
           }),
       },
-      recorderFactory: { forSession: (id: string) => createRecorder(id, { rolloutDir }) },
+      recorderFactory: {
+        forSession: (id: string) => createRecorder(id, { rolloutDir }),
+      },
     }),
   );
   try {
     const store = await runtime.runPromise(SessionStoreTag);
-    await store.createSession({ title: "t", projectPath, provider: "restore-fake" }, sessionId);
-    const loop = await runtime.runPromise(createAgentLoopEffect(sessionId, { maxIterations: 4 }));
+    await store.createSession(
+      { title: "t", projectPath, provider: "restore-fake" },
+      sessionId,
+    );
+    const loop = await runtime.runPromise(
+      createAgentLoopEffect(sessionId, { maxIterations: 4 }),
+    );
     const run = (prompt: string) =>
-      loop.run({ prompt, sessionId, provider: "restore-fake", projectPath, agentMode: "danger" });
+      loop.run({
+        prompt,
+        sessionId,
+        provider: "restore-fake",
+        projectPath,
+        agentMode: "danger",
+      });
     // The target is read only in the first of three turns, so after compaction
     // (which keeps the last two) its read survives nowhere but the restore.
     reading = target;
@@ -94,15 +141,26 @@ async function scenario(restore: boolean) {
     reading = other;
     await run("two");
     await run("three");
-    const outcome = await loop.runCompaction("restore-fake", undefined, "manual");
+    const outcome = await loop.runCompaction(
+      "restore-fake",
+      undefined,
+      "manual",
+    );
     assert.equal(outcome.compacted, true, "the scenario must actually compact");
     const before = systems.length;
     reading = target;
     await run("four");
     const afterCompaction = systems[before]!;
     const file = join(rolloutDir, "events.jsonl");
-    const events = existsSync(file) ? readFileSync(file, "utf-8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
-    const lastRead = events.filter((e) => e.type === "function.output" && e.tool === "read").at(-1);
+    const events = existsSync(file)
+      ? readFileSync(file, "utf-8")
+          .split("\n")
+          .filter(Boolean)
+          .map((l) => JSON.parse(l))
+      : [];
+    const lastRead = events
+      .filter((e) => e.type === "function.output" && e.tool === "read")
+      .at(-1);
     return { afterCompaction, lastRead, events };
   } finally {
     if (prev === undefined) delete process.env.FREECODE_COMPACT_RESTORE;
@@ -117,19 +175,49 @@ test("after compaction the recent file rides the summary, and a re-read is hones
   const { afterCompaction, lastRead, events } = await scenario(true);
   assert.match(afterCompaction, /Compacted session summary:/);
   assert.match(afterCompaction, /re-attached after compaction/);
-  assert.ok(afterCompaction.includes(MARKER), "the file's content is in the request");
-  assert.ok(!afterCompaction.includes("export const other"), "a file still in the kept turns is not repeated");
-  assert.match(lastRead.output, /<unchanged>/, "the stub now points at content that is there");
+  assert.ok(
+    afterCompaction.includes(MARKER),
+    "the file's content is in the request",
+  );
+  assert.ok(
+    !afterCompaction.includes("export const other"),
+    "a file still in the kept turns is not repeated",
+  );
+  assert.match(
+    lastRead.output,
+    /<unchanged>/,
+    "the stub now points at content that is there",
+  );
   const restored = events.filter((e) => e.type === "compact.restored");
   assert.equal(restored.length, 1);
   assert.equal(restored[0].files, 1);
-  assert.ok(!JSON.stringify(restored).includes("target.ts"), "paths never enter the log");
+  assert.ok(
+    !JSON.stringify(restored).includes("target.ts"),
+    "paths never enter the log",
+  );
+  const compacted = events.filter((e) => e.type === "compact.occurred");
+  assert.equal(compacted.length, 1);
+  assert.equal(compacted[0].providerRequestTokensBefore, 10);
+  assert.ok(compacted[0].estimatedTranscriptTokensBefore > 0);
+  assert.ok(compacted[0].messagesBefore > compacted[0].messagesAfter);
+  assert.equal(
+    compacted[0].compactedMessageIds.length +
+      compacted[0].preservedMessageIds.length,
+    compacted[0].messagesBefore,
+  );
+  assert.ok(
+    !JSON.stringify(compacted).includes(MARKER),
+    "message bodies never enter the log",
+  );
 });
 
 test("with restore off nothing is attached, and the re-read returns the file, not a stub", async () => {
   const { afterCompaction, lastRead, events } = await scenario(false);
   assert.match(afterCompaction, /Compacted session summary:/);
   assert.doesNotMatch(afterCompaction, /re-attached after compaction/);
-  assert.ok(lastRead.output.includes(MARKER), "compaction ended dedup: the real content comes back");
+  assert.ok(
+    lastRead.output.includes(MARKER),
+    "compaction ended dedup: the real content comes back",
+  );
   assert.equal(events.filter((e) => e.type === "compact.restored").length, 0);
 });

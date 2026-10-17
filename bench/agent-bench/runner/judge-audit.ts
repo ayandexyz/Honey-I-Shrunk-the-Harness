@@ -18,6 +18,7 @@ import {
   runOne,
   type Complete,
   type JudgeScore,
+  type JudgeSpec,
   type Judging,
   type PanelJudging,
 } from "./judge.js";
@@ -60,6 +61,8 @@ export async function judgeAudited(
   opts: {
     /** `${taskId}|${agent}|${trial}` — decides the sample. */
     auditKey: string;
+    /** The primary and the auditor; default JUDGES. Two judges, primary first. */
+    judges?: JudgeSpec[];
     rate?: number;
     timeoutMs?: number;
     label?: string;
@@ -67,7 +70,10 @@ export async function judgeAudited(
     retryDelaysMs?: number[];
   },
 ): Promise<AuditedJudging> {
-  const [primary, auditor] = JUDGES;
+  const [primary, auditor] = opts.judges ?? JUDGES;
+  if (!primary || !auditor) {
+    throw new Error("audit mode needs two judges (a primary and an auditor); use --panel for one");
+  }
   const warn = opts.warn ?? console.warn;
   const label = opts.label ?? "task";
   const prompt = renderJudgePrompt(input);
@@ -133,14 +139,19 @@ export interface AuditAgreement {
 
 export function auditAgreement(
   rows: { audited?: true; judgeScores: JudgeScore[] }[],
+  judges: JudgeSpec[] = JUDGES,
 ): AuditAgreement {
-  const [primary, auditor] = JUDGES;
+  // A single judge has no two-sided audits by construction: agreement is
+  // unmeasured, never passed.
+  const [primary, auditor] = judges;
   const pairs: [number, number][] = [];
-  for (const r of rows) {
-    if (!r.audited) continue;
-    const p = r.judgeScores.find((s) => s.judgeId === primary.id)?.overallScore;
-    const a = r.judgeScores.find((s) => s.judgeId === auditor.id)?.overallScore;
-    if (p !== undefined && a !== undefined) pairs.push([p, a]);
+  if (primary && auditor) {
+    for (const r of rows) {
+      if (!r.audited) continue;
+      const p = r.judgeScores.find((s) => s.judgeId === primary.id)?.overallScore;
+      const a = r.judgeScores.find((s) => s.judgeId === auditor.id)?.overallScore;
+      if (p !== undefined && a !== undefined) pairs.push([p, a]);
+    }
   }
   const mean = (xs: number[]) => (xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : 0);
   const meanAbsGap = mean(pairs.map(([p, a]) => Math.abs(p - a)));

@@ -21,7 +21,12 @@
 import { createHash } from "crypto";
 import { pricesAsOf, priceUsd } from "../providers/pricing.js";
 import { traceCost } from "./cost.js";
-import type { MemoryAuxiliarySpan, ModelSpan, Trace } from "./trace.js";
+import type {
+  CompactionSpan,
+  MemoryAuxiliarySpan,
+  ModelSpan,
+  Trace,
+} from "./trace.js";
 
 type AttrValue = string | number | boolean;
 interface OtlpAttr {
@@ -178,6 +183,44 @@ function memorySpanToOtlp(
   };
 }
 
+function compactionSpanToOtlp(
+  span: CompactionSpan,
+  traceId: string,
+  parentSpanId: string,
+  index: number,
+  sessionId: string,
+) {
+  return {
+    traceId,
+    spanId: hexId(`${traceId}:compaction:${index}`, 8),
+    parentSpanId,
+    name: "compact transcript",
+    kind: 1,
+    startTimeUnixNano: nano(span.at),
+    endTimeUnixNano: nano(span.at),
+    attributes: attrs({
+      "gen_ai.conversation.id": sessionId,
+      "freecode.compaction.estimated_transcript_tokens_before":
+        span.estimatedTranscriptTokensBefore,
+      "freecode.compaction.estimated_transcript_tokens_after":
+        span.estimatedTranscriptTokensAfter,
+      "freecode.compaction.provider_request_tokens_before":
+        span.providerRequestTokensBefore,
+      "freecode.compaction.messages_before": span.messagesBefore,
+      "freecode.compaction.messages_after": span.messagesAfter,
+      "freecode.compaction.compacted_message_count":
+        span.compactedMessageIds.length,
+      "freecode.compaction.preserved_message_count":
+        span.preservedMessageIds.length,
+      "freecode.compaction.compacted_message_ids":
+        span.compactedMessageIds.join(",") || undefined,
+      "freecode.compaction.preserved_message_ids":
+        span.preservedMessageIds.join(",") || undefined,
+    }),
+    status: { code: STATUS_OK },
+  };
+}
+
 /**
  * Session cost, or `undefined` when nothing in it could be priced. A partial
  * total is still emitted — most of a session priced is more useful than
@@ -227,11 +270,17 @@ export function traceToOtlp(trace: Trace, serviceName = "freecode"): unknown {
         "freecode.memory_exposure_bytes": trace.memoryExposureBytes,
         "freecode.memory_estimated_tokens": trace.memoryEstimatedTokens,
         "freecode.tool_ms": trace.tool_ms,
+        "freecode.compactions": trace.compactions,
+        "freecode.compacted_estimated_tokens":
+          trace.compactedEstimatedTranscriptTokens ?? trace.compactedTokens,
         "freecode.hung": trace.hung,
         "freecode.in_flight": trace.inFlight,
       }),
       status: { code: trace.hung ? STATUS_ERROR : STATUS_OK },
     },
+    ...(trace.compactionSpans ?? []).map((span, i) =>
+      compactionSpanToOtlp(span, traceId, rootSpanId, i, trace.sessionId),
+    ),
     ...trace.modelSpans.map((span, i) =>
       modelSpanToOtlp(span, traceId, rootSpanId, i, trace.sessionId),
     ),

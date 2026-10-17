@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RolloutRecorder } from "./recorder.js";
 import type {
+  CompactOccurredEvent,
   FunctionDeniedEvent,
   FunctionOutputEvent,
   RolloutEvent,
@@ -100,6 +101,36 @@ test("model events round-trip every field through the JSONL log", () => {
   }
 });
 
+test("compaction records distinct token scales and the body-free boundary", () => {
+  const dir = mkdtempSync(join(tmpdir(), "freecode-rollout-"));
+  try {
+    const recorder = new RolloutRecorder("s1", { rolloutDir: dir });
+    recorder.recordCompactOccurred({
+      estimatedTranscriptTokensBefore: 12_000,
+      estimatedTranscriptTokensAfter: 3_000,
+      providerRequestTokensBefore: 98_000,
+      messagesBefore: 14,
+      messagesAfter: 4,
+      compactedMessageIds: ["m1", "m2"],
+      preservedMessageIds: ["m3", "m4"],
+    });
+
+    const [event] = readEvents(dir) as CompactOccurredEvent[];
+    assert.equal(event.type, "compact.occurred");
+    assert.equal(event.estimatedTranscriptTokensBefore, 12_000);
+    assert.equal(event.estimatedTranscriptTokensAfter, 3_000);
+    assert.equal(event.providerRequestTokensBefore, 98_000);
+    assert.equal(event.messagesBefore, 14);
+    assert.equal(event.messagesAfter, 4);
+    assert.deepEqual(event.compactedMessageIds, ["m1", "m2"]);
+    assert.deepEqual(event.preservedMessageIds, ["m3", "m4"]);
+    assert.equal(event.beforeTokens, undefined);
+    assert.equal(event.afterTokens, undefined);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("model.error records the stall kind", () => {
   const dir = mkdtempSync(join(tmpdir(), "freecode-rollout-"));
   try {
@@ -143,6 +174,21 @@ test("memory auxiliary calls retain usage separately from model responses", () =
     assert.equal(event.inputTokens, 123);
     assert.equal(event.cacheReadTokens, 100);
     assert.equal(event.authMode, "oauth");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("subagent starts retain the agent type used for task cost attribution", () => {
+  const dir = mkdtempSync(join(tmpdir(), "freecode-rollout-"));
+  try {
+    const recorder = new RolloutRecorder("s1", { rolloutDir: dir });
+    recorder.recordSubagentStart("verifier-1", "verify the change", "verifier");
+
+    const [event] = readEvents(dir) as Array<Record<string, unknown>>;
+    assert.equal(event.type, "subagent.start");
+    assert.equal(event.subagentId, "verifier-1");
+    assert.equal(event.agentType, "verifier");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -201,15 +247,58 @@ test("function.denied records the tool, the gate, and the reason", () => {
   }
 });
 
+test("a terminator event names the model request it ends", () => {
+  const dir = mkdtempSync(join(tmpdir(), "freecode-rollout-"));
+  try {
+    const recorder = new RolloutRecorder("s1", { rolloutDir: dir });
+    const requestId = recorder.recordModelRequest("turn-4", {
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      messageCount: 3,
+      toolCount: 2,
+      promptChars: 100,
+      streamed: true,
+      authMode: "oauth",
+    });
+    recorder.recordModelResponse("turn-4", {
+      requestId,
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      duration_ms: 10,
+      toolCalls: [],
+      textChars: 0,
+      thinkingChars: 0,
+      authMode: "oauth",
+    });
+
+    const [request, response] = readEvents(dir) as Array<
+      Record<string, unknown>
+    >;
+    // The returned id is the log's own id, so a caller can link the terminator.
+    assert.equal(request!.id, requestId);
+    assert.equal(request!.authMode, "oauth");
+    assert.equal(response!.requestId, requestId);
+    assert.equal(response!.authMode, "oauth");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("verify.ran and unwired.flagged carry counts only", () => {
   const dir = mkdtempSync(join(tmpdir(), "freecode-rollout-"));
   try {
     const recorder = new RolloutRecorder("s1", { rolloutDir: dir });
     recorder.recordVerifyRan("tests", false, 1234, 2);
     recorder.recordUnwiredFlagged(3);
-    const [ran, flagged] = readEvents(dir) as unknown as Record<string, unknown>[];
+    const [ran, flagged] = readEvents(dir) as unknown as Record<
+      string,
+      unknown
+    >[];
     assert.equal(ran.type, "verify.ran");
-    assert.deepEqual([ran.kind, ran.ok, ran.ms, ran.failing], ["tests", false, 1234, 2]);
+    assert.deepEqual(
+      [ran.kind, ran.ok, ran.ms, ran.failing],
+      ["tests", false, 1234, 2],
+    );
     assert.equal(flagged.type, "unwired.flagged");
     assert.equal(flagged.count, 3);
   } finally {

@@ -470,12 +470,23 @@ re-run on the fixed case (`2026-09-26-memory-long-horizon-3`, rejected) is
 still 0/3 vs 0/3, and now it is memory: recall injected 4 memories every
 turn, but the fact taught in the last session was never retained, and in 2
 of 3 trials the forced consolidation merged/deleted entries and a rate taught
-earlier came out wrong or missing. So memory, as built, does **not** reliably
-assemble a fact spread across sessions; both mechanisms are filed in
-`TODO.md`. **Not measured**: single-trial noise at this
+earlier came out wrong or missing. At that commit memory did **not** reliably
+assemble a fact spread across sessions. **Not measured**: single-trial noise at this
 horizon (3 trials, not the 5-trial replicate that reversed §7.2's other
 fixture), the external corpus, and a wider consolidation schedule than "every
 eligible session."
+
+**Resolution (2026-10-18).** The follow-up implemented latest-concrete anchor
+coverage, additive preservation for independent same-topic facts, claim-safe
+consolidation, and complete list/map/unit recall guidance. `long-late-correction`
+improved 0/3 → 3/3 (`5d8a97e5-080e-4c98-be19-345271d88f68`). On commit
+`d547c4eb`, `long-incremental-assembly` improved 0/3 → 2/3
+(`04a55941-40c5-4e38-8cf8-439781ac20d4`), while all three regional facts
+survived the full memory path in 3/3. The remaining failed verifier wrote all
+three percentage values and then omitted the percent-to-multiplier conversion;
+that is coding variance, not memory loss. Recall metrics did not regress, and
+the final injection benchmark dropped zero gold memories within the 2,048 B
+cap (12/12 lifecycle scenarios).
 
 ### 7.4 External corpus: LongMemEval-S, adapted subset (2026-09-26)
 

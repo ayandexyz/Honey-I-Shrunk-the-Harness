@@ -57,7 +57,7 @@ tools and lets it go find things.
 | --- | --- |
 | System prompt | built in, plus anything a [hook](/guides/hooks) injects |
 | Project context | name, absolute path, file tree, git HEAD, hour-rounded clock |
-| Your instructions | `CLAUDE.md` or `AGENTS.md` from the project root, and from `~/.freecode/` |
+| Your instructions | Global and repository-hierarchy `CLAUDE.md`/`AGENTS.md`, bounded `@imports`, and matching `.freecode/rules/*.md` files |
 | Tools | `read`, `write`, `edit`, `bash`, `grep`, `glob`, `todowrite`, and the rest |
 | Memory | anything relevant that earlier sessions saved |
 
@@ -68,8 +68,9 @@ prefix, so re-rendering it because a build dropped a file into `dist/` would
 re-bill the entire conversation. [The agent loop](/internals/agent-loop) explains
 the full reasoning.
 
-Instruction files are capped at 40,000 characters across both locations
-(`context/instructions.ts:15`); past that the section is truncated with a note.
+Instruction files are loaded in deterministic hierarchy order. Imports and
+scoped rules are bounded and their source contribution is visible in
+`/context`.
 
 If you have no `CLAUDE.md` yet, `/init` asks the model to read the repository and
 write one.
@@ -149,4 +150,3 @@ invalidating the prefix every turn.
 - [Configuration](/getting-started/configuration) — the files to commit
 - [Permissions](/guides/permissions) — writing rules instead of answering prompts
 - [Slash commands](/interfaces/slash-commands) — everything `/help` lists
-

@@ -210,7 +210,10 @@ export async function runConsolidationIfDue(
     // next diff spans both windows — a superset, so nothing is missed.
     await commitBaseline(
       memoryDir,
-      `consolidate: ${result.merged} merged, ${result.promoted} promoted, ${result.episodes} episode(s)`,
+      `consolidate: ${result.merged} merged, ${result.promoted} promoted, ${result.episodes} episode(s)` +
+        (result.skippedMerges > 0
+          ? `, ${result.skippedMerges} merge(s) skipped: claims uncovered`
+          : ""),
     );
     return result;
   } catch (error) {

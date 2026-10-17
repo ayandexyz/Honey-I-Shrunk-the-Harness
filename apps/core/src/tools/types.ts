@@ -1,4 +1,8 @@
 export interface ToolContext {
+  /**
+   * Effective working directory for this tool call. When projectPath is
+   * present, callers must set cwd to that same resolved project root.
+   */
   cwd: string;
   sessionId?: string;
   abort?: AbortSignal;
@@ -8,6 +12,7 @@ export interface ToolContext {
    * already looking at (see the live tail in `bash.ts`).
    */
   toolCallId?: string;
+  /** The resolved project root, when the call belongs to a project session. */
   projectPath?: string;
   /**
    * The spawning loop's agent mode. Only the `agent` tool reads it, to decide
@@ -16,6 +21,11 @@ export interface ToolContext {
    * turned off, in the middle of somebody else's turn.
    */
   agentMode?: import("../agent/types.js").AgentMode;
+  /**
+   * The spawning loop's effective agent envelope, when it has one. Only the
+   * `agent` tool reads it: what a subagent inherits, and cannot widen (§5.4).
+   */
+  envelope?: import("../agent/definitions/types.js").AgentEnvelope;
   /** The spawning run's provider and model — what a subagent inherits. */
   provider?: string;
   model?: string;
@@ -26,7 +36,6 @@ export interface ToolContext {
    */
   unattended?: import("../autonomous/types.js").UnattendedContext;
   fileCache?: FileCache;
-  permissionProfile?: PermissionProfile;
   hooks?: unknown;
   startTime?: number;
 }
@@ -46,16 +55,6 @@ export interface FileCache {
   set(path: string, entry: FileCacheEntry): void;
   invalidate(path: string): void;
   clear(): void;
-}
-
-// =============================================================================
-// Permission Profile
-// =============================================================================
-
-export interface PermissionProfile {
-  allow: string[];
-  deny: string[];
-  alwaysAsk: string[];
 }
 
 export interface ToolResult {

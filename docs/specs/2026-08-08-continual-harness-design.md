@@ -65,9 +65,11 @@ FreeCode learns nothing from a session. Concretely:
 2. **Skills are read-only to the agent.** `tools/skill.ts` invokes a skill. Nothing
    creates or updates one. A procedure the agent works out from scratch on Monday is
    worked out from scratch again on Friday.
-3. **Subagent behaviour is hardcoded.** `permission/profiles.ts` defines capability
-   profiles; there is no notion of a *reusable delegation spec* ("when the task looks
-   like X, spawn a subagent briefed like Y").
+3. **Subagent behaviour is hardcoded.** `permission/profiles.ts` defined capability
+   profiles (retired 2026-10-17 — the agent envelope, spec
+   `2026-09-27-agent-control-and-definitions.md` §5, is the mechanism now); there is
+   no notion of a *reusable delegation spec* ("when the task looks like X, spawn a
+   subagent briefed like Y").
 4. **Failures leave no trace.** `effect/loop-health.ts` detects oscillation and stuck
    loops and warns — the warning is discarded at the end of the turn. The next session
    repeats the same oscillation.

@@ -34,9 +34,17 @@ export interface PermissionSettings {
 /** Result of evaluating a tool call against rules + mode policy */
 export interface PermissionEvaluation {
   decision: PermissionRuleDecision;
-  source: "rule" | "session-grant" | "mode-enforced" | "mode-default" | "danger";
+  source:
+    | "rule"
+    | "session-grant"
+    | "mode-enforced"
+    | "mode-default"
+    | "danger"
+    | "envelope";
   /** Raw text of the rule that matched, when source is a rule tier */
   matchedRule?: string;
+  /** Readable reason, when the decision came from a source without a rule text */
+  reason?: string;
 }
 
 export function emptyRuleSet(): PermissionRuleSet {

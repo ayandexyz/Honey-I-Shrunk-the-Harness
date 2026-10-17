@@ -10,10 +10,75 @@
 // =============================================================================
 
 import * as fs from "fs";
-import { MemoryStore } from "../memory/mem-store.js";
-import { getMemoryGraphService } from "../memory/graph/index.js";
+import * as os from "os";
+import * as path from "path";
+import { createHash } from "node:crypto";
+import { MemoryStore, overrideMemoryDir } from "../memory/mem-store.js";
+import {
+  disposeProjectMemory,
+  getMemoryGraphService,
+} from "../memory/graph/index.js";
 import type { MemoryEntry } from "../memory/mem-types.js";
-import type { EvalMemory } from "./types.js";
+import type { EvalCase, EvalMemory, EvalMemoryPolicy } from "./types.js";
+
+export interface EvalMemoryIsolation {
+  policy: EvalMemoryPolicy;
+  fixture: string;
+  cleanup(): void;
+}
+
+function fingerprint(value: unknown): string {
+  return createHash("sha256")
+    .update(JSON.stringify(value))
+    .digest("hex")
+    .slice(0, 16);
+}
+
+/** Public report metadata: stable identity, never memory or transcript bodies. */
+export function memoryPolicyForCase(
+  kase: Pick<EvalCase, "memories" | "sessions">,
+): Pick<EvalMemoryIsolation, "policy" | "fixture"> {
+  if (kase.sessions) {
+    return {
+      policy: "learning",
+      fixture: `learning-${fingerprint({ memories: kase.memories ?? [], sessions: kase.sessions })}`,
+    };
+  }
+  if (kase.memories) {
+    return {
+      policy: "fixture",
+      fixture: `fixture-${fingerprint(kase.memories)}`,
+    };
+  }
+  return { policy: "empty", fixture: "empty-v1" };
+}
+
+/**
+ * Point one trial at a fresh memory directory without changing its working
+ * tree. This is what keeps read-only trajectory/judged cases grounded in the
+ * real checkout while preventing recall from the developer's live corpus.
+ */
+export function isolateTrialMemory(
+  projectPath: string,
+  kase: Pick<EvalCase, "memories" | "sessions">,
+): EvalMemoryIsolation {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "freecode-eval-memory-"));
+  const restore = overrideMemoryDir(projectPath, path.join(root, "memory"));
+  const metadata = memoryPolicyForCase(kase);
+  let cleaned = false;
+  return {
+    ...metadata,
+    cleanup() {
+      if (cleaned) return;
+      cleaned = true;
+      // Dispose first: UsageStore.flush() and graph listeners still refer to
+      // this directory. Then remove the Markdown corpus and every sidecar.
+      disposeProjectMemory(projectPath);
+      fs.rmSync(root, { recursive: true, force: true });
+      restore();
+    },
+  };
+}
 
 /** How many memories `projectPath`'s store holds right now. */
 export function countMemories(projectPath: string): number {
@@ -25,6 +90,7 @@ export function countMemories(projectPath: string): number {
  * the earlier sessions learned. The session and rollout logs stay.
  */
 export function removeMemoryStore(projectPath: string): void {
+  disposeProjectMemory(projectPath);
   fs.rmSync(new MemoryStore(projectPath).getMemoryDir(), {
     recursive: true,
     force: true,
@@ -36,6 +102,15 @@ export const FROZEN_MEMORY_ENV: Record<string, string> = {
   FREECODE_DISABLE_MEMORY_EXTRACTION: "1",
   FREECODE_DISABLE_MEMORY_CONSOLIDATION: "1",
 };
+
+/** Learning cases may extract; every other writer stays frozen by default. */
+export function memoryEnvironmentForCase(
+  kase: Pick<EvalCase, "sessions">,
+): Record<string, string> {
+  return kase.sessions
+    ? { FREECODE_DISABLE_MEMORY_CONSOLIDATION: "1" }
+    : FROZEN_MEMORY_ENV;
+}
 
 /**
  * Seed `memories` into `projectPath`'s store and build its retrieval index;
@@ -72,5 +147,5 @@ export async function seedMemories(
   });
   // Only the memory directory: the session and rollout logs beside it are
   // what `freecode trace` reads when a red trial needs inspecting.
-  return () => fs.rmSync(store.getMemoryDir(), { recursive: true, force: true });
+  return () => removeMemoryStore(projectPath);
 }

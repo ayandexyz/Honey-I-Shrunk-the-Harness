@@ -7,6 +7,7 @@ import { disposeOutputStore } from "../tools/output-store/index.js";
 import { disposeReadState } from "../tools/read-state.js";
 import { disposeCacheAwareness } from "../providers/cache-awareness.js";
 import { disposeFrozenSessionContext } from "../context/session-context.js";
+import { trackMemoryJob } from "../memory/background-jobs.js";
 
 // The six disposers this exists to stop leaking. Named here so that adding a
 // seventh per-session cache without wiring it into endSession is a test
@@ -112,4 +113,51 @@ test("exit waits for the flush; other reasons do not", async () => {
 
   await endSession("exiting", { reason: "exit", flush: slowFlush });
   assert.equal(landed, true, "exit waits, because the process is leaving");
+});
+
+test("exit drains existing memory work and the final flush under one budget", async () => {
+  resetEndedSessions();
+  const completed: string[] = [];
+  void trackMemoryJob(
+    "drained",
+    new Promise<void>((resolve) =>
+      setTimeout(() => {
+        completed.push("background");
+        resolve();
+      }, 10),
+    ),
+  );
+
+  const result = await endSession("drained", {
+    reason: "exit",
+    memoryDrainTimeoutMs: 100,
+    flush: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      completed.push("flush");
+    },
+  });
+
+  assert.deepEqual(completed.sort(), ["background", "flush"]);
+  assert.deepEqual(result, {
+    pendingMemoryJobs: 0,
+    memoryDrainTimedOut: false,
+  });
+});
+
+test("exit reports memory work that outlives its drain budget", async () => {
+  resetEndedSessions();
+  const slow = new Promise<void>((resolve) => setTimeout(resolve, 50));
+  void trackMemoryJob("timed-out", slow);
+
+  const startedAt = Date.now();
+  const result = await endSession("timed-out", {
+    reason: "exit",
+    memoryDrainTimeoutMs: 5,
+    flush: () => slow,
+  });
+
+  assert.equal(result.memoryDrainTimedOut, true);
+  assert.ok(result.pendingMemoryJobs >= 1);
+  assert.ok(Date.now() - startedAt < 40, "the configured budget bounds exit");
+  await slow;
 });

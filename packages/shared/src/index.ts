@@ -30,6 +30,7 @@ export type {
   ClaudeListFilter,
   ContextSegmentId,
   ContextSegmentStat,
+  ContextInstructionSource,
   ContextBreakdown,
   ModelLimit,
   ModelCost,

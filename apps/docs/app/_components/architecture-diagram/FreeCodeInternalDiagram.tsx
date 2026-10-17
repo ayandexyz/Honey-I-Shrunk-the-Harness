@@ -13,6 +13,7 @@ import { HooksFlow } from "./flows/HooksFlow";
 import { ResultFlow } from "./flows/ResultFlow";
 import { ProviderFlow } from "./flows/ProviderFlow";
 import { CompactionFlow } from "./flows/CompactionFlow";
+import { PermissionFlow } from "./flows/PermissionFlow";
 import { ClientsNode } from "./nodes/ClientsNode";
 import { AgentNode } from "./nodes/AgentNode";
 import { SubagentsNode } from "./nodes/SubagentsNode";
@@ -79,6 +80,7 @@ export function FreeCodeInternalDiagram({
           <ResultFlow />
           <ProviderFlow />
           <CompactionFlow />
+          <PermissionFlow />
 
           {/* ==================== NODES / INTERACTIVE CARDS ==================== */}
           <BusNode selectedNode={selectedNode} onSelectNode={onSelectNode} />

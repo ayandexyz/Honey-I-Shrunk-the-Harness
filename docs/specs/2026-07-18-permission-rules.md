@@ -45,15 +45,16 @@ Example rules:
 | Danger mode | `agent/loop.ts:905` | Skips `PermissionRequest` hooks entirely — everything allowed |
 | PermissionRequest hooks | `hooks/PermissionRequest.ts` | Returns `allow`/`deny`/`ask`; **no matching hooks → `"ask"`** |
 | The "ask" gap | `agent/loop.ts:921` | `"ask"` only runs the Notification hook, then **executes anyway**. There is no interactive approval round-trip. |
-| Capability profiles | `permission/profiles.ts` | `minimal/readonly/standard/elevated/admin` boolean capability sets, consulted by `tools/orchestrator.ts` via `isToolAllowed` (mainly for subagents) |
+| Capability profiles | ~~`permission/profiles.ts`~~ (retired 2026-10-17) | `minimal/readonly/standard/elevated/admin` boolean capability sets, consulted by `tools/orchestrator.ts` via `isToolAllowed` (mainly for subagents); replaced by the agent envelope, spec `2026-09-27-agent-control-and-definitions.md` §5 |
 | Tool metadata | `tools/factory.ts` | Each tool declares `permissions.requiresApproval` (default `false`) — currently unused by the loop |
 | Interactive Q&A infra | `tools/question.ts`, `bus/index.ts` (`askQuestion`), IPC `question.answer`/`question.reject` | The request/await/answer pattern the approval flow will mirror |
 | Config dir | `providers/config.ts` — `~/.freecode/` | User-scope settings home already exists |
 
-**Note:** CLAUDE.md describes `permission/profiles.ts` as holding
+**Note:** CLAUDE.md used to describe `permission/profiles.ts` as holding
 plan/build/review/explore/danger — it doesn't; those are *agent modes* in
-`agent/types.ts`. The profiles file holds capability sets. This spec keeps
-both layers distinct (see Non-Goals).
+`agent/types.ts`. The profiles file held capability sets (it is retired
+2026-10-17; see spec `2026-09-27-agent-control-and-definitions.md` §5). This spec
+keeps both layers distinct (see Non-Goals).
 
 ---
 
@@ -216,9 +217,10 @@ question-tool UI since the shape is parallel).
   this layer is cooperative by design.
 - **Enterprise/managed scope**, argument patterns for MCP tools,
   regex rules, per-directory `additionalDirectories` grants.
-- **Replacing `permission/profiles.ts`** — the capability profiles remain
-  the orchestrator/subagent layer. Convergence is a later refactor;
-  don't touch it in this change.
+- ~~**Replacing `permission/profiles.ts`**~~ — retired 2026-10-17: the capability
+  profiles, their `isToolAllowed` gate and the orchestrator's `permissionProfile`
+  option are deleted, and the agent envelope
+  (spec `2026-09-27-agent-control-and-definitions.md` §5) is the subagent layer.
 - New agent modes — the five existing ones gain semantics; none are added.
 
 ## Security invariants

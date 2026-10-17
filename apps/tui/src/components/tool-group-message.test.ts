@@ -213,7 +213,7 @@ test("a group that opens right under the prompt is set off by a blank row", () =
   assert.notEqual(next.component.render(80)[0], "");
 });
 
-test("tool preambles fold into one dim line while the final answer stays", () => {
+test("tool preambles become one blank separator while the final answer stays", () => {
   clearMessages();
   createUserMessage("fix it");
   createInProgressMessage("Thinking");
@@ -234,7 +234,7 @@ test("tool preambles fold into one dim line while the final answer stays", () =>
     true,
   );
 
-  // A second preamble joins the same compact line and does not split the run.
+  // A second preamble shares the same separator and does not split the run.
   finalizeAssistantText("Re-running the tests.");
   const second = createToolProgressMessage("call-test", "Bash", {
     command: "pnpm test",
@@ -252,10 +252,8 @@ test("tool preambles fold into one dim line while the final answer stays", () =>
   assert.equal(groups.length, 1);
   const rendered = plain(groups[0]!.component.render(100));
   assert.match(rendered, /Read 1 file, Ran 1 command/);
-  assert.match(
-    rendered,
-    /Now reading the controller\. Please wait\. · Re-running the tests\./,
-  );
+  assert.doesNotMatch(rendered, /Now reading|Please wait|Re-running/);
+  assert.equal(groups[0]!.component.render(100).at(-1), "");
 
   // With no following tool_start, terminal prose remains a normal full row.
   finalizeAssistantText("Everything passes. Here is the full result.");
@@ -284,8 +282,11 @@ test("a file-update preamble moves into its diff card", () => {
 
   const messages = getMessages();
   assert.equal(messages.filter((m) => m.type === "assistant").length, 0);
-  const rendered = plain(messages.at(-1)!.component.render(100));
-  assert.match(rendered, /Now updating the controller\./);
+  const lines = messages.at(-1)!.component.render(100);
+  const rendered = plain(lines);
+  assert.doesNotMatch(rendered, /Now updating the controller\./);
   assert.match(rendered, /Update\(/);
   assert.match(rendered, /controller\.ts/);
+  const header = lines.findIndex((line) => plain([line]).includes("Update("));
+  assert.equal(lines[header + 1], "");
 });

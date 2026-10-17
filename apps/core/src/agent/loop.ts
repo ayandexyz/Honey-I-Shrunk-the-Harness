@@ -44,10 +44,13 @@ import {
 } from "../providers/cache-warmer.js";
 import type { PermissionRequestResult } from "../hooks/PermissionRequest.js";
 import { evaluatePermission } from "../permission/evaluate.js";
+import { envelopeDecision, intersectEnvelopes, resolveEnvelopeTarget } from "../permission/envelope.js";
 import { isReadOnlyMode } from "../permission/mode-policy.js";
 import { promptForPermission } from "../permission/prompt.js";
-import { extractTarget } from "../permission/rules.js";
+import { extractTarget, targetKind } from "../permission/rules.js";
+import { sandboxAvailable } from "../sandbox/index.js";
 import { PermissionSettingsManager } from "../permission/settings.js";
+import { collectScopePaths } from "../context/instructions.js";
 import { createInitialSessionState, DEFAULT_LOOP_HEURISTICS } from "./types.js";
 import {
   toEditTransition,
@@ -87,12 +90,20 @@ import { envInt } from "../utils/env.js";
 import { Effect } from "effect";
 import { createToolOrchestrator, getTool } from "../tools/index.js";
 import {
+  boundDisplayOutput,
+  getOutputStore,
+} from "../tools/output-store/index.js";
+import {
   getTodos,
   isOpenTodo,
   renderTodoPromptBlock,
   type TodoItem,
 } from "../tools/todo.js";
-import { createRepeatedErrors, errorLocation, isBashWrite } from "./repeated-error.js";
+import {
+  createRepeatedErrors,
+  errorLocation,
+  isBashWrite,
+} from "./repeated-error.js";
 import { checkUnwired, unwiredReminder, type Declaration } from "./unwired.js";
 import {
   failingTestLines,
@@ -120,7 +131,10 @@ import {
   verifyFailureReminder,
   MAX_VERIFY_ATTEMPTS,
 } from "./verify.js";
-import { drainEditDiagnostics, editDiagnosticsEnabled } from "../tools/lsp/feedback.js";
+import {
+  drainEditDiagnostics,
+  editDiagnosticsEnabled,
+} from "../tools/lsp/feedback.js";
 import {
   verifyChanges,
   verifierFailureReminder,
@@ -841,6 +855,9 @@ export class AgentLoop {
       agentMode: input.agentMode ?? "build",
       effort: input.effort,
       role: input.role,
+      // Parent ∩ child (spec §5.4): a caller that passes only `role` still gets
+      // that definition's own ceiling, and a spawn narrows what it inherits.
+      envelope: intersectEnvelopes(input.envelope, input.role?.envelope),
       // Loop health is per-run: carrying a previous run's counters across
       // prompts would let its history stop the *next* run at the health check
       // before it ever reached the provider.
@@ -944,6 +961,7 @@ export class AgentLoop {
         input.projectPath,
         contextResult.value.name,
         this.state.agentMode,
+        collectScopePaths(input.projectPath),
       );
 
       // Load session history from persistent storage first, so we can tell
@@ -1133,7 +1151,12 @@ export class AgentLoop {
             if (top.line) {
               this.healthWarned.add(healthAction.reason);
               this.pendingReminders.push(
-                repeatedErrorReminder(top.n, top.line, top.others, errorLocation(top.line)),
+                repeatedErrorReminder(
+                  top.n,
+                  top.line,
+                  top.others,
+                  errorLocation(top.line),
+                ),
               );
             }
           }
@@ -1330,8 +1353,7 @@ export class AgentLoop {
           // wants to stop", it is a failure the model can recover from.
           // executeTurn has already queued the reminder that says so; give it
           // the turn.
-          const interrupted =
-            turnResult.truncatedToolCall || turnResult.cutOff;
+          const interrupted = turnResult.truncatedToolCall || turnResult.cutOff;
           if (
             interrupted &&
             this.truncatedRetries < MAX_TRUNCATED_TOOL_RETRIES
@@ -1437,26 +1459,53 @@ export class AgentLoop {
           ) {
             const settings = loadVerifySettings(this.state.projectPath);
             const commands = settings.tests
-              ? resolveTestCommands(this.state.projectPath, [...this.mutatedFiles], settings)
+              ? resolveTestCommands(
+                  this.state.projectPath,
+                  [...this.mutatedFiles],
+                  settings,
+                )
               : [];
             if (commands.length === 0) {
-              this.lastTestResult = settings.tests ? "skipped (no test script found)" : "skipped (turned off)";
+              this.lastTestResult = settings.tests
+                ? "skipped (no test script found)"
+                : "skipped (turned off)";
             } else {
               this.testAttempts += 1;
               const failures: { label: string; raw: string }[] = [];
               for (const c of commands) {
-                console.log(`[AgentLoop] Test gate ${this.testAttempts}/${MAX_TEST_ATTEMPTS}: running \`${c.command}\``);
-                const r = await this.runGateCommand("tests", c.command, c.label, TEST_TIMEOUT_MS);
+                console.log(
+                  `[AgentLoop] Test gate ${this.testAttempts}/${MAX_TEST_ATTEMPTS}: running \`${c.command}\``,
+                );
+                const r = await this.runGateCommand(
+                  "tests",
+                  c.command,
+                  c.label,
+                  TEST_TIMEOUT_MS,
+                );
                 if (this.abort.signal.aborted)
-                  return await this.complete("Interrupted", undefined, undefined, usageSoFar());
+                  return await this.complete(
+                    "Interrupted",
+                    undefined,
+                    undefined,
+                    usageSoFar(),
+                  );
                 if (!r.ok) failures.push({ label: c.label, raw: r.raw });
               }
               this.lastTestResult = failures.length
-                ? `failed: ${failures.flatMap((f) => failingTestLines(f.raw)).slice(0, 10).join("; ") || "see output"}`
+                ? `failed: ${
+                    failures
+                      .flatMap((f) => failingTestLines(f.raw))
+                      .slice(0, 10)
+                      .join("; ") || "see output"
+                  }`
                 : `passed (${commands.map((c) => c.label).join(", ")})`;
               if (failures.length) {
                 this.pendingReminders.push(testFailureReminder(failures));
-                this.state = { ...this.state, iterationCount: this.state.iterationCount + 1, turnCount: this.state.turnCount + 1 };
+                this.state = {
+                  ...this.state,
+                  iterationCount: this.state.iterationCount + 1,
+                  turnCount: this.state.turnCount + 1,
+                };
                 continue;
               }
             }
@@ -1470,11 +1519,18 @@ export class AgentLoop {
             process.env.FREECODE_UNWIRED_CHECK !== "0"
           ) {
             this.unwiredChecked = true;
-            this.lastUnwired = checkUnwired(this.state.projectPath, this.preEditContent);
+            this.lastUnwired = checkUnwired(
+              this.state.projectPath,
+              this.preEditContent,
+            );
             this.recorder.recordUnwiredFlagged(this.lastUnwired.length);
             if (this.lastUnwired.length > 0) {
               this.pendingReminders.push(unwiredReminder(this.lastUnwired));
-              this.state = { ...this.state, iterationCount: this.state.iterationCount + 1, turnCount: this.state.turnCount + 1 };
+              this.state = {
+                ...this.state,
+                iterationCount: this.state.iterationCount + 1,
+                turnCount: this.state.turnCount + 1,
+              };
               continue;
             }
           }
@@ -1501,7 +1557,9 @@ export class AgentLoop {
               priorReport: this.lastVerifierReport,
               testResult: this.lastTestResult,
               unwired: this.lastUnwired,
+              envelope: this.state.envelope,
               parentSessionId: this.state.sessionId,
+              parentRecorder: this.recorder,
             });
             if (this.abort.signal.aborted)
               return await this.complete(
@@ -1665,7 +1723,12 @@ export class AgentLoop {
     try {
       const aiProvider = getProvider(provider as any);
       return {
-        llmSummarize: createLlmSummarizer(aiProvider, model, this.abort.signal),
+        llmSummarize: createLlmSummarizer(
+          aiProvider,
+          model,
+          this.abort.signal,
+          (call) => this.recordMemoryAuxiliary(undefined, call),
+        ),
       };
     } catch {
       return {};
@@ -1704,6 +1767,13 @@ export class AgentLoop {
       trigger,
     });
     const compactOptions = this.compactOptions(provider, model);
+    // This is the provider's inclusive input-token count for the last request.
+    // It is a different scale from MemoryService's transcript estimate and is
+    // therefore recorded separately rather than substituted for tokensBefore.
+    const providerRequestTokensBefore =
+      this.lastMeasuredContextTokens > 0
+        ? this.lastMeasuredContextTokens
+        : undefined;
 
     let outcome: ApplyCompactionResult;
     if (this.sessionStore) {
@@ -1726,10 +1796,20 @@ export class AgentLoop {
       // No store (e.g. tests): memory-only compaction, slice native history.
       const result = await this.memory.compact(compactOptions);
       const compacted = result.success && !!result.summary;
+      const messagesBefore = this.history;
+      const preserveCount = result.preservedMessageIds.length;
+      const preservedMessages = compacted
+        ? preserveCount > 0
+          ? messagesBefore.slice(-preserveCount)
+          : []
+        : messagesBefore;
       if (compacted) {
-        this.history = this.history.slice(-result.preservedMessageIds.length);
+        this.history = preservedMessages;
         markAllReadsCompacted(this.state.sessionId);
       }
+      const preservedIds = new Set(
+        preservedMessages.map((message) => message.id),
+      );
       outcome = {
         compacted,
         // Same vocabulary as applyCompaction: a success with no summary means
@@ -1743,8 +1823,14 @@ export class AgentLoop {
             : (result.reason ?? "blocked by a PreCompact hook"),
         tokensBefore: result.tokenCountBefore,
         tokensAfter: result.tokenCountAfter,
-        messagesBefore: 0,
-        messagesAfter: 0,
+        messagesBefore: messagesBefore.length,
+        messagesAfter: preservedMessages.length,
+        compactedMessageIds: compacted
+          ? messagesBefore
+              .filter((message) => !preservedIds.has(message.id))
+              .map((message) => message.id)
+          : [],
+        preservedMessageIds: preservedMessages.map((message) => message.id),
       };
     }
 
@@ -1758,10 +1844,15 @@ export class AgentLoop {
         `${trigger} compaction: ${outcome.tokensBefore} → ${outcome.tokensAfter} tokens`,
       );
       bumpCacheGeneration(this.state.sessionId);
-      this.recorder.recordCompactOccurred(
-        outcome.tokensBefore,
-        outcome.tokensAfter,
-      );
+      this.recorder.recordCompactOccurred({
+        estimatedTranscriptTokensBefore: outcome.tokensBefore,
+        estimatedTranscriptTokensAfter: outcome.tokensAfter,
+        providerRequestTokensBefore,
+        messagesBefore: outcome.messagesBefore,
+        messagesAfter: outcome.messagesAfter,
+        compactedMessageIds: outcome.compactedMessageIds,
+        preservedMessageIds: outcome.preservedMessageIds,
+      });
       this.restoreRecentFiles();
     } else if (outcome.reason === "nothing to compact") {
       // Routine: the threshold check is a prediction and often fires with
@@ -2102,7 +2193,11 @@ export class AgentLoop {
         const diagnostics = await drainEditDiagnostics(this.state.sessionId);
         if (diagnostics) {
           this.pendingReminders.push(diagnostics.text);
-          this.recorder.recordDiagnosticsDelivered(diagnostics.files, diagnostics.errors, diagnostics.waitedMs);
+          this.recorder.recordDiagnosticsDelivered(
+            diagnostics.files,
+            diagnostics.errors,
+            diagnostics.waitedMs,
+          );
         }
       }
       // Drain any queued <system-reminder> blocks (todo nudge / completion
@@ -2299,7 +2394,9 @@ export class AgentLoop {
         logger.warn(
           `[AgentLoop] dropped ${truncatedToolCalls.length} unparseable tool call(s): ` +
             `${truncatedToolCalls.join(", ")} — ` +
-            (hitOutputLimit ? "output token limit reached" : "malformed JSON arguments"),
+            (hitOutputLimit
+              ? "output token limit reached"
+              : "malformed JSON arguments"),
         );
         this.pendingReminders.push(
           hitOutputLimit
@@ -2314,7 +2411,9 @@ export class AgentLoop {
         toolCalls.length === 0 &&
         truncatedToolCalls.length === 0;
       if (cutOff) {
-        logger.warn("[AgentLoop] reply cut off at the output token limit — continuing");
+        logger.warn(
+          "[AgentLoop] reply cut off at the output token limit — continuing",
+        );
         this.pendingReminders.push(cutOffReplyReminder());
       }
 
@@ -2408,9 +2507,16 @@ export class AgentLoop {
           toolResults[start + k] = result;
           this.updateLoopHealth(tc, result);
           const skillName = (tc.args as { name?: unknown } | undefined)?.name;
-          if (tc.tool === "skill" && !result.error && typeof skillName === "string") {
+          if (
+            tc.tool === "skill" &&
+            !result.error &&
+            typeof skillName === "string"
+          ) {
             this.invokedSkills.delete(skillName);
-            this.invokedSkills.set(skillName, result.modelOutput ?? result.stdout ?? "");
+            this.invokedSkills.set(
+              skillName,
+              result.modelOutput ?? result.stdout ?? "",
+            );
           }
           // Track file mutations so the verification gate only runs when this
           // run actually changed something.
@@ -2596,9 +2702,26 @@ export class AgentLoop {
     const offered = this.unattended
       ? unattendedToolDefs(this.state.agentMode)
       : getToolDefs(this.state.agentMode);
-    const tools = allowed
+    const allowlisted = allowed
       ? offered.filter((t) => allowed.includes(t.name))
       : offered;
+
+    // The envelope's share of the same narrowing (spec §5.4). Operations and
+    // grants are static, so a tool the envelope will never allow is not offered
+    // at all; the path check waits for execution, where the args exist.
+    const envelope = this.state.envelope;
+    const tools = envelope
+      ? allowlisted.filter(
+          (t) =>
+            envelopeDecision({
+              envelope,
+              toolName: t.name,
+              operations: getTool(t.name)?.permissions?.operations ?? [],
+              kind: targetKind(t.name) ?? "none",
+              projectRoot: this.state.projectPath,
+            }).decision === "allow",
+        )
+      : allowlisted;
 
     // Cap tool results in old history turns to prevent token explosion on long
     // sessions. The model already processed those results fully when they were
@@ -2684,7 +2807,7 @@ export class AgentLoop {
       preparation: this.lastMemoryPreparation.state,
       judgeDecision: this.lastMemoryPreparation.judgeDecision,
     });
-    this.recorder.recordModelRequest(turnId, {
+    const requestId = this.recorder.recordModelRequest(turnId, {
       provider,
       model: resolvedModel,
       messageCount: prunedMessages.length,
@@ -2692,6 +2815,9 @@ export class AgentLoop {
       promptChars:
         estimatePromptChars(prunedMessages, system) + ephemeralTail.length,
       streamed: Boolean(aiProvider.stream),
+      // Resolved the same way the request itself resolves auth, so a request
+      // that never terminates still records how it was billed.
+      authMode: subscriptionAuth(provider) ?? "api-key",
     });
 
     // Request timeouts live in the provider's fetch wrapper (fetch-timeout.ts),
@@ -2701,6 +2827,7 @@ export class AgentLoop {
     // stream and got killed mid-flight.
     const recordModelFailure = (err: unknown): void => {
       this.recorder.recordModelError(turnId, {
+        requestId,
         provider,
         model: resolvedModel,
         duration_ms: Date.now() - startedAt,
@@ -2832,6 +2959,7 @@ export class AgentLoop {
         this.emitCacheWarm(usage, provider, resolvedModel);
         this.armCacheWarmer(provider, model, requestOptions, usage);
         this.recorder.recordModelResponse(turnId, {
+          requestId,
           provider,
           model: resolvedModel,
           echoedModel,
@@ -2877,6 +3005,7 @@ export class AgentLoop {
       this.emitCacheWarm(result.usage, provider, resolvedModel);
       this.armCacheWarmer(provider, model, requestOptions, result.usage);
       this.recorder.recordModelResponse(turnId, {
+        requestId,
         provider,
         model: resolvedModel,
         echoedModel: result.echoedModel,
@@ -2939,6 +3068,7 @@ export class AgentLoop {
           cacheWriteTokens:
             u?.cacheWriteInputTokens ?? u?.cacheCreationInputTokens,
           authMode: subscriptionAuth(r.provider),
+          outcome: "succeeded",
         });
         recordDailyUsage({
           inputTokens: u?.inputTokens ?? 0,
@@ -2956,6 +3086,18 @@ export class AgentLoop {
           cacheReadTokens: u?.cacheReadInputTokens,
           cacheWriteTokens:
             u?.cacheWriteInputTokens ?? u?.cacheCreationInputTokens,
+        });
+      },
+      onFailed: (r) => {
+        this.recorder.recordCacheWarm({
+          provider: r.provider,
+          model: r.model,
+          phase: r.phase,
+          delayMs: r.delayMs,
+          expectedSavingsUsd: r.decision.expectedSavingsUsd,
+          warmCostUsd: r.decision.warmCostUsd,
+          authMode: subscriptionAuth(r.provider),
+          outcome: "failed",
         });
       },
       onStopped: (reason) =>
@@ -3205,6 +3347,8 @@ export class AgentLoop {
       // PostToolUseFailure/Notification hook ever saw a cwd — a command hook
       // that validates it (an approval bridge, for one) silently got nothing.
       cwd: this.state.projectPath,
+      onAuxiliaryCall: (call: MemoryAuxiliaryCall) =>
+        this.recordMemoryAuxiliary(`turn-${this.state.turnCount}`, call),
     };
 
     // A tool outside the role's allowlist was never offered; a call to one
@@ -3255,50 +3399,67 @@ export class AgentLoop {
     }
 
     // Permission pipeline (spec: 2026-07-18-permission-rules.md §5)
-    // danger bypass → mode enforcement + rules → PermissionRequest hooks
-    // (which may override ask→allow or anything→deny) → interactive ask.
+    // envelope ceiling → danger bypass → mode enforcement + rules →
+    // PermissionRequest hooks (which may override ask→allow or anything→deny) →
+    // interactive ask.
     let permResult: PermissionRequestResult = {
       decision: "allow",
       modifiedInput: undefined,
     };
-    if (this.state.agentMode !== "danger") {
-      const args = toolCall.args as Record<string, unknown>;
-      const evaluation = evaluatePermission({
-        toolName: toolCall.tool,
-        args,
-        mode: this.state.agentMode,
-        rules: this.permissionSettings?.getRuleSet() ?? {
-          allow: [],
-          ask: [],
-          deny: [],
-        },
-        projectRoot: this.state.projectPath,
-      });
+    const args = toolCall.args as Record<string, unknown>;
+    // The evaluator runs even in danger mode: an enveloped agent's ceiling is
+    // above that bypass, and evaluatePermission returns allow/danger for every
+    // other danger-mode call, so nothing else changes.
+    const evaluation = evaluatePermission({
+      toolName: toolCall.tool,
+      args,
+      mode: this.state.agentMode,
+      rules: this.permissionSettings?.getRuleSet() ?? {
+        allow: [],
+        ask: [],
+        deny: [],
+      },
+      projectRoot: this.state.projectPath,
+      envelope: this.state.envelope,
+      operations: getTool(toolCall.tool)?.permissions?.operations ?? [],
+      // Probe only for an enveloped agent: the flag exists to deny a `shell`
+      // this build cannot sandbox, and nobody else can ask for one (§5.5).
+      ...(this.state.envelope ? { sandboxAvailable: sandboxAvailable() } : {}),
+    });
 
-      // Rule/mode deny is absolute — hooks cannot override deny→allow
-      if (evaluation.decision === "deny") {
-        // The envelope's own deny rules land here, before any ask. Record them
-        // too, or the morning report would show only the path refusals.
-        this.unattended?.record({
-          kind: "denied",
-          iteration: this.unattended.iteration,
-          at: Date.now(),
-          tool: toolCall.tool,
-          target: extractTarget(toolCall.tool, args),
-          rule: evaluation.matchedRule ?? evaluation.source,
-        });
-        const modeRule =
-          evaluation.source === "mode-enforced"
-            ? evaluation.matchedRule
-            : undefined;
+    // Rule/mode/envelope deny is absolute — hooks cannot override deny→allow
+    if (evaluation.decision === "deny") {
+      // The envelope's own deny rules land here, before any ask. Record them
+      // too, or the morning report would show only the path refusals.
+      this.unattended?.record({
+        kind: "denied",
+        iteration: this.unattended.iteration,
+        at: Date.now(),
+        tool: toolCall.tool,
+        target: extractTarget(toolCall.tool, args),
+        rule: evaluation.matchedRule ?? evaluation.source,
+      });
+      if (evaluation.source === "envelope") {
         return this.denyToolCall(
           toolCall,
-          modeRule ? "mode" : "rule",
-          modeRule ??
-            `Permission denied${evaluation.matchedRule ? ` by rule: ${evaluation.matchedRule}` : ` (${evaluation.source})`}`,
+          "envelope",
+          evaluation.reason ??
+            `Denied by the ${this.state.role?.name ?? "agent"}'s envelope`,
         );
       }
+      const modeRule =
+        evaluation.source === "mode-enforced"
+          ? evaluation.matchedRule
+          : undefined;
+      return this.denyToolCall(
+        toolCall,
+        modeRule ? "mode" : "rule",
+        modeRule ??
+          `Permission denied${evaluation.matchedRule ? ` by rule: ${evaluation.matchedRule}` : ` (${evaluation.source})`}`,
+      );
+    }
 
+    if (this.state.agentMode !== "danger") {
       permResult = await this.hooks.runPermissionRequest(toolCall, hookContext);
       // No hook matched: the rules-engine decision stands
       const decision =
@@ -3374,6 +3535,33 @@ export class AgentLoop {
           ...permResult.modifiedInput,
         },
       };
+      // The ceiling was decided against the arguments the model sent, and a
+      // PermissionRequest hook may rewrite them. Judge the rewritten call too:
+      // the envelope is the one thing nothing downstream may widen (§5.4).
+      // Refused outright rather than run with the original arguments — silently
+      // discarding a hook's rewrite is the more surprising half-measure.
+      if (this.state.envelope) {
+        const { kind, target } = resolveEnvelopeTarget(
+          toolCall.tool,
+          toolCall.args as Record<string, unknown>,
+          this.state.projectPath,
+        );
+        const verdict = envelopeDecision({
+          envelope: this.state.envelope,
+          toolName: toolCall.tool,
+          operations: getTool(toolCall.tool)?.permissions?.operations ?? [],
+          kind,
+          ...(target === undefined ? {} : { target }),
+          projectRoot: this.state.projectPath,
+        });
+        if (verdict.decision === "deny") {
+          return this.denyToolCall(
+            toolCall,
+            "envelope",
+            `A permission hook rewrote this call — ${verdict.reason}`,
+          );
+        }
+      }
     }
 
     // Emit tool_start event for streaming
@@ -3393,7 +3581,10 @@ export class AgentLoop {
     );
 
     const context = {
-      cwd: process.cwd(),
+      // A session's project root is the working directory for every tool.
+      // Using the daemon's launch directory here lets relative Bash commands
+      // escape the active project (and, in evals, the fixture sandbox).
+      cwd: this.state.projectPath,
       projectPath: this.state.projectPath,
       sessionId: this.state.sessionId,
       // Lets a long-running tool stream a live tail onto the row the UI is
@@ -3401,6 +3592,7 @@ export class AgentLoop {
       // whole of a build (see bash.ts).
       toolCallId: toolCall.id,
       agentMode: this.state.agentMode,
+      envelope: this.state.envelope,
       provider: this.runModel.provider,
       model: this.runModel.model,
       unattended: this.unattended,
@@ -3467,6 +3659,16 @@ export class AgentLoop {
       };
     }
 
+    // Hooks can replace or extend output after the orchestrator's normal
+    // output-store write. Refresh the full store here so the completion event's
+    // retrieval handle always points at exactly what the user sees, including
+    // hook-modified success and error output.
+    const completionOutput = result.stdout ?? result.error ?? "";
+    if (this.state.sessionId) {
+      getOutputStore(this.state.sessionId).put(toolCall.id, completionOutput);
+    }
+    const completion = boundDisplayOutput(completionOutput);
+
     // Record function.output event
     this.recorder.recordFunctionOutput(
       toolCall.tool,
@@ -3484,8 +3686,11 @@ export class AgentLoop {
       type: "tool_complete",
       toolCallId: toolCall.id,
       toolName: toolCall.tool,
-      result: result.stdout || result.error || "",
+      result: completion.displayOutput,
       success,
+      truncated: completion.truncated,
+      outputId: toolCall.id,
+      totalChars: completion.totalChars,
       duration_ms,
     });
 
@@ -3560,9 +3765,13 @@ export class AgentLoop {
     for (const m of this.history) {
       for (const part of m.parts) {
         if (part.type !== "tool") continue;
-        const args = part.tool.args as { filePath?: unknown; name?: unknown } | undefined;
-        if (part.tool.tool === "read" && typeof args?.filePath === "string") kept.add(args.filePath);
-        if (part.tool.tool === "skill" && typeof args?.name === "string") keptSkills.add(args.name);
+        const args = part.tool.args as
+          | { filePath?: unknown; name?: unknown }
+          | undefined;
+        if (part.tool.tool === "read" && typeof args?.filePath === "string")
+          kept.add(args.filePath);
+        if (part.tool.tool === "skill" && typeof args?.name === "string")
+          keptSkills.add(args.name);
       }
     }
     const recent = recentReads(this.state.sessionId);
@@ -3580,7 +3789,9 @@ export class AgentLoop {
       [...this.invokedSkills].reverse().map(([name, text]) => ({ name, text })),
       keptSkills,
     );
-    this.restoredFiles = [block?.text, touched, skills?.text].filter(Boolean).join("\n\n");
+    this.restoredFiles = [block?.text, touched, skills?.text]
+      .filter(Boolean)
+      .join("\n\n");
     if (!this.restoredFiles) return;
     for (const f of block?.files ?? []) {
       if (!f.dedupSafe) continue;
@@ -3842,16 +4053,33 @@ export class AgentLoop {
     timeoutMs?: number,
   ) {
     const notice = (content: string) =>
-      BusEvents.stream(this.state.sessionId, { type: "notice", level: "info", content });
+      BusEvents.stream(this.state.sessionId, {
+        type: "notice",
+        level: "info",
+        content,
+      });
     notice(`Verifying: ${command}`);
     const startedAt = Date.now();
-    const r = await runVerify(command, this.state.projectPath, this.abort.signal, timeoutMs);
+    const r = await runVerify(
+      command,
+      this.state.projectPath,
+      this.abort.signal,
+      timeoutMs,
+    );
     const ms = Date.now() - startedAt;
     // A test label carries a package path, which stays out of the log.
     const script = kind === "typecheck" ? label : undefined;
-    this.recorder.recordVerifyRan(kind, r.ok, ms, failingTestLines(r.raw).length, script);
+    this.recorder.recordVerifyRan(
+      kind,
+      r.ok,
+      ms,
+      failingTestLines(r.raw).length,
+      script,
+    );
     if (!this.abort.signal.aborted)
-      notice(`${label} ${r.ok ? "passed" : "failed"} (${Math.round(ms / 1000)}s)`);
+      notice(
+        `${label} ${r.ok ? "passed" : "failed"} (${Math.round(ms / 1000)}s)`,
+      );
     return r;
   }
 
@@ -4038,6 +4266,14 @@ export class AgentLoop {
     }
 
     const outcome = await requestRedirect({ packet, provider, model });
+    this.recordMemoryAuxiliary(turnId, {
+      purpose: "redirection",
+      provider: outcome.provider,
+      model: outcome.model,
+      duration_ms: outcome.latency_ms,
+      outcome: outcome.providerOutcome,
+      usage: outcome.usage,
+    });
     if (!outcome.ok) {
       this.recorder.recordRedirectSkipped(turnId, outcome.skip);
       return undefined;

@@ -9,6 +9,7 @@ import { subscriptionAuth } from "../providers/config.js";
 import { resolveJudge } from "./judge-config.js";
 import { loadQuarantine } from "./quarantine.js";
 import { initRunner, runTrial, shutdownRunner } from "./runner.js";
+import { memoryPolicyForCase } from "./memory-fixture.js";
 import type { CaseResult, SuiteReport, TrialResult } from "./types.js";
 
 export interface RunSuiteOptions {
@@ -71,7 +72,10 @@ export async function runSuite(
       for (let i = 0; i < options.trials; i++) {
         trials.push(await runTrial(kase, config));
       }
-      const result = summarise(kase.id, trials, quarantined.has(kase.id));
+      const result = {
+        ...summarise(kase.id, trials, quarantined.has(kase.id)),
+        memory: memoryPolicyForCase(kase),
+      };
       results.push(result);
       options.onCase?.(result);
     }
@@ -93,7 +97,9 @@ export async function runSuite(
     // which model produced a baseline — and comparing a local run against a CI
     // baseline from a different model looked like a regression with no way to
     // see why. A repriced baseline is worse than no baseline: it looks like data.
-    model: config.model ? `${config.provider}/${config.model}` : config.provider,
+    model: config.model
+      ? `${config.provider}/${config.model}`
+      : config.provider,
     trials: options.trials,
     cases: results,
     passed: blocking.filter((c) => c.passed).length,
@@ -104,7 +110,9 @@ export async function runSuite(
     ...(config.judge ? { judge: config.judge } : {}),
     // Spec §8: a mode switch changes the instrument, so it is recorded and
     // `baselineFor` refuses to compare across it.
-    ...(subscriptionAuth(config.provider) ? { authMode: "oauth" as const } : {}),
+    ...(subscriptionAuth(config.provider)
+      ? { authMode: "oauth" as const }
+      : {}),
     ...(judgeSkipped ? { judgeSkipped } : {}),
     // Same reason as `judge` above: what we asked for is already recorded, and
     // what was actually served is the thing a stable id cannot tell you.
@@ -113,7 +121,12 @@ export async function runSuite(
 
   // Read the baseline BEFORE writing, or this run becomes its own baseline
   // and the gate compares the report to itself.
-  const baseline = baselineFor(options.suite, report.model, report.authMode);
+  const baseline = baselineFor(
+    options.suite,
+    report.model,
+    report.authMode,
+    report.judge,
+  );
   const verdict = evaluateGate(report, baseline);
 
   // A blocked run is recorded but MUST NOT become the baseline. Writing it
