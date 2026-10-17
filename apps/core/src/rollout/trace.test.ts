@@ -259,6 +259,22 @@ test("a denied call is recorded, and is not counted as a tool that ran", () => {
   assert.equal(trace.tool_ms, 0);
 });
 
+test("an envelope denial folds the same way, keeping its source", () => {
+  const trace = buildTrace("s1", [
+    event("function.denied", 500, {
+      turnId: "turn-0",
+      tool: "write",
+      args: { filePath: "outside.txt" },
+      source: "envelope",
+      reason: "write to outside.txt is outside this agent's write roots (docs/**)",
+    }),
+  ]);
+  assert.equal(trace.deniedSpans.length, 1);
+  assert.equal(trace.deniedSpans[0].source, "envelope");
+  assert.match(trace.deniedSpans[0].reason, /write roots/);
+  assert.equal(trace.toolSpans.length, 0, "an enveloped refusal is not a tool that ran");
+});
+
 test("denied calls do not consume the pairing state of a real call", () => {
   const trace = buildTrace("s1", [
     event("function.call", 100, { turnId: "turn-0", tool: "bash", args: {} }),
