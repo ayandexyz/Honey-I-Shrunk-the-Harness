@@ -131,6 +131,30 @@ test("an empty transcript never calls the provider", async () => {
   }
 });
 
+test("the extractor treats no-edit acknowledgement language as turn-local", async () => {
+  const { projectPath, cleanup } = fixture();
+  let system = "";
+  try {
+    await extractMemories({
+      transcript:
+        "user: Production moved to api.v2. Don't edit yet, just acknowledge.\nassistant: noted",
+      projectPath,
+      provider: "anthropic",
+      complete: async (prompt) => {
+        system = prompt;
+        return "[]";
+      },
+    });
+
+    assert.match(system, /apply only to that turn/i);
+    assert.match(system, /never save them/i);
+    assert.match(system, /save the durable fact underneath/i);
+    assert.match(system, /concrete enduring rule, identifier, value, or correction/i);
+  } finally {
+    cleanup();
+  }
+});
+
 test("a proposal carrying a secret is skipped, its siblings still save", async () => {
   const { projectPath, cleanup } = fixture();
   try {

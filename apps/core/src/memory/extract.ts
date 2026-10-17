@@ -37,6 +37,12 @@ Save only what will still be true next week:
 Never save: anything derivable from the code, git history, or project docs; how a
 bug was fixed; task details that stop mattering when this task ends; credentials.
 
+Instructions such as "just acknowledge", "don't edit yet", "don't change files
+right now", or "only tell me" apply only to that turn. Never save them or carry
+them into a memory's description/content. Save the durable fact underneath them.
+When the user gives a concrete enduring rule, identifier, value, or correction
+that is not in the repository, save it even when the turn asks for no edit.
+
 Most turns contain nothing worth saving. Returning [] is the common, correct
 answer — prefer it over a weak memory. Never return more than ${MAX_SAVES_PER_RUN}.`;
 
