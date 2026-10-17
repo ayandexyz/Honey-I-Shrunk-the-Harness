@@ -89,7 +89,7 @@ export async function runNightCli(argv: NightCliArgs): Promise<void> {
       fail(`Error: --fallback-model "${argv.fallbackModel}" must be provider/model.`);
     }
     if (argv.sandbox && process.platform === "linux") {
-      const { bubblewrapAvailable } = await import("../../autonomous/sandbox.js");
+      const { bubblewrapAvailable } = await import("../../sandbox/index.js");
       if (!bubblewrapAvailable()) {
         fail(
           "Error: --sandbox requires bubblewrap (`bwrap`) on Linux. Install it, or explicitly pass --no-sandbox.",
@@ -184,9 +184,8 @@ export async function runNightCli(argv: NightCliArgs): Promise<void> {
   );
   const { initHooks } = await import("../../hooks/bootstrap.js");
   const { randomUUID } = await import("crypto");
-  const { bubblewrapAvailable, sandboxEnvironment, sandboxPlan } = await import(
-    "../../autonomous/sandbox.js"
-  );
+  const { bubblewrapAvailable, sandboxEnvironment, sandboxPlan, worktreeAxes } =
+    await import("../../sandbox/index.js");
 
   let projectPath = process.cwd();
   let git = createGitOps(projectPath);
@@ -488,7 +487,7 @@ export async function runNightCli(argv: NightCliArgs): Promise<void> {
             verify: async () => {
               try {
                 const plan = sandbox
-                  ? sandboxPlan(verifyCommand, projectPath, projectPath)
+                  ? sandboxPlan(verifyCommand, projectPath, worktreeAxes(projectPath))
                   : undefined;
                 const { stdout, stderr } = plan
                   ? await exec(plan.command, plan.args, {

@@ -29,7 +29,7 @@ and `CLAUDE.md`/`AGENTS.md` instructions. Ranked by value per line of work.
 User-defined subagents (Extensibility item 3) shipped without these: a definition restricts a subagent with its mode (explore/build) plus a tool allowlist, not a capability profile — and §5's agent envelope now bounds path and network reach. The dead-code half (`PROFILES`, `PermissionChecker`, duplicate `PermissionProfile` interface) has been deleted (2026-10-17).
 
 
-**Status:** resolved except the shell/network jail. Item 3 shipped a per-definition tool allowlist (spec `2026-09-27-agent-control-and-definitions.md` §2.4), and §5's capability envelope now bounds a writable subagent's path and network reach. What remains is the §5.5 sandbox: a granted `shell` is not yet jailed to the envelope's roots.
+**Status:** resolved. Item 3 shipped a per-definition tool allowlist (spec `2026-09-27-agent-control-and-definitions.md` §2.4), §5's capability envelope bounds a writable subagent's path and network reach, and the §5.5 sandbox (2026-10-17) jails a granted `shell` to the envelope's write roots with `--unshare-net` when `network: false`. One bound stays out of reach and is recorded in spec §5.6: a **granted** MCP tool runs in FreeCode's own process, which no mount namespace covers, so it can still reach its server's network — a grant is the explicit exception, and constraining that needs per-tool capability metadata or a separate process.
 
 The dead half is gone: `permission/profiles.ts` (its `PROFILES`,
 `PermissionChecker`, `TOOL_PERMISSIONS` map and duplicate `PermissionProfile`),
@@ -59,8 +59,10 @@ nothing scopes it to the files it was asked about.
 Tool registration and target extraction are now the single source of the
 capability answer (`tools/tool.types.ts` + `permission/rules.ts`), which the
 envelope evaluates — nothing sits beside `permission/rules.ts` +
-`mode-policy.ts` any more. The remaining gap is the sandbox, not the profile
-vocabulary.
+`mode-policy.ts` any more. The sandbox is now implemented in
+`apps/core/src/sandbox/`; future work is limited to separately designed
+capability metadata or process isolation for explicitly granted in-process MCP
+tools.
 
 ## Memory: knowledge-graph roadmap (docs audit 2026-08-23)
 

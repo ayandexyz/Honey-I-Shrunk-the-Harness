@@ -1,6 +1,6 @@
 # Agent control, definitions, stall notices and continuation
 
-**Status:** Phases 1, 2 and 4 built 2026-09-27 (`tools/agent-control.ts`; `agent/definitions/`; `tools/agent-continue.ts`). Phase 3 dropped after its §3.2 check found no stalls (§3.0). Phase 5 built 2026-10-17 — §5.3–§5.7 enforcement live (one pure predicate, both call sites, the parent ∩ child intersection, and the denial event); §5.5's sandbox is the half still owed.
+**Status:** Phases 1, 2 and 4 built 2026-09-27 (`tools/agent-control.ts`; `agent/definitions/`; `tools/agent-continue.ts`). Phase 3 dropped after its §3.2 check found no stalls (§3.0). Phase 5 built 2026-10-17 — §5.3–§5.7 enforcement live (one pure predicate, both call sites, the parent ∩ child intersection, and the denial event), and §5.5's sandbox is built too (`apps/core/src/sandbox/`, one planner for enveloped shells and unattended night runs).
 **Branch:** `feat/background-subagents` (PR #38).
 **Source:** a read of `pi-herdsman` (a Pi extension for asynchronous subagents,
 `~/Projects/githubProjects/pi-herdsman`). Most of it coordinates separate Pi
@@ -14,7 +14,7 @@ ideas do, and this spec covers them.
 | 2 | Agent definitions from `.md` files | medium | ROADMAP Extensibility item 3; `agentType` is really a provider override and the five `SubagentType` roles are hard-coded |
 | 3 | Stall notice for a background agent | small | A background agent that stops making progress is silent until it finishes |
 | 4 | Continue a finished agent with a new task | small | A follow-up question to an agent re-does its whole investigation |
-| 5 | Subagent capability envelope | large | A writable subagent inherits the parent's path and network reach; the envelope bounds it, with the §5.5 sandbox still owed (§5.1) |
+| 5 | Subagent capability envelope | large | A writable subagent inherits the parent's path and network reach; the envelope bounds it, and since 2026-10-17 the §5.5 sandbox bounds its shells (§5.1) |
 
 Order is 1 → 2 → 4 → 3: Phase 1 is the real gap, 2 is the largest payoff, 4 is
 cheap once 1 exists, and 3 is the least proven need (see §3.2). Phase 5 does not
@@ -370,8 +370,9 @@ of operations and targets that a spawn may not exceed.
   `permissions.operations` (`tools/tool.types.ts:36-53`), read by nothing today,
   alongside `extractTarget` (`permission/rules.ts:56-71`), which already answers
   "on what" for the path, URL, command, agent and MCP families.
-- Containment exists only for unattended runs (`autonomous/envelope.ts`,
-  `autonomous/sandbox.ts`), and only because the whole session is the envelope.
+- Containment exists only for unattended runs (`autonomous/envelope.ts`, and
+  `autonomous/sandbox.ts`, later lifted to `sandbox/` — §5.5), and only because
+  the whole session is the envelope.
 
 ### 5.2 Where the truth comes from
 
@@ -447,7 +448,7 @@ envelope:
   carries its parent's ceiling: `loop.run` gets the spawning run's `envelope` and
   no `role`, so only the ceiling passes down and the verifier keeps its own
   read-only identity. A top-level run still has no role and therefore no
-  envelope; the sandbox half of §5.5 is the remaining work.
+  envelope; an enveloped run's shells are sandboxed per §5.5.
 - The predicate runs **before mode, before `danger`, and before rules**. An
   envelope is a ceiling, not a policy: a `danger`-mode parent must not widen an
   enveloped child, and a deny rule must not re-grant what the envelope withheld.
@@ -486,21 +487,54 @@ envelope:
 
 ### 5.5 Shell and the sandbox
 
-- `sandboxPlan` (`autonomous/sandbox.ts:205`) generalises from one tree to an
-  envelope: write roots bound read-write, read roots and everything else
-  read-only, `$HOME` and `/tmp` as tmpfs, network unshared when
-  `network: false`, credentials stripped from the environment. Its existing
-  guard — a workdir outside the tree throws — becomes "a workdir outside the
-  write roots throws", so a shell cannot be aimed outside the envelope even
-  before the bind mounts do the work.
-- The plan is carried on the session's envelope rather than on
-  `ctx.unattended`, and reaches `tools/shells/spawn.ts:37` with the envelope's
-  plan in place of the unattended one: foreground, `run_in_background` and
+**Built 2026-10-17** as `apps/core/src/sandbox/`: `plan.ts` (axes → bwrap argv),
+`axes.ts` (envelope → axes), `env.ts` (environment and toolchain mounts). One
+planner serves both callers — an enveloped agent's `bash`, and an unattended night
+run, which passes `worktreeAxes(project)`, one writable tree: exactly what the
+single-tree `sandboxPlan(command, cwd, tree)` did before.
+
+- **Mounts.** `/` is bound read-only first, `$HOME` and `/tmp` become tmpfs, then
+  exactly the envelope's write roots are overlaid with `--bind`. The project
+  itself stays read-only: the old single-tree plan's `--bind <tree> <tree>` would
+  have made the whole project writable whenever an envelope's write roots were
+  narrower than the project. A project that lives under a tmpfs'd path — a
+  worktree under `$HOME`, an eval fixture under `/tmp` — is re-exposed read-only
+  before the overlays, or the tmpfs would hide it entirely. `network: false` adds
+  `--unshare-net`, and credentials are stripped from the environment
+  (`sandboxEnvironment`), as for an unattended run.
+- **What a root becomes.** A mount boundary is a directory or a file, so each
+  root contributes its static prefix and nothing else: `docs/**` → the `docs`
+  directory, `README.md` → that file, `**` → the project root. A writable root
+  the planner cannot represent exactly **fails closed** — the shell is denied and
+  the reason names the root — rather than mounting a parent directory that grants
+  more than the root says. Unrepresentable today: a pattern with structure after
+  the prefix (`src/*/tests/**`), a root covering the whole filesystem (`//`), a
+  root whose parent does not exist, and a root that does not exist yet. That last
+  one is deliberate: a directory the agent is expected to create is not something
+  the sandbox can grant, and mounting its parent would be a different boundary.
+  Read roots are **skipped**, not refused, when absent or unrepresentable —
+  reads are unconfined inside the sandbox, so skipping removes no access while
+  refusing would deny a shell that loses nothing.
+- **The workdir guard.** The shell's working directory must be inside the project
+  or one of the roots; the plan throws otherwise. Write containment comes from
+  the mount layout, not from the workdir: a normal command runs at the project
+  root while its write roots are a subdirectory, so requiring the workdir to be
+  inside a *write* root would deny every command.
+- **Carrying it.** `ShellSandbox` is `SandboxAxes` (`projectRoot`, `rwRoots`,
+  `roRoots`, `network`) and reaches `tools/shells/spawn.ts` from the `bash` tool,
+  which derives it from `ctx.envelope` when the agent has one and falls back to
+  `ctx.unattended.sandbox` otherwise. Foreground, `run_in_background` and
   `monitor` all register through the same path, and a subagent's shells are
   already disposed with it.
-- Where no sandbox is available (no bwrap, non-Linux), a granted `shell` is
-  **denied** with a reason naming the platform — never run uncontained. The rest
-  of the envelope still applies, so only `shell` is lost.
+- **No sandbox, no shell.** Where none is available (no bwrap, non-Linux), a
+  granted `shell` is **denied** with a reason naming the platform — never run
+  uncontained. The check is a capability input to the same pure predicate
+  (`sandboxAvailable` on `EnvelopeQuery`, supplied only at execution), so the
+  denial leaves through `denyToolCall` like every other envelope denial and the
+  tool list still offers `bash` — which is what lets the model read the reason
+  instead of silently losing the tool (§5.7). `tools.call` reaches `bash` without
+  the permission gate, so the tool re-checks the capability and refuses with the
+  same words. The rest of the envelope still applies; only `shell` is lost.
 - `subprocess: false` denies `lsp`, which declares `["file.read","subprocess"]`
   (`tools/lsp.ts:285`). That is what the declaration means, and it is the reading
   we keep: a `grant` exempts the target check and nothing else (§5.3), so a
@@ -525,6 +559,13 @@ envelope:
 - MCP permission rules keep working inside the envelope: name-prefix rules
   match, and an argument pattern on an MCP tool still fails closed
   (`permission/rules.ts:79-84`).
+- **A mount namespace cannot constrain an in-process MCP tool.** `--unshare-net`
+  isolates the *sandboxed process*; a granted MCP tool runs in FreeCode's own
+  process, which is not in the sandbox, so its server reaches the network
+  whatever `network: false` says. A grant is the user's explicit exception
+  (§5.3), and that is the reading we keep — grants are not silently reinterpreted
+  as "all MCP denied when offline". Confining MCP under `network: false` needs
+  per-tool capability metadata or a separate process, not a mount.
 - A grant matches a tool name exactly, or a server's tools as `mcp__server` — the
   same grammar `ruleMatches` uses (`permission/rules.ts:94-96`), so
   `grants: [mcp__linear]` covers `mcp__linear__issues`, and a plain name is never
@@ -579,8 +620,13 @@ envelope:
   product is what it returns; so does a path tool called with no path argument
   (`grep {pattern}` over the project root), and a PermissionRequest hook that
   rewrites a target out of the roots.
-- **Shell**: an ordinary command still runs under the sandbox, and a simulated
-  platform without one denies `shell` with the platform reason.
+- **Shell**: an ordinary command still runs under the sandbox — `plan.test.ts`
+  runs a real bwrap and asserts the project is readable, the declared write root
+  writable, its sibling refused and `network: false` genuinely offline, and
+  `bash.test.ts` asserts the same through the tool with an enveloped context — and
+  a simulated platform without one denies `shell` with the platform reason
+  (`envelope.test.ts`), as does a write root the planner cannot mount
+  (`bash.test.ts`).
 - **Evals**: the denial path is deterministic, so these tests carry it. A
   real-model case would need an assertion that reads `Trace.deniedSpans`, since
   `forbidTools` sees only tools that ran (`eval/scorers/trajectory.ts:37`,

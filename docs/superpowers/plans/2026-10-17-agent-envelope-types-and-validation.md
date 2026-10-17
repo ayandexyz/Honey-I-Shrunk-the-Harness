@@ -4,11 +4,11 @@
 
 **Goal:** An agent definition file can declare a capability `envelope:`, and a definition whose envelope is incomplete or contradictory is refused at load rather than loaded with half a grant.
 
-**Architecture:** The documented format is nested YAML (`envelope:` then indented keys), and `agent/definitions/loader.ts`'s frontmatter reader only understands flat keys today, so it learns one level of nesting first. A new pure `agent/definitions/envelope.ts` then turns a parsed block into an `AgentEnvelope` or an `{ error }` naming the first thing wrong; `parseAgentFile` warns and skips the definition on error. The envelope rides on `AgentDefinition` and `AgentRole` so the enforcement phase finds it at the spawn site. **Nothing enforces it yet, and no default changes.**
+**Architecture:** The documented format is nested YAML (`envelope:` then indented keys), and `agent/definitions/loader.ts`'s frontmatter reader only understands flat keys today, so it learns one level of nesting first. A new pure `agent/definitions/envelope.ts` then turns a parsed block into an `AgentEnvelope` or an `{ error }` naming the first thing wrong; `parseAgentFile` warns and skips the definition on error. The envelope rides on `AgentDefinition` and `AgentRole`; enforcement and shell containment were implemented in the follow-up `permission/` and `sandbox/` slices.
 
 **Tech Stack:** TypeScript (Node ≥22, ESM, `.js` import suffixes), `node:test` + `tsx --test`, pnpm monorepo.
 
-**Spec:** `docs/specs/2026-09-27-agent-control-and-definitions.md` §5 (Phase 5 — the capability envelope), especially §5.2, §5.3, §5.8 and §5.9. The priority plan's §6 lists this as its first remaining phase. Read the spec first.
+**Spec:** `docs/specs/2026-09-27-agent-control-and-definitions.md` §5 (Phase 5 — the capability envelope), especially §5.2, §5.3, §5.8 and §5.9. The priority plan's §6 records the resulting enforcement and sandbox as implemented. Read the spec first.
 
 ## Global Constraints
 
@@ -47,7 +47,7 @@
 | `docs/specs/2026-09-27-agent-control-and-definitions.md` (modify) | Record the absolute-root refusal in §5.3 |
 | `docs/2026-10-15-priority-implementation-plan.md` (modify) | Delete the delivered phase; renumber |
 
-Deliberately **not** in this slice: enforcement (the predicate, its two call sites, the sandbox), deleting `permission/profiles.ts` (done 2026-10-17), and showing the envelope in `freecode agents list`.
+Deliberately **not** in this slice: showing the envelope in `freecode agents list`. Enforcement, sandboxing, and deletion of the obsolete permission profile map landed in follow-up slices.
 
 ---
 
@@ -189,7 +189,8 @@ Create `apps/core/src/agent/definitions/envelope.test.ts`:
 ```ts
 // =============================================================================
 // The capability envelope: an agent definition's `envelope:` block, and the
-// definition it refuses. Nothing enforces the envelope yet — this file pins
+// definition it refuses. Enforcement is covered by the follow-up envelope and
+// sandbox slices — this file pins
 // what is accepted and the exact reason everything else is not.
 // =============================================================================
 

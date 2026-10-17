@@ -28,6 +28,14 @@ export const ENVELOPE_EXEMPT_TOOLS: ReadonlySet<string> = new Set([
   "finish_iteration",
 ]);
 
+/**
+ * The reason a granted `shell` is refused on a build that cannot sandbox it
+ * (spec §5.7). Exported so the tool itself, which can be reached without the
+ * permission gate, refuses with the same words.
+ */
+export const SHELL_DENIED_NO_SANDBOX =
+  "shell is denied: this build cannot sandbox a shell";
+
 export interface EnvelopeQuery {
   envelope: AgentEnvelope;
   toolName: string;
@@ -37,6 +45,13 @@ export interface EnvelopeQuery {
   /** The call's target, at execution time only — the tool list has no args. */
   target?: string;
   projectRoot: string;
+  /**
+   * Whether this build can actually build a sandbox. Supplied at execution
+   * time only: the tool list must stay offered so the model reads a reason
+   * rather than silently losing `bash`. Undefined means "not considered",
+   * which is what every non-shell decision wants.
+   */
+  sandboxAvailable?: boolean;
 }
 
 export type EnvelopeVerdict =
@@ -79,6 +94,14 @@ export function envelopeDecision(query: EnvelopeQuery): EnvelopeVerdict {
         [...allowed].join(", ") || "none"
       }`,
     );
+  }
+
+  // A granted `shell` that this build cannot sandbox is denied, never run
+  // unsandboxed: the mount boundaries ARE the write enforcement (§5.5). Only
+  // execution passes the flag, so the tool list stays offered and the model
+  // reads the reason instead of silently losing `bash`.
+  if (query.sandboxAvailable === false && operations.includes("shell")) {
+    return deny(SHELL_DENIED_NO_SANDBOX);
   }
 
   if (kind === "path") {

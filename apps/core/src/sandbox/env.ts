@@ -1,21 +1,19 @@
 // =============================================================================
-// Linux filesystem sandbox for an unattended shell.
+// Sandbox environment and toolchain mounts.
 //
-// Bubblewrap sees the host root read-only and overlays exactly the run's project
-// tree read-write. /tmp is private. Network is deliberately shared: web/package
-// access remains governed by the permission envelope, while filesystem escape is
-// the gap this phase closes. Attended shells never pass a sandbox configuration.
+// The pieces a sandboxed shell needs before the plan itself: which variables to
+// strip, whether bwrap actually works on this machine, and how to re-expose a
+// user's toolchains after $HOME is replaced with a tmpfs.
+//
+// Split out of `autonomous/` so `tools/shells` can plan a sandbox for an
+// enveloped agent without depending on the unattended-run feature; the two
+// paths share one planner (spec 2026-09-27 §5.5).
 // =============================================================================
 
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { spawnSync } from "child_process";
-
-export interface SandboxPlan {
-  command: string;
-  args: string[];
-}
 
 const SENSITIVE_ENV = /(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH)/i;
 
@@ -67,40 +65,19 @@ export function bubblewrapAvailable(): boolean {
 }
 
 /**
- * The main repository's git dir, when `tree` is a linked worktree.
+ * `bubblewrapAvailable()`, probed once per process.
  *
- * A worktree's `.git` is a FILE (`gitdir: <main>/.git/worktrees/<name>`), and
- * that directory usually lives under $HOME, which the sandbox hides — so every
- * git command inside failed with "not a git repository" (first live detached
- * night). Returning the COMMON dir covers both the per-worktree metadata and
- * the objects/refs it points at. Undefined for a plain checkout, whose `.git`
- * is inside the tree and already mounted.
+ * The probe spawns a real bwrap, and the answer cannot change under a running
+ * process, so the decision sites (which ask per tool call) must not pay for it
+ * each time.
  */
-function worktreeGitDir(tree: string): string | undefined {
-  let pointer: string;
-  try {
-    pointer = fs.readFileSync(path.join(tree, ".git"), "utf-8");
-  } catch {
-    return undefined; // a directory (plain checkout) or no repo at all
-  }
-  const match = /^gitdir:\s*(.+)$/m.exec(pointer);
-  if (!match) return undefined;
-  const gitdir = path.resolve(tree, match[1]!.trim());
-  let common = gitdir;
-  try {
-    const rel = fs.readFileSync(path.join(gitdir, "commondir"), "utf-8").trim();
-    common = path.resolve(gitdir, rel);
-  } catch {
-    // no commondir file: the gitdir is self-contained
-  }
-  try {
-    return fs.realpathSync(common);
-  } catch {
-    return undefined;
-  }
+let probed: boolean | undefined;
+export function sandboxAvailable(): boolean {
+  if (probed === undefined) probed = bubblewrapAvailable();
+  return probed;
 }
 
-function isWithin(parent: string, candidate: string): boolean {
+export function isWithin(parent: string, candidate: string): boolean {
   const relative = path.relative(parent, candidate);
   return (
     relative === "" ||
@@ -200,63 +177,4 @@ export function homeToolchainMounts(
     args.push("--ro-bind", sourcePath, destination);
   }
   return args;
-}
-
-export function sandboxPlan(
-  command: string,
-  cwd: string,
-  projectPath: string,
-  sourceEnvironment: NodeJS.ProcessEnv = process.env,
-  home = os.homedir(),
-): SandboxPlan {
-  const tree = fs.realpathSync(projectPath);
-  const working = fs.realpathSync(cwd);
-  const relative = path.relative(tree, working);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error(
-      `sandbox workdir ${cwd} is outside the run tree ${projectPath}`,
-    );
-  }
-  // READ-only: git status/diff/log work, but history cannot be written from
-  // inside — committing is the orchestrator's act, which runs unsandboxed.
-  const gitDir = worktreeGitDir(tree);
-  const gitMount = gitDir ? ["--ro-bind", gitDir, gitDir] : [];
-  const toolchainMounts = homeToolchainMounts(sourceEnvironment, home);
-  return {
-    command: "bwrap",
-    args: [
-      "--die-with-parent",
-      "--new-session",
-      "--unshare-pid",
-      "--unshare-ipc",
-      "--unshare-uts",
-      "--unshare-cgroup-try",
-      "--ro-bind",
-      "/",
-      "/",
-      // Hide the user's home (credentials, ssh keys, config) and make temp
-      // private before re-exposing only the project tree below.
-      "--tmpfs",
-      home,
-      "--tmpfs",
-      "/tmp",
-      ...toolchainMounts,
-      ...gitMount,
-      "--bind",
-      tree,
-      tree,
-      "--setenv",
-      "HOME",
-      "/tmp",
-      "--proc",
-      "/proc",
-      "--dev",
-      "/dev",
-      "--chdir",
-      working,
-      "/bin/bash",
-      "-c",
-      command,
-    ],
-  };
 }

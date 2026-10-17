@@ -26,6 +26,11 @@ export interface EvaluateInput {
   envelope?: AgentEnvelope;
   /** The tool's declared `permissions.operations`; `[]` when it declares none. */
   operations?: readonly PermissionOperation[];
+  /**
+   * Whether this build can sandbox a shell. Only the loop, which probes the
+   * machine, supplies it; omitted everywhere else (spec §5.5).
+   */
+  sandboxAvailable?: boolean;
 }
 
 export function evaluatePermission(input: EvaluateInput): PermissionEvaluation {
@@ -41,6 +46,9 @@ export function evaluatePermission(input: EvaluateInput): PermissionEvaluation {
       kind,
       ...(target === undefined ? {} : { target }),
       projectRoot,
+      ...(input.sandboxAvailable === undefined
+        ? {}
+        : { sandboxAvailable: input.sandboxAvailable }),
     });
     if (verdict.decision === "deny") {
       return { decision: "deny", source: "envelope", reason: verdict.reason };

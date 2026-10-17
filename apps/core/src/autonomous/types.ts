@@ -9,6 +9,8 @@
 // on it for free.
 // =============================================================================
 
+import type { SandboxAxes } from "../sandbox/index.js";
+
 /**
  * Four independent ceilings; whichever is hit first stops the run.
  *
@@ -306,5 +308,5 @@ export interface UnattendedContext {
   /** Record a self-answered question or a refusal for the report. */
   record(decision: Decision): void;
   /** Passed to the bash tool; absent keeps attended shells unchanged. */
-  sandbox?: { projectPath: string };
+  sandbox?: SandboxAxes;
 }

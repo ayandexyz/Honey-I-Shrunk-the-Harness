@@ -48,6 +48,7 @@ import { envelopeDecision, intersectEnvelopes, resolveEnvelopeTarget } from "../
 import { isReadOnlyMode } from "../permission/mode-policy.js";
 import { promptForPermission } from "../permission/prompt.js";
 import { extractTarget, targetKind } from "../permission/rules.js";
+import { sandboxAvailable } from "../sandbox/index.js";
 import { PermissionSettingsManager } from "../permission/settings.js";
 import { createInitialSessionState, DEFAULT_LOOP_HEURISTICS } from "./types.js";
 import {
@@ -3419,6 +3420,9 @@ export class AgentLoop {
       projectRoot: this.state.projectPath,
       envelope: this.state.envelope,
       operations: getTool(toolCall.tool)?.permissions?.operations ?? [],
+      // Probe only for an enveloped agent: the flag exists to deny a `shell`
+      // this build cannot sandbox, and nobody else can ask for one (§5.5).
+      ...(this.state.envelope ? { sandboxAvailable: sandboxAvailable() } : {}),
     });
 
     // Rule/mode/envelope deny is absolute — hooks cannot override deny→allow

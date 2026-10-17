@@ -1,14 +1,14 @@
 # Agent envelope — enforcement
 
 **Spec:** `docs/specs/2026-09-27-agent-control-and-definitions.md` §5.3–§5.9.
-**Priority plan item:** `docs/2026-10-15-priority-implementation-plan.md` §6, phase 1.
+**Priority plan item:** `docs/2026-10-15-priority-implementation-plan.md` §6 (implemented).
 **Predecessor (built):** `docs/superpowers/plans/2026-10-17-agent-envelope-types-and-validation.md`
 — `parseEnvelope`, `AgentEnvelope`, `AgentRole.envelope`, `AgentDefinition.envelope` all exist.
 
 ## Goal
 
-A definition that declares `envelope:` is **actually contained** by it. Today the block
-parses and validates and then binds nothing. After this plan, an enveloped agent:
+A definition that declares `envelope:` is **actually contained** by it. This plan's
+enforcement slice is implemented. An enveloped agent:
 
 - is offered only tools whose declared operations the envelope grants,
 - is refused at execution for a target outside its roots, by the same single
@@ -26,12 +26,8 @@ tests (§5.9).
 
 **Out, deliberately:**
 
-- The **sandbox** for a *granted* `shell` (§5.5 — bwrap/bind mounts, `sandboxPlan`
-  generalisation, `tools/shells/spawn.ts`). Phase 2. Phase 1 keeps §5.5's platform rule
-  only to the extent the operation gate reaches it: a `shell` operation the envelope does
-  not grant is denied like any other operation.
-- Breadth *coverage* tests for extension tools / MCP / background shells beyond what the
-  one predicate gives every tool by construction. Phase 2.
+- Additional breadth coverage for extension tools / MCP beyond the implemented
+  predicate and sandbox tests remains separate follow-up work.
 - Loader warning on unknown top-level frontmatter keys (§6 Q9) — still open, not needed
   for enforcement.
 - A bus event for a denial (§6 Q6) — phase 3.
@@ -418,5 +414,5 @@ After Task 4, all of these must hold, each covered by a named test above:
    *(Task 2.5)*
 
 Item 1's *shell* half ("cannot `cd` outside in a shell, cannot background a shell outside")
-is **phase 2** — it needs §5.5's sandbox, which this plan does not build. The gate stays
-open for that reason alone; say so in the plan doc's §6 when Task 4 runs.
+is implemented by the shared `apps/core/src/sandbox/` planner and its real bwrap
+integration tests. The historical phase-2 deferral is closed.

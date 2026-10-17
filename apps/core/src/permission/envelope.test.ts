@@ -465,6 +465,38 @@ test("a boolean never grants an operation the list omits", () => {
 });
 
 // -----------------------------------------------------------------------------
+// A granted shell on a build that cannot sandbox it (§5.5, §5.7)
+
+test("a granted shell is denied when this build cannot sandbox it", () => {
+  const envelope: AgentEnvelope = { operations: ["shell"] };
+  const query = (sandboxAvailable?: boolean) => ({
+    envelope,
+    toolName: "bash",
+    operations: ["shell"] as readonly PermissionOperation[],
+    kind: "command" as const,
+    target: "pnpm test",
+    projectRoot: ROOT,
+    ...(sandboxAvailable === undefined ? {} : { sandboxAvailable }),
+  });
+  assert.equal(envelopeDecision(query(true)).decision, "allow");
+  assert.equal(
+    reasonOf(envelopeDecision(query(false))),
+    "shell is denied: this build cannot sandbox a shell",
+  );
+  // The tool list has no capability probe, so the tool stays offered and the
+  // model reads the reason instead of silently losing `bash` (§5.7).
+  assert.equal(envelopeDecision(query()).decision, "allow");
+});
+
+test("the platform probe never touches a non-shell operation", () => {
+  assert.equal(
+    decide({ operations: ["file.read"], read: ["docs/**"] }, "read", ["file.read"], "path", "docs/a.md")
+      .decision,
+    "allow",
+  );
+});
+
+// -----------------------------------------------------------------------------
 // targetKind
 // -----------------------------------------------------------------------------
 

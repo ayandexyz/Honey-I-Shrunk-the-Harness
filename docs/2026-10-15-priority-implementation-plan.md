@@ -181,13 +181,24 @@ The specification is `docs/specs/2026-09-27-agent-control-and-definitions.md`
 questions its own §6 leaves open. Enforcement is live: one pure predicate, both
 call sites, the parent ∩ child intersection on every spawn, the ceiling threaded
 into the finish-gate spawn, and a denial that lands in `function.denied` with
-source `envelope`. What remains:
+source `envelope`.
 
-1. The sandbox half of §5.5 — a granted `shell` runs inside the envelope's roots,
-   network unshared when `network: false`, so a background shell, a `cd` out of
-   the roots, and a network-capable MCP tool are all bounded by mount namespace
-   rather than by a tool's declaration. Where no sandbox exists, `shell` is
-   denied outright rather than run uncontained.
+The sandbox half of §5.5 is **built** (2026-10-17, `apps/core/src/sandbox/` —
+one planner for enveloped shells and unattended night runs): a granted `shell`
+runs with `/` read-only and only the envelope's write roots overlaid writable,
+`$HOME` and `/tmp` private, and `--unshare-net` when `network: false`. So a
+background shell and a `cd` out of the roots are bounded by the mount layout
+rather than by a tool's declaration. A writable root the planner cannot represent
+as a mount boundary fails closed instead of widening to its parent, and where no
+sandbox exists `shell` is denied outright rather than run uncontained.
+
+One bound this phase does **not** deliver, recorded in spec §5.6: a mount
+namespace constrains the sandboxed process, not FreeCode's own, so a **granted**
+MCP tool still reaches its server's network under `network: false`. A grant is
+the user's explicit exception — the operation list never claimed to bound a
+target that cannot be inspected — so grants are not reinterpreted as "all MCP
+denied when offline". Stronger MCP isolation needs per-tool capability metadata
+or a separate process, not a mount.
 
 ### Acceptance gate
 
@@ -195,9 +206,11 @@ source `envelope`. What remains:
   and cannot background a shell there. (Writing, editing and `lsp` against B
   already fail: the root check refuses the target and `lsp` needs a grant plus
   `subprocess`.)
-- A network-disabled subagent cannot reach the network through a **shell** or a
-  network-capable MCP tool. (Web tools already fail: `network: false` withholds
-  the operation.)
+- A network-disabled subagent cannot reach the network through a **shell**
+  (`--unshare-net`, proven in `sandbox/plan.test.ts`). Web tools already fail:
+  `network: false` withholds the operation. A **granted** MCP tool is the explicit
+  exception — its target cannot be inspected, and a mount namespace cannot bound a
+  process outside the sandbox (spec §5.6).
 - A child cannot request broader authority than its parent.
 - Read-only defaults and existing definition tool allowlists remain compatible.
 - Unknown dynamic tools fail closed with an actionable denial reason.
