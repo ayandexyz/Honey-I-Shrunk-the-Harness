@@ -155,6 +155,66 @@ test("the extractor treats no-edit acknowledgement language as turn-local", asyn
   }
 });
 
+test("an empty result retries once for a concrete identifier and value", async () => {
+  const { projectPath, cleanup } = fixture();
+  let calls = 0;
+  try {
+    const saved = await extractMemories({
+      transcript:
+        "user: The region table also needs ap-northeast-1 at 10 percent. Just acknowledge.\nassistant: noted",
+      projectPath,
+      provider: "anthropic",
+      complete: async (_system, prompt) => {
+        calls++;
+        assert.equal(
+          calls === 2,
+          prompt.startsWith("Re-evaluate the latest user message"),
+        );
+        return calls === 1
+          ? "[]"
+          : JSON.stringify([
+              {
+                type: "project",
+                name: "ap-northeast-1-tax-rate",
+                description: "ap-northeast-1 tax rate is 10 percent",
+                content: "The tax rate for ap-northeast-1 is 10 percent.",
+              },
+            ]);
+      },
+    });
+
+    assert.equal(calls, 2);
+    assert.equal(saved, 1);
+    assert.ok(
+      getMemoryStore(projectPath).load(
+        "ap-northeast-1-tax-rate",
+        "project",
+      ),
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("an empty result does not retry generic chatter", async () => {
+  const { projectPath, cleanup } = fixture();
+  let calls = 0;
+  try {
+    await extractMemories({
+      transcript: "user: Just acknowledge, no edits.\nassistant: noted",
+      projectPath,
+      provider: "anthropic",
+      complete: async () => {
+        calls++;
+        return "[]";
+      },
+    });
+    assert.equal(calls, 1);
+  } finally {
+    cleanup();
+  }
+});
+
 test("a proposal carrying a secret is skipped, its siblings still save", async () => {
   const { projectPath, cleanup } = fixture();
   try {

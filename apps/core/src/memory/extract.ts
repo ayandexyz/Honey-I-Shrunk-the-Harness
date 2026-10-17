@@ -11,6 +11,7 @@ import { AUTHORABLE_MEMORY_TYPES, type MemoryType } from "./mem-types.js";
 import { containsSecret } from "./graph/secret-filter.js";
 import { lexicalSimilarity } from "./graph/index.js";
 import { isSubtractive } from "./claim-subset.js";
+import { anchorClaims } from "./claim-anchors.js";
 import { BusEvents } from "../bus/index.js";
 import { logger } from "../utils/logger.js";
 import type { MemoryAuxiliaryObserver } from "./auxiliary.js";
@@ -109,6 +110,14 @@ function parseProposals(raw: string): Proposal[] {
   return out;
 }
 
+function latestUserText(transcript: string): string {
+  return (
+    [...transcript.matchAll(/(?:^|\n)user:\s*([\s\S]*?)(?=\n(?:user|assistant):|$)/gi)]
+      .at(-1)?.[1]
+      ?.trim() ?? ""
+  );
+}
+
 /**
  * The provider is free to return proposals in any order.  When the bounded
  * write cap is hit, keeping the first N silently drops the fact from the last
@@ -118,7 +127,7 @@ function parseProposals(raw: string): Proposal[] {
  */
 function prioritizeLatest(proposals: Proposal[], transcript: string): Proposal[] {
   if (proposals.length <= MAX_SAVES_PER_RUN) return proposals;
-  const latestUser = [...transcript.matchAll(/(?:^|\n)user:\s*([\s\S]*?)(?=\n(?:user|assistant):|$)/gi)].at(-1)?.[1]?.trim() ?? "";
+  const latestUser = latestUserText(transcript);
   if (!latestUser) return proposals;
   const ranked = proposals
     .map((proposal, index) => ({
@@ -184,12 +193,29 @@ export async function extractMemories(input: ExtractInput): Promise<number> {
     if (transcript.length === 0) return 0;
 
     const complete = input.complete ?? ((s, p) => oneShot(input, s, p));
-    const raw = await complete(
+    let raw = await complete(
       SYSTEM,
       `Session transcript:\n\n${transcript.slice(-MAX_TRANSCRIPT_CHARS)}`,
     );
+    let parsed = parseProposals(raw);
+    const latestUser = latestUserText(transcript);
+    // A cheap extractor occasionally returns [] for an explicit value-bearing
+    // fact even though the latest user message contains several concrete
+    // anchors (for example `ap-northeast-1` and `10`). Give only that narrow
+    // contradiction one second look. Generic chatter and genuine empty turns
+    // still cost one call, and the hard write cap remains unchanged.
+    if (parsed.length === 0 && anchorClaims(latestUser).length >= 2) {
+      raw = await complete(
+        SYSTEM,
+        `Re-evaluate the latest user message. It contains concrete identifiers ` +
+          `or values, so returning [] is correct only if they are not durable. ` +
+          `Do not save turn-local no-edit or acknowledgement instructions.\n\n` +
+          `Session transcript:\n\n${transcript.slice(-MAX_TRANSCRIPT_CHARS)}`,
+      );
+      parsed = parseProposals(raw);
+    }
 
-    const proposals = prioritizeLatest(parseProposals(raw), transcript);
+    const proposals = prioritizeLatest(parsed, transcript);
     const stage: ExtractionTrace = {
       candidates: proposals.map((p) => p.content),
       accepted: [],
