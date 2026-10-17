@@ -49,6 +49,35 @@ test("saves proposals up to the per-run cap and drops the rest", async () => {
   }
 });
 
+test("when capped, prioritizes a fact from the latest user message", async () => {
+  const { projectPath, cleanup } = fixture();
+  try {
+    const proposals = [
+      proposal("old-one"),
+      proposal("old-two"),
+      proposal("old-three"),
+      {
+        type: "project",
+        name: "ap-northeast-rate",
+        description: "ap-northeast-1 is 10 percent",
+        content: "The region table also needs ap-northeast-1 at 10 percent.",
+      },
+    ];
+    await extractMemories({
+      transcript:
+        "user: the region table also needs ap-northeast-1 at 10 percent\nassistant: noted",
+      projectPath,
+      provider: "anthropic",
+      complete: async () => JSON.stringify(proposals),
+    });
+    const names = getMemoryStore(projectPath).list().map((entry) => entry.name);
+    assert.ok(names.includes("ap-northeast-rate"));
+    assert.equal(names.length, MAX_SAVES_PER_RUN);
+  } finally {
+    cleanup();
+  }
+});
+
 test("a throwing completion is swallowed and saves nothing", async () => {
   const { projectPath, cleanup } = fixture();
   try {
@@ -313,6 +342,22 @@ test("a rewrite that restates the facts in new words still updates the entry", a
       getMemoryStore(projectPath).load("deploy-cadence", "project")?.content,
       "The campaign deadline moved to Dec 1",
     );
+  } finally {
+    cleanup();
+  }
+});
+
+test("a low-overlap same-name proposal preserves the earlier fact", async () => {
+  const { projectPath, cleanup } = fixture();
+  try {
+    await teach(projectPath, withContent("sso-provider", "SSO is required for all internal tools"));
+    assert.equal(
+      await teach(projectPath, withContent("sso-provider", "The SSO provider is Okta")),
+      1,
+    );
+    const content = getMemoryStore(projectPath).load("sso-provider", "project")?.content ?? "";
+    assert.ok(content.includes("SSO is required for all internal tools"));
+    assert.ok(content.includes("The SSO provider is Okta"));
   } finally {
     cleanup();
   }

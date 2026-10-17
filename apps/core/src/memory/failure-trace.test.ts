@@ -166,7 +166,7 @@ test("the last taught fact past the per-run cap is an extraction omission", asyn
   }
 });
 
-test("a same-name save that replaces a different fact is a save collision", async () => {
+test("a low-overlap same-name save preserves both facts", async () => {
   const { projectPath, cleanup } = fixture();
   const first: MemoryWriteTrace = {};
   const second: MemoryWriteTrace = {};
@@ -188,17 +188,17 @@ test("a same-name save that replaces a different fact is a save collision", asyn
       {
         name: "sso-provider",
         before: "SSO is required for all internal tools",
-        after: "The SSO provider is Okta",
+        after: "SSO is required for all internal tools\n\nThe SSO provider is Okta",
       },
     ]);
-    // Live entries are the whole store after the pass, so the earlier memory is
-    // only missing because this pass overwrote it.
-    assert.deepEqual(second.extraction?.live, ["The SSO provider is Okta"]);
+    assert.equal(second.extraction?.live.length, 1);
+    assert.ok(second.extraction?.live[0]?.includes("SSO is required for all internal tools"));
+    assert.ok(second.extraction?.live[0]?.includes("The SSO provider is Okta"));
     assert.equal(
       classifyMissingFact("SSO is required for all internal tools", {
         trace: second,
       }),
-      "save_collision",
+      "present",
     );
     assert.equal(
       classifyMissingFact("The SSO provider is Okta", { trace: second }),

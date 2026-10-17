@@ -9,6 +9,7 @@ import type { ProviderId } from "../providers/index.js";
 import { getMemoryStore } from "./mem-store.js";
 import { AUTHORABLE_MEMORY_TYPES, type MemoryType } from "./mem-types.js";
 import { containsSecret } from "./graph/secret-filter.js";
+import { lexicalSimilarity } from "./graph/index.js";
 import { isSubtractive } from "./claim-subset.js";
 import { BusEvents } from "../bus/index.js";
 import { logger } from "../utils/logger.js";
@@ -102,6 +103,33 @@ function parseProposals(raw: string): Proposal[] {
   return out;
 }
 
+/**
+ * The provider is free to return proposals in any order.  When the bounded
+ * write cap is hit, keeping the first N silently drops the fact from the last
+ * user message — exactly the fact most likely to be needed on the next turn.
+ * Rank only when there is competition, using the latest user message as a
+ * salience signal; ties retain provider order for deterministic behavior.
+ */
+function prioritizeLatest(proposals: Proposal[], transcript: string): Proposal[] {
+  if (proposals.length <= MAX_SAVES_PER_RUN) return proposals;
+  const latestUser = [...transcript.matchAll(/(?:^|\n)user:\s*([\s\S]*?)(?=\n(?:user|assistant):|$)/gi)].at(-1)?.[1]?.trim() ?? "";
+  if (!latestUser) return proposals;
+  const ranked = proposals
+    .map((proposal, index) => ({
+      proposal,
+      index,
+      score: lexicalSimilarity(
+        latestUser,
+        `${proposal.name} ${proposal.description} ${proposal.content}`,
+      ),
+    }));
+  // A single shared stop-word such as "the" is not evidence of relevance.
+  // Reuse the graph's topic threshold so generic transcripts retain provider
+  // order rather than causing an arbitrary reorder at the cap.
+  if (Math.max(...ranked.map((entry) => entry.score)) < 0.12) return proposals;
+  return ranked.sort((a, b) => b.score - a.score || a.index - b.index).map(({ proposal }) => proposal);
+}
+
 async function oneShot(
   input: ExtractInput,
   system: string,
@@ -155,7 +183,7 @@ export async function extractMemories(input: ExtractInput): Promise<number> {
       `Session transcript:\n\n${transcript.slice(-MAX_TRANSCRIPT_CHARS)}`,
     );
 
-    const proposals = parseProposals(raw);
+    const proposals = prioritizeLatest(parseProposals(raw), transcript);
     const stage: ExtractionTrace = {
       candidates: proposals.map((p) => p.content),
       accepted: [],
@@ -205,21 +233,36 @@ export async function extractMemories(input: ExtractInput): Promise<number> {
         continue;
       }
 
+      // A reused name is normally an intentional correction or expansion. A
+      // low-overlap rewrite that also drops anchored claims is different: it
+      // is usually the extractor reusing a topic slug for a second fact. Keep
+      // both bodies rather than silently destroying the first fact; later
+      // consolidation can merge them once it has the full candidate set.
+      const collision =
+        existing &&
+        lexicalSimilarity(existing.content, p.content) < 0.12;
+      const content = collision
+        ? `${existing.content}\n\n${p.content}`
+        : p.content;
+      const description = collision
+        ? `${existing.description}; ${p.description}`
+        : p.description;
+
       if (existing) {
         stage.replaced.push({
           name: p.name,
           before: existing.content,
-          after: p.content,
+          after: content,
         });
       }
-      stage.accepted.push(p.content);
+      stage.accepted.push(content);
 
       const now = Date.now();
       store.save({
         name: p.name,
-        description: p.description,
+        description,
         type: p.type,
-        content: p.content,
+        content,
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
         // The extractor knows nothing about graph metadata; dropping it here
