@@ -252,3 +252,19 @@ test("scopes: a definition refused for its envelope does not shadow a lower one"
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("frontmatter: a block-form child does not swallow its siblings", () => {
+  const sibling = parseFrontmatter('---\nenvelope:\n  read:\n    - "**"\n  write: [docs/**]\n---\n');
+  assert.deepEqual(sibling?.fields, { envelope: { read: ["**"], write: ["docs/**"] } });
+  const boolean = parseFrontmatter('---\nenvelope:\n  read:\n    - "**"\n  shell: true\n---\n');
+  assert.deepEqual(boolean?.fields, { envelope: { read: ["**"], shell: "true" } });
+  const both = parseFrontmatter('---\nenvelope:\n  read:\n    - docs/**\n  write:\n    - "**"\n---\n');
+  assert.deepEqual(both?.fields, { envelope: { read: ["docs/**"], write: ["**"] } });
+});
+
+test("a nested block where a tool allowlist belongs is refused, not read as no allowlist", () => {
+  assert.equal(
+    parseAgentFile("---\nname: m\ndescription: d\ntools:\n  Read: true\n---\n", "/x/m.md", "user", KNOWN),
+    null,
+  );
+});

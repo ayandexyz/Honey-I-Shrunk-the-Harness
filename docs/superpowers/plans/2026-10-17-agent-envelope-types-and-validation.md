@@ -113,12 +113,17 @@ In `parseFrontmatter`, keep the existing `FRONTMATTER` split, comment stripping 
 | Line | Rule |
 |---|---|
 | indent 0, `key: value` | as today: string, inline list, or `key:` → `[]` with the kind still undecided |
-| indent > 0, `- item` | into `fields[openChild]` when a child is open; else, if the kind is undecided, decide **list** and push; else ignore |
-| indent > 0, `child: value` | if the kind is undecided, decide **map** (`fields[open.key] = {}`) and then apply the child; if the kind is map, apply the child; if a child is already open, ignore |
-| `child:` with no value | `map[child] = []` and remember it as the open child, so its `- item` lines land there |
+| indent > 0, `- item` | into the open child when the item is indented deeper than it; else, if the kind is undecided or already a **list**, extend the list and push; else ignore |
+| indent > 0, `child: value` | deeper than the open child → ignore; otherwise it is a sibling: if the kind is undecided, decide **map** (`fields[open.key] = {}`) and apply the child; if the kind is map, close the open child and apply this one |
+| `child:` with no value | `map[child] = []`, remember it as the open child *and its indent*, so only deeper `- item` lines land there |
 | anything else (deeper, or the wrong kind for the open key) | ignore, as the parser already does |
 
-Blank lines never close a block. This keeps every file that parses today parsing the same way; only indented `key: value` changes meaning, from ignored to nested.
+Blank lines never close a block. Indentation is measured: a child key owns the
+lines deeper than itself, and a `child: value` at the child's own indent closes it
+and starts the next — without that, every sibling after a block-form child would
+be swallowed and its items absorbed into the previous axis. This keeps every file
+that parses today parsing the same way; only indented `key: value` changes
+meaning, from ignored to nested.
 
 Also widen the parameter type of **both** helpers to `FrontmatterValue | undefined`. Only `asList`'s body changes, because a nested block reaching it is a type error otherwise:
 

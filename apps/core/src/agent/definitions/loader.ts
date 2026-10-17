@@ -59,18 +59,24 @@ export function parseFrontmatter(
   // one arrives.
   let open: string | undefined;
   let block: Block = "undecided";
+  // The open child of a map key and the indent it sits at. A `- item` belongs to
+  // it only while it is indented deeper, and a sibling `child: value` at its own
+  // indent closes it — without the indent, every sibling after a block-form child
+  // is swallowed and that child's items absorb the next axis.
   let child: string | undefined;
+  let childIndent = -1;
 
   for (const raw of match[1]!.split(/\r?\n/)) {
     const line = raw.replace(/\s+#.*$/, "");
     if (!line.trim()) continue; // a blank line never closes a block
+    const indent = line.match(/^\s*/)![0]!.length;
     const item = line.match(/^\s*-\s+(.+)$/);
     const kv = line.match(/^\s*([A-Za-z_][\w-]*)\s*:\s*(.*)$/);
 
-    if (/^\s/.test(line)) {
+    if (indent > 0) {
       if (item) {
         if (open === undefined) continue;
-        if (child !== undefined) {
+        if (child !== undefined && indent > childIndent) {
           (fields[open] as Record<string, string[]>)[child]!.push(unquote(item[1]!));
         } else if (block === "undecided" || block === "list") {
           // A block list keeps taking items: "skills:" then "- x", "- y".
@@ -81,16 +87,19 @@ export function parseFrontmatter(
       }
       if (!kv) continue;
       const [, key, value] = kv as unknown as [string, string, string];
-      if (open === undefined || child !== undefined) continue; // one level, no deeper
+      if (open === undefined) continue;
+      if (child !== undefined && indent > childIndent) continue; // deeper still belongs to the child
       if (block === "undecided") {
         block = "map";
         fields[open] = {};
       }
       if (block !== "map") continue; // an item list cannot take `key: value` lines
       const map = fields[open] as Record<string, string | string[]>;
+      child = undefined;
       if (value === "") {
         map[key] = [];
         child = key;
+        childIndent = indent;
       } else {
         map[key] = inlineList(value) ?? unquote(value);
       }
@@ -131,8 +140,10 @@ function unquote(s: string): string {
 
 function asList(v: FrontmatterValue | undefined): string[] | undefined {
   if (v === undefined) return undefined;
-  const list = Array.isArray(v) ? v : typeof v === "string" ? v.split(",") : undefined;
-  return list?.map((t) => t.trim()).filter(Boolean);
+  // A nested block where a list belongs is malformed, not empty: [] here makes
+  // the caller refuse the file instead of reading it as "no allowlist".
+  const list = Array.isArray(v) ? v : typeof v === "string" ? v.split(",") : [];
+  return list.map((t) => t.trim()).filter(Boolean);
 }
 
 function asString(v: FrontmatterValue | undefined): string | undefined {

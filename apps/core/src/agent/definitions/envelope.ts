@@ -38,13 +38,17 @@ const NEEDS_ROOTS: Partial<Record<PermissionOperation, "read" | "write">> = {
 };
 
 /**
- * Frontmatter value → the list the key declares. A scalar or a nested block is
- * not a list, and reads as empty: the spec's stance is that rejection beats a
- * guess, so an undeclared axis is refused by the operation that needs it rather
- * than guessed at from a bare value.
+ * Frontmatter value → the list the key declares. A key that is present and not a
+ * list is a contradiction rather than an empty axis, and `notAList` says so: the
+ * spec's stance is that rejection beats a guess, so a scalar or a nested block
+ * where a list belongs is refused by name, never read as "nothing declared".
  */
-function listOf(value: string | string[] | undefined): string[] {
+function entries(value: string | string[] | undefined): string[] {
   return Array.isArray(value) ? value : [];
+}
+
+function notAList(value: FrontmatterValue | undefined): boolean {
+  return value !== undefined && !Array.isArray(value);
 }
 
 export function parseEnvelope(
@@ -58,18 +62,24 @@ export function parseEnvelope(
     if (!KEYS.has(key)) return { error: `envelope has an unknown key "${key}"` };
   }
 
-  const declared = listOf(value.operations);
+  if (notAList(value.operations)) return { error: "envelope.operations must be a list" };
+  const declared = entries(value.operations);
   if (declared.length === 0) {
     return { error: "envelope.operations must list at least one operation" };
   }
   for (const op of declared) {
     if (!(PERMISSION_OPERATIONS as readonly string[]).includes(op)) {
-      return { error: `envelope.operations has an unknown operation "${op}"` };
+      return {
+        error: `envelope.operations has an unknown operation "${op}"; valid: ${PERMISSION_OPERATIONS.join(", ")}`,
+      };
     }
   }
   const operations = declared as PermissionOperation[];
 
-  const roots = { read: listOf(value.read), write: listOf(value.write) };
+  for (const axis of PATH_AXES) {
+    if (notAList(value[axis])) return { error: `envelope.${axis} must be a list` };
+  }
+  const roots = { read: entries(value.read), write: entries(value.write) };
   for (const axis of PATH_AXES) {
     for (const root of roots[axis]) {
       if (!root.trim()) return { error: `envelope.${axis} has an empty root` };
@@ -97,7 +107,8 @@ export function parseEnvelope(
     envelope[axis] = raw === "true";
   }
 
-  const grants = listOf(value.grants);
+  if (notAList(value.grants)) return { error: "envelope.grants must be a list" };
+  const grants = entries(value.grants);
   for (const grant of grants) {
     // MCP names are accepted on their `mcp__` prefix alone: the MCP registry is
     // empty while definitions load, so existence is unknowable here and a name no

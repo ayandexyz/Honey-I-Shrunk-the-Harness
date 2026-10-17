@@ -44,8 +44,16 @@ const refusals: Array<[string, FrontmatterValue, string]> = [
   [
     "an unknown operation",
     { operations: ["file.nuke"] },
-    'envelope.operations has an unknown operation "file.nuke"',
+    'envelope.operations has an unknown operation "file.nuke"; valid: file.read, file.write, file.delete, network, shell, subprocess, mcp, agent.spawn',
   ],
+  ["a scalar operations", { operations: "file.read" }, "envelope.operations must be a list"],
+  ["a scalar read", { operations: ["file.read"], read: "**" }, "envelope.read must be a list"],
+  [
+    "a nested block where read belongs",
+    { operations: ["file.read"], read: { a: "b" } },
+    "envelope.read must be a list",
+  ],
+  ["a scalar grants", { operations: ["shell"], grants: "lsp" }, "envelope.grants must be a list"],
   ["read with no roots", { operations: ["file.read"] }, "envelope grants file.read but has no read roots"],
   ["write with no roots", { operations: ["file.write"] }, "envelope grants file.write but has no write roots"],
   ["delete with no write roots", { operations: ["file.delete"] }, "envelope grants file.delete but has no write roots"],
@@ -94,5 +102,21 @@ test("envelope: a definition that declares one keeps it", () => {
     operations: ["file.read", "file.write"],
     read: ["**"],
     write: ["docs/**"],
+  });
+});
+
+test("envelope: a block-form axis with sibling keys after it loads whole", () => {
+  const def = parseAgentFile(
+    "---\nname: blocky\ndescription: d\ntools: Read, Write\nenvelope:\n  operations: [file.read, file.write, shell]\n  read:\n    - \"**\"\n  write:\n    - docs/**\n  shell: true\n  grants:\n    - lsp\n---\nBody.",
+    "/x/blocky.md",
+    "project",
+    KNOWN,
+  );
+  assert.deepEqual(def?.envelope, {
+    operations: ["file.read", "file.write", "shell"],
+    read: ["**"],
+    write: ["docs/**"],
+    shell: true,
+    grants: ["lsp"],
   });
 });
