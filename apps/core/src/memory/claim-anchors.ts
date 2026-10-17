@@ -13,7 +13,7 @@
 // =============================================================================
 
 /** A `--flag`, or an ordinary word / path / identifier token. */
-const TOKEN = /--[A-Za-z0-9][A-Za-z0-9_-]*|[A-Za-z0-9][A-Za-z0-9_@/.#:]*/g;
+const TOKEN = /--[A-Za-z0-9][A-Za-z0-9_-]*|[A-Za-z0-9][A-Za-z0-9_@/.#:-]*/g;
 
 /** Marks that make a token an identifier rather than prose. */
 const IDENTIFIER_MARK = /[_@/.#:]/;

@@ -155,8 +155,9 @@ function promptHeader(): string[] {
     : [
         "# Relevant memories",
         "",
-        "Background recall, surfaced automatically. It may be stale — verify against",
-        "the code before relying on it, and when the code disagrees, the code wins.",
+        "Background recall; it may be stale. Verify claims about current code. Apply",
+        "user and project requirements unless the current request supersedes them;",
+        "stale or incomplete code does not override a remembered requirement.",
         "Do NOT narrate, restate, or re-acknowledge these in your visible replies:",
         "this block repeats on every request, so reacting to it each time floods the",
         "transcript. Act on it silently; mention a memory only if the user asks.",

@@ -403,6 +403,39 @@ test(
 );
 
 test(
+  "a merge cannot drop one hyphenated region while retaining other regions",
+  fixture(async ({ path, store }) => {
+    store.save(
+      mem(
+        "ap-northeast-tax-rate",
+        "The rate for ap-northeast-1 is 10 percent",
+      ),
+    );
+    store.save(
+      mem(
+        "other-tax-rates",
+        "The rates are us-east-1 at 8.875 percent and eu-west-2 at 20 percent",
+      ),
+    );
+
+    const result = await run(
+      path,
+      mergeOf(
+        "other-tax-rates",
+        ["ap-northeast-tax-rate"],
+        "The rates are us-east-1 at 8.875 percent and eu-west-2 at 20 percent",
+      ),
+      ["ap-northeast-tax-rate", "other-tax-rates"],
+    );
+
+    assert.equal(result.merged, 0);
+    assert.equal(result.skippedMerges, 1);
+    assert.equal(result.deleted, 0);
+    assert.ok(store.load("ap-northeast-tax-rate", "project"));
+  }),
+);
+
+test(
   "a claim-free source merges unchecked",
   fixture(async ({ path, store }) => {
     // Nothing specific to check means no reason to keep a near-duplicate: a

@@ -19,6 +19,13 @@ test("a hyphenated adjective is not a claim", () => {
   assert.deepEqual(anchorClaims("the store is single-machine only"), []);
 });
 
+test("a hyphenated identifier containing a number stays one claim", () => {
+  assert.deepEqual(
+    anchorClaims("The rate for ap-northeast-1 is 10 percent"),
+    ["ap-northeast-1", "10"],
+  );
+});
+
 test("a replacement that carries every claim covers its source", () => {
   assert.deepEqual(
     uncoveredClaims(
@@ -59,5 +66,15 @@ test("a specific value replaced by a newer one reads as uncovered", () => {
       "The campaign deadline moved to Dec 1",
     ),
     ["nov", "3"],
+  );
+});
+
+test("a different numbered region cannot stand in for the source region", () => {
+  assert.deepEqual(
+    uncoveredClaims(
+      "The rate for ap-northeast-1 is 10 percent",
+      "The rates are us-east-1 at 8.875 percent and eu-west-2 at 20 percent",
+    ),
+    ["ap-northeast-1", "10"],
   );
 });
