@@ -247,6 +247,13 @@ export interface ModelRequestEvent extends BaseEvent {
   /** Approximate serialized prompt size; catches runaway context growth. */
   promptChars: number;
   streamed: boolean;
+  /**
+   * How the call will authenticate, stamped from the same resolution the
+   * request used. Recorded here because a request without a terminator (a
+   * killed process) has no `model.response` to carry it, and the cost ledger
+   * must not report a subscription call as API-key.
+   */
+  authMode?: "oauth" | "api-key";
 }
 
 /** Time to first chunk — separates "provider never started" from "died mid-stream". */
@@ -259,6 +266,12 @@ export interface ModelFirstTokenEvent extends BaseEvent {
 export interface ModelResponseEvent extends BaseEvent {
   type: "model.response";
   turnId: string;
+  /**
+   * The `id` of the `model.request` this call terminated. A turn can hold
+   * several attempts (recovery retries), so the turn alone cannot say which
+   * one a response belongs to.
+   */
+  requestId?: string;
   provider: string;
   /** What we asked for — the same id `model.request` carries. */
   model: string;
@@ -292,6 +305,9 @@ export interface ModelResponseEvent extends BaseEvent {
 export interface ModelErrorEvent extends BaseEvent {
   type: "model.error";
   turnId: string;
+  /** The `id` of the `model.request` this failure terminated. See
+   *  `ModelResponseEvent.requestId`. */
+  requestId?: string;
   provider: string;
   model: string;
   duration_ms: number;

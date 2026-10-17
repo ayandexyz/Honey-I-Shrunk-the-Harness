@@ -448,11 +448,6 @@ From the first `pnpm bench:pathology` over 12,370 runs (HARNESS-BENCH.md §3b):
       `grep` calls in them failed (no `rg` in the image; tool, image and
       `bench:pathology` fixed 2026-10-13), so every v2 number carries that
       handicap. Rebuild with `pnpm bench:image` first.
-- [x] ~~**Measured input shrink per compaction is ~5% and sometimes negative**~~
-      Checked on real long sessions (v2 long-task trials): 61–70% shrink per
-      compaction, no compaction loops. The ~5% is the `compaction-boundary`
-      eval case's tiny thresholds, not a bug. The real compaction cost is the
-      rereads (item above). Full write-up: `docs/2026-10-13-long-task-bench-results.md`.
 
 ## Spec findings (eval harness — 2026-08-23)
 
@@ -461,10 +456,6 @@ spec's §12; these are the parts that are actionable independently of it.
 
 ### Real fixes
 
-- [x] ~~**There is no cost accounting in USD anywhere.**~~ Shared pricing,
-      trace/eval cost folds, and the root-plus-child provider-attempt ledger are
-      implemented. Run `freecode trace <session> --cost-ledger --json`; unknown
-      usage remains visibly partial rather than being reported as free.
 - [ ] **OTLP export has no session-level root span** (`rollout/otlp.ts`). Model
       spans are emitted per call, so a multi-turn session renders in Langfuse as N
       unrelated LLM calls. An `invoke_agent` root span plus
@@ -608,11 +599,6 @@ debounce on a short-lived process. Both are fixed; the fixes are in
 
 ### Still open
 
-- [ ] **Wire up LongMemEval-S** (`bench/longmemeval.ts`). The committed corpus
-      was written by the same people who wrote the retriever; it catches
-      regressions and proves nothing about absolute quality. LongMemEval-S uses
-      `all-MiniLM-L6-v2`, the embedder we already run, so agentmemory's published
-      numbers are a directly comparable baseline.
 - [ ] **Measure the judge with a real model.** Every judge figure so far is from
       `--judge=oracle`, a perfect reader, and is therefore a ceiling.
 - [ ] **Watch the judge degradation rate.** It fails closed, so a provider

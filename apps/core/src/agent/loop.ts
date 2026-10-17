@@ -2782,7 +2782,7 @@ export class AgentLoop {
       preparation: this.lastMemoryPreparation.state,
       judgeDecision: this.lastMemoryPreparation.judgeDecision,
     });
-    this.recorder.recordModelRequest(turnId, {
+    const requestId = this.recorder.recordModelRequest(turnId, {
       provider,
       model: resolvedModel,
       messageCount: prunedMessages.length,
@@ -2790,6 +2790,9 @@ export class AgentLoop {
       promptChars:
         estimatePromptChars(prunedMessages, system) + ephemeralTail.length,
       streamed: Boolean(aiProvider.stream),
+      // Resolved the same way the request itself resolves auth, so a request
+      // that never terminates still records how it was billed.
+      authMode: subscriptionAuth(provider) ?? "api-key",
     });
 
     // Request timeouts live in the provider's fetch wrapper (fetch-timeout.ts),
@@ -2799,6 +2802,7 @@ export class AgentLoop {
     // stream and got killed mid-flight.
     const recordModelFailure = (err: unknown): void => {
       this.recorder.recordModelError(turnId, {
+        requestId,
         provider,
         model: resolvedModel,
         duration_ms: Date.now() - startedAt,
@@ -2930,6 +2934,7 @@ export class AgentLoop {
         this.emitCacheWarm(usage, provider, resolvedModel);
         this.armCacheWarmer(provider, model, requestOptions, usage);
         this.recorder.recordModelResponse(turnId, {
+          requestId,
           provider,
           model: resolvedModel,
           echoedModel,
@@ -2975,6 +2980,7 @@ export class AgentLoop {
       this.emitCacheWarm(result.usage, provider, resolvedModel);
       this.armCacheWarmer(provider, model, requestOptions, result.usage);
       this.recorder.recordModelResponse(turnId, {
+        requestId,
         provider,
         model: resolvedModel,
         echoedModel: result.echoedModel,

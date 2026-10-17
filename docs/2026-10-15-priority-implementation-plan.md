@@ -22,7 +22,7 @@ the next extensibility feature after those foundations are trustworthy.
 
 | Order | Workstream                            | Why it is here                                                                                                         |
 | ----- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| 1     | Finish measurement follow-through     | Experiments still need an append-only ledger and a repaired long-task comparison baseline.                             |
+| 1     | Finish measurement follow-through     | The long-task comparison baseline still needs a publishable rerun before any optimization claim.                       |
 | 2     | Diagnose and prevent memory fact loss | Existing long-horizon evidence shows missing and lost facts; new memory features should not be layered on top of that. |
 | 3     | Scope writable subagents              | Read-only subagents are confined, but writable subagents lack path and network boundaries.                             |
 | 4     | Add an instruction hierarchy          | This is the roadmap's highest-value remaining extensibility item and benefits from the measurement foundation.         |
@@ -55,48 +55,30 @@ one implementation PR.
 This workstream blocks claims that an optimization is faster or cheaper. It
 does not block independent correctness fixes.
 
-### 4.1 Experiment ledger
+### 4.1 Re-establish the long-task baseline
 
-Add an append-only record for each performance or cost experiment with:
+Make the long-task comparison baseline publishable: fix the contamination window
+for `minimax/MiniMax-M3`, rerun, rejudge with the documented judge configuration,
+and record the exact commit, model, and judge. The rerun in
+`bench/agent-bench/results/pathology-commits-v3-rerun/` is not a usable baseline
+yet — it records no contamination window and reports `publishable: false`. The
+earlier v2 numbers are historical evidence, not a baseline: all 88 of their
+`grep` calls failed.
 
-- hypothesis and variants;
-- commit and workload;
-- quality, latency, token, and dollar results;
-- known accounting gaps;
-- verdict: kept, rejected, or inconclusive.
-
-Reuse the existing eval experiment format where it fits instead of inventing a
-second incompatible result model.
-
-### 4.2 Re-establish the long-task baseline
-
-Rebuild the benchmark image containing `rg`, rerun the nine long-task trials,
-and rejudge them with the documented judge configuration. Treat the earlier v2
-numbers as historical evidence, not a valid comparison baseline, because all 88
-of their `grep` calls failed.
-
-### 4.3 Measurement-gated optimization queue
+### 4.2 Measurement-gated optimization queue
 
 Do not implement every candidate at once. Use the harness to admit one change at
 a time:
 
-1. **Session history cache:** `readEntries` reparses the complete JSONL file on
-   each send. Implement a bounded store-owned cache only if preparation timing
-   is material; invalidate it on append, compaction, navigation, rewind,
-   import, deletion, and detected external changes.
-2. **Checkpoint scanning:** untracked-file size checks call `stat` sequentially.
-   Split capture timing first, then try bounded parallel reads only if this phase
-   dominates. The pre-tool checkpoint barrier and shadow-index isolation must
-   remain intact.
-3. **Project-instruction size:** this repository's selected root `CLAUDE.md` is
+1. **Project-instruction size:** this repository's selected root `CLAUDE.md` is
    now over 82 KB, roughly ten times the shipped base system prompt. Prototype a
    compact root guide plus topic documents only after real request attribution
    exists, and use eval A/B to prove required subsystem rules are still found.
-4. **Operation-specific model and effort:** extraction, compaction, and
+2. **Operation-specific model and effort:** extraction, compaction, and
    verification may use different policies only after their full cost and
    fallback behavior are visible. Respect an explicit user selection unless a
    configured routing policy says otherwise.
-5. **Selective tool results and repeat-work reduction:** target observed output
+3. **Selective tool results and repeat-work reduction:** target observed output
    families and repeated reads, not global compression. The previous blanket
    Bash-compression experiment increased total cost and must not be retried as
    an unmeasured default.
@@ -165,9 +147,6 @@ The first task is diagnosis, not prompt tuning.
   quadratic; retain rebuildability from the Markdown source of truth.
 - Backfill archived sessions through a bounded, resumable, leased job rather
   than an unbounded startup scan.
-- Add LongMemEval-S as an external-quality reference; the in-repository corpus
-  remains useful for regressions but cannot establish absolute retrieval
-  quality by itself.
 - Consider progressive disclosure only as a measured read-path redesign. A
   navigational summary plus on-demand bodies may beat a byte cap, but it changes
   MCP/tool surfaces and prompt-cache behavior.

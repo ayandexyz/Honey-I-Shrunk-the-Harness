@@ -185,4 +185,6 @@ not exist, since that silently caps recall and reads as a retrieval bug.
 
 **Bias warning:** this corpus was written by the same people who wrote the
 retriever. It catches regressions well and proves little about absolute quality.
-LongMemEval-S (spec D14) is the external corpus and is not yet wired up.
+LongMemEval-S (spec D14) is the external reference: `pnpm bench:longmemeval
+run|judge` drives `apps/core/src/eval/longmemeval-adapter.ts` (an adapted subset,
+not the official protocol).

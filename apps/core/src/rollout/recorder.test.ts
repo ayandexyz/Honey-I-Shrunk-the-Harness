@@ -247,6 +247,43 @@ test("function.denied records the tool, the gate, and the reason", () => {
   }
 });
 
+test("a terminator event names the model request it ends", () => {
+  const dir = mkdtempSync(join(tmpdir(), "freecode-rollout-"));
+  try {
+    const recorder = new RolloutRecorder("s1", { rolloutDir: dir });
+    const requestId = recorder.recordModelRequest("turn-4", {
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      messageCount: 3,
+      toolCount: 2,
+      promptChars: 100,
+      streamed: true,
+      authMode: "oauth",
+    });
+    recorder.recordModelResponse("turn-4", {
+      requestId,
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      duration_ms: 10,
+      toolCalls: [],
+      textChars: 0,
+      thinkingChars: 0,
+      authMode: "oauth",
+    });
+
+    const [request, response] = readEvents(dir) as Array<
+      Record<string, unknown>
+    >;
+    // The returned id is the log's own id, so a caller can link the terminator.
+    assert.equal(request!.id, requestId);
+    assert.equal(request!.authMode, "oauth");
+    assert.equal(response!.requestId, requestId);
+    assert.equal(response!.authMode, "oauth");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("verify.ran and unwired.flagged carry counts only", () => {
   const dir = mkdtempSync(join(tmpdir(), "freecode-rollout-"));
   try {

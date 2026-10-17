@@ -50,6 +50,12 @@ export interface ProviderAttemptLedgerEntry {
   model?: string;
   echoedModel?: string;
   authMode: "oauth" | "api-key";
+  /**
+   * Vintage of the price source used **at fold time**. A ledger re-prices from
+   * the recorded model/usage/authMode; it is not a receipt, so editing
+   * `~/.freecode/pricing.json` (or refreshing the models.dev cache) changes
+   * these totals for an old session.
+   */
   pricingVintage: string;
   startedAt: number;
   duration_ms?: number;
@@ -160,7 +166,25 @@ function foldSession(
   asOf: number,
 ): ProviderAttemptLedgerEntry[] {
   const attempts: ProviderAttemptLedgerEntry[] = [];
-  const open: Array<ProviderAttemptLedgerEntry & { turnId?: string }> = [];
+  /** `turnId`/`requestId` are pairing keys, stripped before the ledger returns. */
+  type OpenAttempt = ProviderAttemptLedgerEntry & {
+    turnId?: string;
+    requestId?: string;
+  };
+  const open: OpenAttempt[] = [];
+
+  // A turn holds one attempt per recovery retry, so the terminator's own
+  // request id is checked first; a turn match (or the single remaining open
+  // attempt) keeps older logs, which predate `requestId`, pairing as before.
+  const pairOpen = (terminator: {
+    turnId: string;
+    requestId?: string;
+  }): OpenAttempt | undefined =>
+    (terminator.requestId !== undefined
+      ? open.find((attempt) => attempt.requestId === terminator.requestId)
+      : undefined) ??
+    open.find((attempt) => attempt.turnId === terminator.turnId) ??
+    open[0];
 
   for (const event of events) {
     if (event.type === "model.request") {
@@ -175,13 +199,14 @@ function foldSession(
         purpose: foregroundPurpose(relation),
         provider: request.provider,
         model: request.model,
-        authMode: "api-key",
+        authMode: request.authMode ?? "api-key",
         pricingVintage: vintage,
         startedAt: request.timestamp,
         completion: "in_flight",
         usage: {},
-      }) as ProviderAttemptLedgerEntry & { turnId?: string };
+      }) as OpenAttempt;
       entry.turnId = request.turnId;
+      entry.requestId = request.id;
       attempts.push(entry);
       open.push(entry);
       continue;
@@ -189,8 +214,7 @@ function foldSession(
 
     if (event.type === "model.response") {
       const response = event as ModelResponseEvent;
-      const entry =
-        open.find((attempt) => attempt.turnId === response.turnId) ?? open[0];
+      const entry = pairOpen(response);
       if (!entry) continue;
       open.splice(open.indexOf(entry), 1);
       entry.provider = response.provider;
@@ -216,8 +240,7 @@ function foldSession(
 
     if (event.type === "model.error") {
       const error = event as ModelErrorEvent;
-      const entry =
-        open.find((attempt) => attempt.turnId === error.turnId) ?? open[0];
+      const entry = pairOpen(error);
       if (!entry) continue;
       open.splice(open.indexOf(entry), 1);
       entry.provider = error.provider;
@@ -291,11 +314,11 @@ function foldSession(
     entry.duration_ms = duration;
     entry.completion = duration >= HANG_THRESHOLD_MS ? "hung" : "in_flight";
   }
-  // turnId is pairing-only and deliberately absent from the public ledger.
-  for (const entry of attempts as Array<
-    ProviderAttemptLedgerEntry & { turnId?: string }
-  >) {
+  // turnId/requestId are pairing-only and deliberately absent from the public
+  // ledger.
+  for (const entry of attempts as OpenAttempt[]) {
     delete entry.turnId;
+    delete entry.requestId;
   }
   return attempts;
 }

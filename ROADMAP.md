@@ -184,10 +184,6 @@ check both hold. The two bugs those docs found are in `TODO.md`.
 
 ### Measurement first (blocks everything below)
 
-- [ ] **Experiment ledger.** One append-only record per experiment
-      (hypothesis, variants, workload, quality, cost, kept/rejected/inconclusive)
-      so a rejected idea such as `FREECODE_BASH_COMPRESS` is not retried. Cost
-      doc §11.
 - [ ] **Closed loop via `freecode night`.** Objective taken from this list,
       `--verify` running the harness or `eval ab`, `--max-usd` as the limit. Only
       possible once the harness exists.

@@ -21,7 +21,12 @@ function event(
   } as RolloutEvent;
 }
 
-function request(sessionId: string, turnId: string, timestamp: number) {
+function request(
+  sessionId: string,
+  turnId: string,
+  timestamp: number,
+  extra: Record<string, unknown> = {},
+) {
   return event(sessionId, "model.request", timestamp, {
     turnId,
     provider: "anthropic",
@@ -30,6 +35,7 @@ function request(sessionId: string, turnId: string, timestamp: number) {
     toolCount: 1,
     promptChars: 10,
     streamed: true,
+    ...extra,
   });
 }
 
@@ -115,6 +121,54 @@ test("reconciles root, child, compaction, memory, and cache attempts once", () =
       (attempt) => attempt.pricingVintage.length > 0,
     ),
   );
+});
+
+test("a response prices the request it names, not the first open one in the turn", () => {
+  // A killed process leaves a request with no terminator. The turn's next
+  // attempt (a retry) must not inherit that orphan's response.
+  const orphan = request("root", "turn-0", 100);
+  const retry = request("root", "turn-0", 150);
+  const sessions = new Map<string, RolloutEvent[]>([
+    [
+      "root",
+      [
+        orphan,
+        retry,
+        event("root", "model.response", 300, {
+          turnId: "turn-0",
+          requestId: retry.id,
+          provider: "anthropic",
+          model: "claude-sonnet-4-5",
+          duration_ms: 100,
+          inputTokens: 1_000_000,
+          outputTokens: 0,
+          toolCalls: [],
+          textChars: 0,
+          thinkingChars: 0,
+        }),
+      ],
+    ],
+  ]);
+
+  const ledger = buildTaskCostLedger("root", sessions);
+  assert.equal(ledger.runtimeAttempts.length, 2);
+  const [openAttempt, answered] = ledger.runtimeAttempts;
+  assert.equal(openAttempt?.id, `root:${orphan.id}:turn-0`);
+  assert.equal(openAttempt?.completion, "in_flight");
+  assert.equal(openAttempt?.usageStatus, "unknown");
+  assert.equal(openAttempt?.costUsd, undefined);
+  assert.equal(answered?.id, `root:${retry.id}:turn-0`);
+  assert.equal(answered?.completion, "succeeded");
+  assert.equal(answered?.costUsd, 3);
+});
+
+test("an attempt that never terminates keeps the auth mode recorded on its request", () => {
+  const sessions = new Map<string, RolloutEvent[]>([
+    ["root", [request("root", "turn-0", 100, { authMode: "oauth" })]],
+  ]);
+
+  const ledger = buildTaskCostLedger("root", sessions);
+  assert.equal(ledger.runtimeAttempts[0]?.authMode, "oauth");
 });
 
 test("keeps failed and missing-usage attempts visible and the total partial", () => {

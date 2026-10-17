@@ -406,14 +406,17 @@ export class RolloutRecorder {
   recordModelRequest(
     turnId: string,
     fields: Omit<ModelRequestEvent, keyof BaseEvent | "type" | "turnId">,
-  ): void {
-    this.write(
-      this.makeEvent("model.request", {
-        aggregateID: this.sessionId,
-        turnId,
-        fields,
-      }),
-    );
+  ): string {
+    const event = this.makeEvent("model.request", {
+      aggregateID: this.sessionId,
+      turnId,
+      fields,
+    });
+    this.write(event);
+    // Returned so the caller can stamp the matching response/error with
+    // `requestId` — a turn holds several attempts, so `turnId` alone cannot
+    // say which request a terminator ended.
+    return event.id;
   }
 
   recordModelFirstToken(turnId: string, ttft_ms: number): void {

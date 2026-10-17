@@ -146,6 +146,8 @@ test("a healthy turn records request, first token and response", async () => {
     assert.equal(request!.streamed, true);
     // The prompt size is the number that makes context growth visible.
     assert.ok((request!.promptChars as number) > 0);
+    // Stamped at request time so a hang still shows how the call authenticated.
+    assert.equal(request!.authMode, "api-key");
 
     assert.ok(firstToken, "model.first_token was written");
     assert.ok(typeof firstToken!.ttft_ms === "number");
@@ -155,6 +157,8 @@ test("a healthy turn records request, first token and response", async () => {
     assert.equal(response!.outputTokens, 7);
     assert.equal(response!.cacheReadTokens, 1000);
     assert.ok(typeof response!.duration_ms === "number");
+    // The terminator names the exact attempt it ended, not just the turn.
+    assert.equal(response!.requestId, request!.id);
   } finally {
     await runtime.dispose();
     rmSync(rolloutDir, { recursive: true, force: true });
@@ -181,7 +185,8 @@ test("a provider timeout is recorded as a stall, not a generic error", async () 
     assert.ok(elapsed < 20_000, `loop returned in ${elapsed}ms`);
 
     const events = readEvents(rolloutDir);
-    assert.ok(events.some((e) => e.type === "model.request"));
+    const request = events.find((e) => e.type === "model.request");
+    assert.ok(request, "the request was recorded before the call");
     assert.ok(
       !events.some((e) => e.type === "model.first_token"),
       "nothing was ever received, so there is no first token",
@@ -190,6 +195,8 @@ test("a provider timeout is recorded as a stall, not a generic error", async () 
     assert.ok(error, "the stall was recorded");
     assert.equal(error!.kind, "stall");
     assert.match(String(error!.error), /no data/);
+    // The failed attempt is linked to its own request, not merely its turn.
+    assert.equal(error!.requestId, request!.id);
   } finally {
     await runtime.dispose();
     rmSync(rolloutDir, { recursive: true, force: true });
