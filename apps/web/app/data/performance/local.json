@@ -1,0 +1,304 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-10-17T07:29:44.382Z",
+  "environment": {
+    "node": "v26.8.2",
+    "platform": "linux",
+    "arch": "x64",
+    "iterations": 7,
+    "warmup": 2,
+    "networkCalls": 0
+  },
+  "results": [
+    {
+      "name": "cold_backend_ready",
+      "layer": "backend",
+      "unit": "ms",
+      "samples": 7,
+      "distribution": {
+        "min": 476.1965519999999,
+        "p50": 528.8323430000005,
+        "p75": 549.2192090000003,
+        "p95": 581.7002713999998,
+        "max": 589.0565749999996
+      },
+      "work": { "processMode": "compiled", "rpc": "config.get" }
+    },
+    {
+      "name": "first_session_start",
+      "layer": "backend",
+      "unit": "ms",
+      "samples": 7,
+      "distribution": {
+        "min": 15.109598000000005,
+        "p50": 17.230998999999883,
+        "p75": 17.537900499999978,
+        "p95": 17.931096200000226,
+        "max": 18.039026000000376
+      },
+      "work": { "processMode": "compiled", "filesystemWrites": 2 }
+    },
+    {
+      "name": "prompt_to_first_visible_text",
+      "layer": "provider",
+      "unit": "ms",
+      "samples": 7,
+      "distribution": {
+        "min": 2.0961870000001,
+        "p50": 2.135201000000052,
+        "p75": 2.161016500000187,
+        "p95": 2.1927585999995243,
+        "max": 2.198364999999285
+      },
+      "work": { "chunks": 1, "visibleCharacters": 18, "configuredDelayMs": 2 }
+    },
+    {
+      "name": "prompt_to_first_visible_text",
+      "layer": "backend",
+      "unit": "ms",
+      "samples": 7,
+      "distribution": {
+        "min": 0.004079999999703432,
+        "p50": 0.018754000000626547,
+        "p75": 0.02614350000021659,
+        "p95": 0.03099489999976867,
+        "max": 0.032943999999588414
+      },
+      "work": { "chunks": 1, "visibleCharacters": 18, "configuredDelayMs": 2 }
+    },
+    {
+      "name": "prompt_to_first_visible_text",
+      "layer": "frontend",
+      "unit": "ms",
+      "samples": 7,
+      "distribution": {
+        "min": 0.07811899999978777,
+        "p50": 0.1810139999997773,
+        "p75": 0.21312750000015512,
+        "p95": 0.22386980000001133,
+        "max": 0.2274170000000595
+      },
+      "work": { "chunks": 1, "visibleCharacters": 18, "configuredDelayMs": 2 }
+    },
+    {
+      "name": "prompt_to_first_visible_text",
+      "layer": "end_to_end",
+      "unit": "ms",
+      "samples": 7,
+      "distribution": {
+        "min": 2.1921970000003057,
+        "p50": 2.373978999999963,
+        "p75": 2.3982579999997142,
+        "p95": 2.421119999999701,
+        "max": 2.43057299999964
+      },
+      "work": { "chunks": 1, "visibleCharacters": 18, "configuredDelayMs": 2 }
+    },
+    {
+      "name": "stream_16384b_128b_chunks",
+      "layer": "backend",
+      "unit": "ms",
+      "samples": 7,
+      "distribution": {
+        "min": 3.3135070000098494,
+        "p50": 3.4062680000024557,
+        "p75": 3.7144489999864163,
+        "p95": 3.872204299986697,
+        "max": 3.9286729999876115
+      },
+      "work": {
+        "bytesStreamed": 16384,
+        "chunks": 129,
+        "maxChunkBytes": 128,
+        "markdownRenders": 130
+      }
+    },
+    {
+      "name": "stream_16384b_128b_chunks",
+      "layer": "frontend",
+      "unit": "ms",
+      "samples": 7,
+      "distribution": {
+        "min": 3847.797313999992,
+        "p50": 4214.692047000008,
+        "p75": 4360.607687000027,
+        "p95": 4468.706565000016,
+        "max": 4508.233679999998
+      },
+      "work": {
+        "bytesStreamed": 16384,
+        "chunks": 129,
+        "maxChunkBytes": 128,
+        "markdownRenders": 130
+      }
+    },
+    {
+      "name": "stream_16384b_128b_chunks",
+      "layer": "end_to_end",
+      "unit": "ms",
+      "samples": 7,
+      "distribution": {
+        "min": 3859.0399620000007,
+        "p50": 4219.261983,
+        "p75": 4365.912839500001,
+        "p95": 4473.685639999998,
+        "max": 4513.210873999997
+      },
+      "work": {
+        "bytesStreamed": 16384,
+        "chunks": 129,
+        "maxChunkBytes": 128,
+        "markdownRenders": 130
+      }
+    },
+    {
+      "name": "stream_16384b_1024b_chunks",
+      "layer": "backend",
+      "unit": "ms",
+      "samples": 7,
+      "distribution": {
+        "min": 0.44597599998814985,
+        "p50": 0.48249500000383705,
+        "p75": 0.49159000000872766,
+        "p95": 0.5030456000073172,
+        "max": 0.5064020000063465
+      },
+      "work": {
+        "bytesStreamed": 16384,
+        "chunks": 16,
+        "maxChunkBytes": 1024,
+        "markdownRenders": 17
+      }
+    },
+    {
+      "name": "stream_16384b_1024b_chunks",
+      "layer": "frontend",
+      "unit": "ms",
+      "samples": 7,
+      "distribution": {
+        "min": 539.2356060000311,
+        "p50": 555.8388919999998,
+        "p75": 566.9561795000081,
+        "p95": 611.2357117000101,
+        "max": 626.383783000012
+      },
+      "work": {
+        "bytesStreamed": 16384,
+        "chunks": 16,
+        "maxChunkBytes": 1024,
+        "markdownRenders": 17
+      }
+    },
+    {
+      "name": "stream_16384b_1024b_chunks",
+      "layer": "end_to_end",
+      "unit": "ms",
+      "samples": 7,
+      "distribution": {
+        "min": 540.4396090000009,
+        "p50": 557.2996399999975,
+        "p75": 568.1869949999964,
+        "p95": 612.4349828999991,
+        "max": 627.5286059999999
+      },
+      "work": {
+        "bytesStreamed": 16384,
+        "chunks": 16,
+        "maxChunkBytes": 1024,
+        "markdownRenders": 17
+      }
+    },
+    {
+      "name": "session_resume_small",
+      "layer": "backend",
+      "unit": "ms",
+      "samples": 7,
+      "distribution": {
+        "min": 0.15660200000274926,
+        "p50": 0.17671600000176113,
+        "p75": 0.20310399999652873,
+        "p95": 0.23865360000345387,
+        "max": 0.2516070000056061
+      },
+      "work": { "entriesConverted": 24, "bytesParsed": 9822 }
+    },
+    {
+      "name": "session_resume_large",
+      "layer": "backend",
+      "unit": "ms",
+      "samples": 7,
+      "distribution": {
+        "min": 3.9521999999997206,
+        "p50": 4.221510000003036,
+        "p75": 4.707067999999708,
+        "p95": 4.7231882000000045,
+        "max": 4.728959000000032
+      },
+      "work": { "entriesConverted": 2400, "bytesParsed": 996270 }
+    },
+    {
+      "name": "history_load_unchanged",
+      "layer": "backend",
+      "unit": "ms",
+      "samples": 7,
+      "distribution": {
+        "min": 2.9847909999953117,
+        "p50": 4.51747400000022,
+        "p75": 4.922958499999368,
+        "p95": 5.750285600003553,
+        "max": 5.958251000003656
+      },
+      "work": {
+        "entriesConverted": 2400,
+        "bytesParsed": 996270,
+        "mutations": 0
+      }
+    },
+    {
+      "name": "history_load_after_append",
+      "layer": "backend",
+      "unit": "ms",
+      "samples": 7,
+      "distribution": {
+        "min": 9.828102999999828,
+        "p50": 12.679478000005474,
+        "p75": 18.264573000000382,
+        "p95": 19.988793699997768,
+        "max": 20.43591999999626
+      },
+      "work": {
+        "entriesConverted": 2401,
+        "bytesParsed": 996690,
+        "mutations": 1
+      }
+    },
+    {
+      "name": "checkpoint_capture_small",
+      "layer": "backend",
+      "unit": "ms",
+      "samples": 7,
+      "distribution": {
+        "min": 18.983610999996017,
+        "p50": 21.00402899999608,
+        "p75": 21.88554899999872,
+        "p95": 24.06137750000198,
+        "max": 24.991178000003856
+      },
+      "work": { "filesScanned": 26, "filesStatted": 26 }
+    },
+    {
+      "name": "checkpoint_capture_large",
+      "layer": "backend",
+      "unit": "ms",
+      "samples": 7,
+      "distribution": {
+        "min": 51.21683099999791,
+        "p50": 53.44587300000421,
+        "p75": 54.857113000001846,
+        "p95": 58.778293800000384,
+        "max": 59.85519899999781
+      },
+      "work": { "filesScanned": 1001, "filesStatted": 1001 }
+    }
+  ]
+}

@@ -64,3 +64,42 @@ const tokenFile = import.meta.glob<{ tools: ToolTokenRow[]; fixtures: string[] }
 	{ eager: true, import: "default" },
 );
 export const toolTokens = Object.values(tokenFile)[0] ?? { tools: [], fixtures: [] };
+
+export interface LocalPerformanceResult {
+	name: string;
+	layer: "provider" | "backend" | "frontend" | "end_to_end";
+	unit: "ms";
+	samples: number;
+	distribution: {
+		min: number;
+		p50: number;
+		p75: number;
+		p95: number;
+		max: number;
+	};
+	work: Record<string, string | number>;
+}
+
+export interface LocalPerformanceReport {
+	schemaVersion: 1;
+	generatedAt: string;
+	environment: {
+		node: string;
+		platform: string;
+		arch: string;
+		iterations: number;
+		warmup: number;
+		networkCalls: number;
+	};
+	results: LocalPerformanceResult[];
+}
+
+export const localPerformanceFiles = sorted(
+	import.meta.glob<LocalPerformanceReport>(
+		"../../../web/app/data/performance/*.json",
+		{
+			eager: true,
+			import: "default",
+		},
+	),
+);

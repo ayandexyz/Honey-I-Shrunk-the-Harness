@@ -1,0 +1,132 @@
+---
+import { githubUrl } from "../data/site";
+import {
+	localPerformanceFiles,
+	type LocalPerformanceReport,
+	type LocalPerformanceResult,
+} from "../data/sources";
+import "../styles/global.css";
+import "../styles/benchmark.css";
+import "../styles/performance.css";
+
+const reports = [...localPerformanceFiles].sort((a, b) => Date.parse(b.generatedAt) - Date.parse(a.generatedAt));
+const firstReport = reports[0];
+const date = (value: string) => new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+const duration = (value: number) => value >= 1000 ? `${(value / 1000).toFixed(2)} s` : value >= 10 ? `${value.toFixed(1)} ms` : value >= 1 ? `${value.toFixed(2)} ms` : `${value.toFixed(3)} ms`;
+const layerName = (layer: LocalPerformanceResult["layer"]) => ({ provider: "Provider", backend: "Backend", frontend: "Frontend", end_to_end: "End to end" })[layer];
+const fixtureName = (name: string) => {
+	const stream = /^stream_(\d+)b_(\d+)b_chunks$/.exec(name);
+	if (stream) return `${Number(stream[1]).toLocaleString("en-US")} B stream · ${stream[2]} B chunks`;
+	return ({
+		cold_backend_ready: "Cold backend ready",
+		first_session_start: "First session start",
+		prompt_to_first_visible_text: "Prompt to first visible text",
+		session_resume_small: "Session resume · 24 entries",
+		session_resume_large: "Session resume · 2,400 entries",
+		history_load_unchanged: "History reload · unchanged",
+		history_load_after_append: "History reload · after append",
+		checkpoint_capture_small: "Checkpoint · 26 files",
+		checkpoint_capture_large: "Checkpoint · 1,001 files",
+	} as Record<string, string>)[name] ?? name.replaceAll("_", " ");
+};
+const work = (row: LocalPerformanceResult) => Object.entries(row.work).map(([key, value]) => `${key.replace(/([A-Z])/g, " $1").toLowerCase()} ${typeof value === "number" ? value.toLocaleString("en-US") : value}`).join(" · ");
+const category = (name: string) => name.startsWith("stream_") ? "Streaming" : name.startsWith("session_") || name.startsWith("history_") || name.startsWith("checkpoint_") ? "Persistence" : "Startup and first text";
+const sections = ["Startup and first text", "Streaming", "Persistence"];
+const reportKey = (report: LocalPerformanceReport) => report.generatedAt.replace(/[^0-9]/g, "");
+const find = (report: LocalPerformanceReport, name: string, layer: string) => report.results.find((row) => row.name === name && row.layer === layer);
+const headline = (report: LocalPerformanceReport) => [
+	{ label: "Cold backend p95", row: find(report, "cold_backend_ready", "backend") },
+	{ label: "First visible p95", row: find(report, "prompt_to_first_visible_text", "end_to_end") },
+	{ label: "1 KiB chunk stream p95", row: find(report, "stream_16384b_1024b_chunks", "end_to_end") },
+	{ label: "Large resume p95", row: find(report, "session_resume_large", "backend") },
+];
+---
+
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<link rel="icon" type="image/png" href="/logo.png" />
+		<meta name="viewport" content="width=device-width" />
+		<meta name="generator" content={Astro.generator} />
+		<meta name="description" content="Network-free local latency measurements for the Histh coding agent harness." />
+		<meta name="theme-color" content="#f2f1ec" />
+		<title>Local performance — Histh</title>
+	</head>
+	<body class="benchmark-page performance-page">
+		<a class="skip-link" href="#performance-main">Skip to performance results</a>
+		<header class="benchmark-header shell">
+			<a class="brand header-brand" href="/" aria-label="Histh home">
+				<img class="brand-logo" src="/logo.png" alt="" width="395" height="632" />
+				<span class="brand-wordmark">Histh!</span>
+			</a>
+			<nav aria-label="Performance navigation">
+				<a href="/">Overview</a>
+				<a href="/benchmark">Agent bench</a>
+				<a href="/performance" aria-current="page">Local performance</a>
+				<a href="/#install">Install</a>
+			</nav>
+			<a class="button button-sm button-secondary github-link" href={githubUrl} target="_blank" rel="noreferrer">GitHub ↗</a>
+		</header>
+
+		<main id="performance-main">
+			<section class="benchmark-hero shell performance-hero">
+				<div class="benchmark-hero-copy">
+					<p class="eyebrow">Local performance / network-free</p>
+					<h1>Fast where<br />the harness<br /><em>owns the clock.</em></h1>
+				</div>
+				<div class="benchmark-hero-note">
+					<p>Repeatable latency measurements across startup, streaming, session history, and checkpoints—without a model or network call.</p>
+					<div class="hero-facts">
+						<span><strong>{firstReport?.results.length ?? 0}</strong> measurements</span>
+						<span><strong>{firstReport?.environment.iterations ?? 0}</strong> samples each</span>
+						<span><strong>{firstReport?.environment.networkCalls ?? 0}</strong> network calls</span>
+					</div>
+				</div>
+			</section>
+
+			{reports.length === 0 ? <p class="shell empty-runs">No performance report published yet. Run <code>pnpm bench:local:publish</code>.</p> : (
+				<>
+					<section class="performance-picker-wrap"><div class="shell performance-picker">
+						<label><span>Report</span><select data-performance-select aria-label="Performance report">{reports.map((report) => <option value={reportKey(report)}>{date(report.generatedAt)}</option>)}</select></label>
+						<p>Lower is better · p95 highlights tail latency · every row includes equal sample counts.</p>
+					</div></section>
+
+					{reports.map((report, reportIndex) => (
+						<article class="performance-report shell" data-performance-report={reportKey(report)} hidden={reportIndex !== 0}>
+							<header class="performance-meta">
+								<div><p class="eyebrow">Measured {date(report.generatedAt)}</p><h2>{report.environment.platform} / {report.environment.arch}</h2></div>
+								<p>{report.environment.node} · {report.environment.warmup} warmups · schema v{report.schemaVersion}</p>
+							</header>
+
+							<section class="performance-headlines" aria-label="Headline p95 timings">
+								{headline(report).map(({ label, row }) => <div><span>{label}</span><strong>{row ? duration(row.distribution.p95) : "—"}</strong><small>{row ? `${row.samples} samples` : "not measured"}</small></div>)}
+							</section>
+
+							{sections.map((section) => {
+								const rows = report.results.filter((row) => category(row.name) === section);
+								const max = Math.max(...rows.map((row) => row.distribution.p95), 1);
+								return <section class="performance-section">
+									<div class="performance-section-heading"><p class="eyebrow">{section}</p><p>{rows.length} layer measurements</p></div>
+									<div class="performance-table" role="table" aria-label={`${section} latency distributions`}>
+										<div class="performance-row performance-row-head" role="row"><span>Fixture / layer</span><span>p50</span><span>p75</span><span>p95</span></div>
+										{rows.map((row) => <div class="performance-row" role="row">
+											<div class="performance-label"><strong>{fixtureName(row.name)}</strong><span class:list={["layer-pill", `layer-${row.layer}`]}>{layerName(row.layer)}</span><small>{work(row)}</small></div>
+											<span>{duration(row.distribution.p50)}</span><span>{duration(row.distribution.p75)}</span>
+											<div class="p95-cell"><strong>{duration(row.distribution.p95)}</strong><i style={`--bar: ${Math.max(1, row.distribution.p95 / max * 100)}%`}></i></div>
+										</div>)}
+									</div>
+								</section>;
+							})}
+						</article>
+					))}
+				</>
+			)}
+		</main>
+		<footer class="benchmark-footer"><div class="shell benchmark-footer-content"><span class="benchmark-footer-brand">Histh! · local performance</span><span>Refresh with <code>pnpm bench:local:publish</code></span></div></footer>
+		<script>
+			const select = document.querySelector<HTMLSelectElement>("[data-performance-select]");
+			select?.addEventListener("change", () => document.querySelectorAll<HTMLElement>("[data-performance-report]").forEach((report) => { report.hidden = report.dataset.performanceReport !== select.value; }));
+		</script>
+	</body>
+</html>

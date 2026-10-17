@@ -184,12 +184,6 @@ check both hold. The two bugs those docs found are in `TODO.md`.
 
 ### Measurement first (blocks everything below)
 
-- [ ] **Local performance harness.** Deterministic fixtures for cold start,
-      send, resume and streaming (long Markdown reply in fixed chunk sizes,
-      large transcripts, small/large git repos). Report p50/p95 and work counts
-      (parses, renders, bytes read), paired before/after on one machine. Local
-      and free — not an `evals/*.jsonl` case. Perf doc §1 and "A practical
-      implementation sequence".
 - [ ] **Experiment ledger.** One append-only record per experiment
       (hypothesis, variants, workload, quality, cost, kept/rejected/inconclusive)
       so a rejected idea such as `FREECODE_BASH_COMPRESS` is not retried. Cost

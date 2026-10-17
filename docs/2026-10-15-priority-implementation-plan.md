@@ -54,22 +54,7 @@ one implementation PR.
 This workstream blocks claims that an optimization is faster or cheaper. It
 does not block independent correctness fixes.
 
-### 4.1 Local performance harness
-
-Build deterministic, network-free fixtures for:
-
-- cold startup and first interactive input;
-- prompt submission to first visible text;
-- session resume for small and large transcripts;
-- fixed-size streaming with controlled chunk schedules;
-- checkpoint capture in small and large Git repositories;
-- repeated history loads with and without mutations.
-
-Report p50, p75, and p95 plus work counts such as bytes parsed, entries
-converted, Markdown parses, renders, and files statted. Separate backend time,
-frontend rendering, and provider time so one cannot be mistaken for another.
-
-### 4.2 Complete cost accounting
+### 4.1 Complete cost accounting
 
 Define one ledger entry per provider attempt, linked to:
 
@@ -89,7 +74,7 @@ Acceptance requires a synthetic task containing a main turn, child agent,
 compaction, memory operation, and cache refresh to reconcile with a known call
 ledger.
 
-### 4.3 Experiment ledger
+### 4.2 Experiment ledger
 
 Add an append-only record for each performance or cost experiment with:
 
@@ -102,14 +87,14 @@ Add an append-only record for each performance or cost experiment with:
 Reuse the existing eval experiment format where it fits instead of inventing a
 second incompatible result model.
 
-### 4.4 Re-establish the long-task baseline
+### 4.3 Re-establish the long-task baseline
 
 Rebuild the benchmark image containing `rg`, rerun the nine long-task trials,
 and rejudge them with the documented judge configuration. Treat the earlier v2
 numbers as historical evidence, not a valid comparison baseline, because all 88
 of their `grep` calls failed.
 
-### 4.5 Measurement-gated optimization queue
+### 4.4 Measurement-gated optimization queue
 
 Do not implement every candidate at once. Use the harness to admit one change at
 a time:
@@ -144,8 +129,6 @@ metric, correctness result, memory tradeoff, and full task-cost result.
 
 ### Acceptance gate
 
-- A developer can reproduce a local before/after performance report without a
-  paid model call.
 - A paid A/B report clearly separates runtime, child-agent, auxiliary, and
   grader cost.
 - The long-task baseline uses a functioning tool image and records its exact
@@ -328,15 +311,14 @@ Before implementation, settle:
 
 Keep review and rollback simple:
 
-1. **PR A:** Local performance harness and baseline report format.
-2. **PR B:** Complete cost ledger and task-tree aggregation.
-3. **PR C:** Rebuilt long-task baseline and recorded results; no behavioral
+1. **PR A:** Complete cost ledger and task-tree aggregation.
+2. **PR B:** Rebuilt long-task baseline and recorded results; no behavioral
    change.
-4. **PR D:** Memory failure instrumentation and deterministic reproductions.
-5. **PR E:** Memory extraction/consolidation safeguards, gated by memory
+3. **PR C:** Memory failure instrumentation and deterministic reproductions.
+4. **PR D:** Memory extraction/consolidation safeguards, gated by memory
    benchmarks.
-6. **PR F:** Subagent capability-envelope spec and implementation.
-7. **PR G:** Instruction hierarchy in separately gated phases.
+5. **PR E:** Subagent capability-envelope spec and implementation.
+6. **PR F:** Instruction hierarchy in separately gated phases.
 
 Do not combine the memory, permissions, and instruction changes. Each changes
 what the model sees or what tools can do and therefore needs isolated evidence.
@@ -345,7 +327,7 @@ what the model sees or what tools can do and therefore needs isolated evidence.
 
 This plan is complete when:
 
-- local performance and complete task-cost baselines are reproducible;
+- complete task-cost baselines are reproducible;
 - the repaired long-task benchmark has replaced the broken-tool baseline;
 - memory merges cannot silently discard taught facts;
 - writable subagents can be constrained by path and network without gaining

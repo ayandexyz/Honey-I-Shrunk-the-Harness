@@ -155,19 +155,20 @@ The packaged CLI uses Bun, and the desktop uses Tauri. Runtime-specific V8/Elect
 
 ## A practical implementation sequence
 
-### First change: a baseline and repeatable fixtures
+### First change: a baseline and repeatable fixtures — built 2026-10-17
 
-Add a small local performance harness with deterministic input/event fixtures. Suggested fixtures are proposals, not existing commands:
+`pnpm bench:local` now runs deterministic, network-free fixtures against the
+real session store, shadow-Git capture, backend process, and TUI Markdown
+component. It reports p50, p75, p95, and work counts for startup, first session
+creation, prompt-to-first-visible phases, controlled Markdown streams, small and
+large resumes, unchanged and mutated history loads, and small and large
+checkpoint captures.
 
-- Short and long transcripts, including branching and large tool results.
-- A long Markdown reply with code fences, tables, Unicode, and different chunk sizes.
-- A session switch, interruption, final-snapshot reconciliation, and reconnect during output.
-- Small/large Git repositories with tracked, ignored, and untracked files.
-- Typing and scrolling during output; cold and warm startup in the packaged binary.
-
-Reuse the [TUI end-to-end harness](../apps/tui/e2e/tui-session.ts) where appropriate. A synthetic frontend event replay should be a local test/benchmark, not an `evals/*.jsonl` case: those cases run real agent turns. Existing rollout logs omit message bodies, so they cannot reconstruct a text-rendering fixture by themselves.
-
-Record checkout, runtime, hardware, fixture hash, and configuration. Run paired before/after measurements on the same machine with warm-up and enough repetitions to show variation. Keep local rendering measurements separate from real-provider runs; live provider latency is noisy and paid.
+`--json-out` saves a baseline and `--compare` prints paired p95 deltas. Provider,
+backend, frontend, and end-to-end rows remain separate. See
+[`PERFORMANCE.md`](../PERFORMANCE.md) for the operator procedure and
+[`bench/local-performance/README.md`](../bench/local-performance/README.md) for
+fixture details.
 
 ### Next changes: one measurable improvement each
 
