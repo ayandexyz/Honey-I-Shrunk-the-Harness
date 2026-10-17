@@ -13,18 +13,6 @@ export interface MessageCreators {
     outputTokens?: number,
     contextLimit?: number,
   ): { component: Component; id: number };
-  updateInProgressMessage(
-    id: number,
-    phrase: string,
-    inputTokens: number,
-    outputTokens: number,
-    contextLimit: number,
-    startTime: number,
-    turns: number,
-    cachedTokens?: number,
-    /** Context occupancy for the meter — distinct from the ↓/↑ run totals. */
-    contextTokens?: number,
-  ): void;
   insertBeforeEditor(component: Component): void;
   removeMessageById(id: number): void;
 }

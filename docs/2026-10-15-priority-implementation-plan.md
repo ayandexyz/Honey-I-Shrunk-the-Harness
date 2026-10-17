@@ -2,7 +2,7 @@
 
 > **Status:** Proposed
 > **Date:** 2026-10-15
-> **Scope:** Runtime and eval integrity, memory fidelity, subagent permission
+> **Scope:** Runtime integrity, memory fidelity, subagent permission
 > scoping, performance and cost measurement, and instruction hierarchy.
 > **Explicitly excluded:** Web/Tauri incremental response rendering.
 
@@ -21,16 +21,15 @@ the next extensibility feature after those foundations are trustworthy.
 
 | Order | Workstream                            | Why it is here                                                                                                         |
 | ----- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| 1     | Close runtime and eval integrity gaps | Judge identity, output bounds, and compaction traces affect correctness and trust.                                     |
+| 1     | Close runtime integrity gaps          | Compaction trace fidelity affects correctness and trust.                                                               |
 | 2     | Build measurement foundations         | Performance and cost changes cannot be evaluated credibly without complete accounting and repeatable fixtures.         |
 | 3     | Diagnose and prevent memory fact loss | Existing long-horizon evidence shows missing and lost facts; new memory features should not be layered on top of that. |
 | 4     | Scope writable subagents              | Read-only subagents are confined, but writable subagents lack path and network boundaries.                             |
 | 5     | Add an instruction hierarchy          | This is the roadmap's highest-value remaining extensibility item and benefits from the measurement foundation.         |
 
-The runtime/eval fixes in Workstream 1 should be separate PRs because they have
-different failure modes. Workstream 2 should begin before any optimization
-experiment. Workstreams 3–5 each require their own design or spec amendment and
-should not be combined into one implementation PR.
+Workstream 2 should begin before any optimization experiment. Workstreams 3–5
+each require their own design or spec amendment and should not be combined into
+one implementation PR.
 
 ## 3. Architectural constraints
 
@@ -51,10 +50,9 @@ should not be combined into one implementation PR.
 - Rollout and OTLP events remain body- and path-free. Better observability means
   safe counts, identifiers, and attribution, not logging user content.
 
-## 4. Workstream 1 — runtime and eval integrity
+## 4. Workstream 1 — runtime integrity
 
-These items are independently shippable. They are grouped because each makes a
-successful-looking run less trustworthy than it appears.
+This item can make a successful-looking run less trustworthy than it appears.
 
 ### 4.1 Make compaction traces describe the real transition
 
@@ -74,19 +72,10 @@ Implementation requirements:
 - Update the trace fold, JSON output, OTLP attributes, and eval scorers together.
 - Preserve backwards compatibility for older rollout logs.
 
-### 4.2 Remove the fixed TUI completion delay
-
-The TUI still waits 500 ms after the backend returns so the final token state is
-briefly visible, then removes the progress row. Preserve the statistics in a
-settled row and end the working state immediately. This is a known presentation
-delay, not a provider-speed optimization, and can ship without a paid model
-eval if deterministic TUI tests cover the state transition.
-
 ### Acceptance gate
 
 - Compaction traces expose comparable token measures and the body-free message
   transition.
-- The TUI exits its working state without the fixed half-second pause.
 
 ## 5. Workstream 2 — measurement foundations
 
@@ -368,16 +357,15 @@ Before implementation, settle:
 Keep review and rollback simple:
 
 1. **PR A:** Compaction trace fidelity.
-2. **PR B:** Remove the fixed TUI completion delay.
-3. **PR C:** Local performance harness and baseline report format.
-4. **PR D:** Complete cost ledger and task-tree aggregation.
-5. **PR E:** Rebuilt long-task baseline and recorded results; no behavioral
+2. **PR B:** Local performance harness and baseline report format.
+3. **PR C:** Complete cost ledger and task-tree aggregation.
+4. **PR D:** Rebuilt long-task baseline and recorded results; no behavioral
    change.
-6. **PR F:** Memory failure instrumentation and deterministic reproductions.
-7. **PR G:** Memory extraction/consolidation safeguards, gated by memory
+5. **PR E:** Memory failure instrumentation and deterministic reproductions.
+6. **PR F:** Memory extraction/consolidation safeguards, gated by memory
    benchmarks.
-8. **PR H:** Subagent capability-envelope spec and implementation.
-9. **PR I:** Instruction hierarchy in separately gated phases.
+7. **PR G:** Subagent capability-envelope spec and implementation.
+8. **PR H:** Instruction hierarchy in separately gated phases.
 
 Do not combine the memory, permissions, and instruction changes. Each changes
 what the model sees or what tools can do and therefore needs isolated evidence.

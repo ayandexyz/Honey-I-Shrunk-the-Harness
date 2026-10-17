@@ -20,9 +20,9 @@ import {
   getRandomElapsedPhrase,
   getRandomInProgressPhrase,
 } from "../../utils/elapsed-phrases.js";
-import { getModelContextLimit } from "../../utils/model-limits.js";
 import { formatTokenCount } from "../../utils/format-tokens.js";
 import { formatDuration } from "../../utils/format-duration.js";
+import { finishWorkingState } from "../../utils/finish-working-state.js";
 
 // State
 let currentSession: SessionInfo | null = null;
@@ -123,32 +123,13 @@ ${formatProviderList()}`);
         return;
       }
 
-      // Update in-progress message with token counts
-      const contextLimit = await getModelContextLimit(
-        `${currentProvider}/MiniMax-M2`,
-      );
-      ctx.updateInProgressMessage(
+      // Match normal prompt submission: the live row ends as soon as core is
+      // done, while the settled row below retains duration and token totals.
+      const elapsed = finishWorkingState(
+        (id) => ctx.removeMessageById(id),
         inProgressId,
-        getRandomInProgressPhrase(),
-        result.usage?.inputTokens ?? 0,
-        result.usage?.outputTokens ?? 0,
-        contextLimit,
         startTime,
-        result.turnCount || 1,
-        result.usage?.cacheReadInputTokens ?? 0,
-        // ↓/↑ are run totals; the meter needs the last turn's context instead.
-        result.usage?.contextTokens ??
-          (result.usage?.inputTokens ?? 0) +
-            (result.usage?.cacheReadInputTokens ?? 0),
       );
-
-      // Brief pause so user can see final token state before it disappears
-      await new Promise((resolve) => setTimeout(resolve, 500));
-
-      // Remove in-progress message now that response has arrived
-      ctx.removeMessageById(inProgressId);
-
-      const elapsed = Date.now() - startTime;
       const timeStr = formatDuration(elapsed);
 
       if (result.success) {

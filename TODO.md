@@ -31,16 +31,6 @@ error, interrupt and session switch. Details and acceptance criteria are in
 `scrollIntoView` on every update (`chat/MessageList.tsx:11`) and un-memoized
 `marked.parse` in `TextPart.tsx` will be hit far more often once deltas render.
 
-### TUI holds the progress row for 500ms after every reply (found 2026-10-11)
-
-**Status:** confirmed, presentation delay only.
-
-`submitPrompt` (`apps/tui/src/index.ts:2354`) sleeps 500ms after the final
-token stats arrive so the user can read them, then removes the in-progress row.
-The working state ends half a second after the backend has finished, on every
-turn. Fix: keep the final stats in a settled row and end the working indicator
-immediately. See `docs/2026-10-11-performance-recommendations.md` §1.
-
 ### The compaction eval cases are 20KB JSONL lines (added 2026-09-08, updated 2026-09-29)
 
 **Status:** known, cosmetic, needs a paid run to fix.

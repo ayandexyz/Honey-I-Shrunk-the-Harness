@@ -54,8 +54,6 @@ Use monotonic durations inside each process. Correlate the frontend interaction 
 
 The TUI already exposes **Shift+Ctrl+D** frame statistics through [render-guard.ts](../apps/tui/src/render-guard.ts) and [frame-stats.ts](../apps/tui/src/components/frame-stats.ts). These cover component rendering and explicitly exclude terminal diff/write time. Extend them with a bounded duration distribution; use a PTY-based measurement for visible terminal output. Do not label the existing render duration as end-to-end frame latency.
 
-One small, concrete measurement target: `submitPrompt` in [TUI index.ts](../apps/tui/src/index.ts) deliberately waits 500 ms after updating final token statistics before removing the progress row. Consider retaining those statistics in a settled row and ending the working indicator immediately. That would remove a presentation delay, not accelerate the provider or guarantee the next prompt starts 500 ms sooner.
-
 ## 2. Show web-app text as it arrives
 
 ### Observed behavior
