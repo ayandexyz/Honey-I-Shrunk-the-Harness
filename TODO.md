@@ -713,30 +713,3 @@ anchors). Detector gained a one-sample deferral for provider blips
       ("nothing is written to history") or self-contradicting ("No… Yes") —
       the same flakiness Gemini scored 0/1/3 on 2026-09-06/08. Pre-existing,
       not this branch; a candidate for `evals/quarantine.txt` with that reason.
-
-## Found running the memory long-horizon savings-curve experiment (2026-09-26)
-
-`evals/memory-long-horizon.jsonl`, `long-incremental-assembly` (three tax
-rates taught across six sessions, one probe that needs all three). Its fixture
-confound — `regions.mjs` was immutable although the teaching says "the rate
-table lives in regions.mjs" — is fixed (`595b9dd3`), and an oracle solution
-passes `verify`. The re-run (`evals/experiments.jsonl`
-`2026-09-26-memory-long-horizon-3`, rejected) is still 0/3 vs 0/3, now for
-memory reasons. Evidence is store sizes plus the model's stated recall; the
-stores are deleted after each trial, so contents were not read directly —
-set `FREECODE_EVAL_KEEP_SANDBOX=1` and keep the store to confirm.
-
-- [ ] **The last-taught fact is not retained.** Session 6 ("the region table
-      also needs ap-northeast-1 at 10 percent") grew the store in 0 of 3
-      candidate trials. In the one trial where consolidation did nothing, the
-      model used the first two rates correctly and had no ap-northeast-1 —
-      so the fact was either never extracted or overwritten in place under an
-      existing memory name (`extract.ts` saves over a same-name entry rather
-      than merging content). Distinguish the two before fixing.
-- [ ] **Consolidation lost a fact it had.** In 2 of 3 candidate trials the
-      forced pass merged 2 and deleted 2 memories right before the scored
-      turn, and the probe then used a rate taught earlier wrongly
-      (us-east-1 = 0) or not at all (eu-west-2 missing). Same shape as spec
-      §7.2's rejected `consolidate-production-endpoint` result — a merge that
-      drops content from the entries it folds together. Check what the merge
-      prompt keeps when combining entries that each hold part of a table.

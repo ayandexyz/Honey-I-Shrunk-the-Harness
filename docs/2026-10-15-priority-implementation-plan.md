@@ -2,8 +2,8 @@
 
 > **Status:** Active — completed slices removed
 > **Date:** 2026-10-15
-> **Last updated:** 2026-10-17
-> **Scope:** Memory fidelity, subagent permission scoping, performance and cost
+> **Last updated:** 2026-10-18
+> **Scope:** Memory expansion, subagent permission scoping, performance and cost
 > measurement, and instruction hierarchy.
 > **Explicitly excluded:** Web/Tauri incremental response rendering.
 
@@ -13,8 +13,8 @@ Resolve the highest-value correctness, release-trust, and safety gaps before
 adding broad new features, then establish the measurements needed to make
 performance and cost changes safely.
 
-This plan is deliberately split into reviewable workstreams. Memory fidelity
-and subagent permissions require evidence and design work before implementation.
+This plan is deliberately split into reviewable workstreams. Subagent
+permissions require evidence and design work before implementation.
 Performance and cost work must start with measurement. Instruction hierarchy is
 the next extensibility feature after those foundations are trustworthy.
 
@@ -23,9 +23,8 @@ the next extensibility feature after those foundations are trustworthy.
 | Order | Workstream                            | Why it is here                                                                                                         |
 | ----- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | 1     | Finish measurement follow-through     | The long-task comparison baseline still needs a publishable rerun before any optimization claim.                       |
-| 2     | Diagnose and prevent memory fact loss | Existing long-horizon evidence shows missing and lost facts; new memory features should not be layered on top of that. |
-| 3     | Scope writable subagents              | Read-only subagents are confined, but writable subagents lack path and network boundaries.                             |
-| 4     | Add an instruction hierarchy          | Implemented 2026-10-17; retain the verification/evidence notes below for follow-up.                                      |
+| 2     | Scope writable subagents              | Read-only subagents are confined, but writable subagents lack path and network boundaries.                             |
+| 3     | Add an instruction hierarchy          | Implemented 2026-10-17; retain the verification/evidence notes below for follow-up.                                    |
 
 Workstream 1 should begin before any optimization experiment. Workstreams 2–4
 each require their own design or spec amendment and should not be combined into
@@ -112,27 +111,28 @@ metric, correctness result, memory tradeoff, and full task-cost result.
 - The long-task baseline uses a functioning tool image and records its exact
   commit, model, and judge.
 
-## 5. Workstream 2 — memory fidelity before memory expansion
+## 5. Deferred memory expansion
 
-### Current evidence
+The memory-fidelity workstream was completed and removed from the remaining
+priority queue on 2026-10-18. Extraction now validates that proposals cover the
+latest concrete anchors, preserves independent same-topic facts, refuses lossy
+consolidation, and gives recalled lists/maps explicit assembly and unit guidance.
 
-The long-horizon memory experiment found two distinct failure shapes:
+Evidence: `long-late-correction` improved 0/3 → 3/3 in report
+`5d8a97e5-080e-4c98-be19-345271d88f68`; `long-incremental-assembly` improved
+0/3 → 2/3 in `04a55941-40c5-4e38-8cf8-439781ac20d4`. In the remaining failed
+trial all three regions and percentage values reached the generated files; the
+model then treated percentage points as multipliers, so it was a coding error,
+not fact loss. The fidelity acceptance itself was 3/3 facts surviving through
+extraction, consolidation, retrieval, and rendering.
 
-1. The last taught fact was absent in all three trials. It may not have been
-   extracted, or a same-name save may have overwritten an existing memory.
-2. Consolidation merged and deleted memories, after which an earlier fact was
-   missing or wrong in two of three trials.
+Verification: 274/274 memory tests; `bench:recall` remained recall@5 81.8%,
+recall@10 86.4%, MRR 84.1%, nDCG@10 79.4%; `bench:inject` rendered recall
+84.1%, zero gold dropped, mean block 1,993 B under the 2,048 B cap, and 12/12
+lifecycle scenarios.
 
-### Evaluation
-
-- Rerun the long-horizon case with retained stores and inspect all failure
-  classifications.
-- Run `bench:recall`, `bench:inject`, memory lifecycle tests, and the relevant
-  multi-session evals.
-- Measure both fact retention and irrelevant-memory growth; solving loss by
-  retaining everything without bound is not acceptable.
-
-### Scale and historical coverage, only after fidelity
+The following expansion work remains separate from the completed fidelity
+slice:
 
 - Add the VectorStore id-to-index map before larger corpora make full sync
   quadratic; retain rebuildability from the Markdown source of truth.
@@ -141,13 +141,6 @@ The long-horizon memory experiment found two distinct failure shapes:
 - Consider progressive disclosure only as a measured read-path redesign. A
   navigational summary plus on-demand bodies may beat a byte cap, but it changes
   MCP/tool surfaces and prompt-cache behavior.
-
-### Acceptance gate
-
-- The three taught regional facts survive extraction, consolidation, retrieval,
-  and rendering in every required trial.
-- Recall quality does not regress and injected bytes remain within the existing
-  budget.
 
 ## 6. Workstream 3 — scoped permissions for writable subagents
 

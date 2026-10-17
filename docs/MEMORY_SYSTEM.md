@@ -13,7 +13,8 @@
 > write side `specs/2026-08-09-memory-write-path.md` ·
 > viewer `specs/2026-08-04-memory-graph-explorer-design.md`
 >
-> Last updated 2026-09-25 — memory cost accounting, the injection bench,
+> Last updated 2026-10-18 — loss-safe extraction/consolidation and complete
+> recalled-fact assembly. Earlier, 2026-09-25: memory cost accounting, the injection bench,
 > store-consistent injection, the recall switch, and the paired memory eval
 > (spec `specs/2026-09-25-memory-efficiency-and-graph-explorer.md`). Earlier,
 > 2026-08-23: consolidation, episodes, the retrieval judge, the
@@ -144,6 +145,12 @@ completion → shouldExtract() gates → one provider.execute() call
   unbounded extractor fills the store faster than anything cleans it.
 - **Transcript clipped to 12,000 chars**, text parts only (tool args and results
   are the "how"; we want what was said and concluded).
+- **Latest concrete facts are coverage-checked.** If proposals omit a concrete
+  identifier/value from the latest durable user statement, one bounded retry
+  targets that statement; turn-local no-edit/acknowledgement text is excluded.
+- **Independent same-topic facts are additive.** A reused name cannot silently
+  replace a different anchored fact; explicit corrections still replace stale
+  values, and claim-losing consolidation merges are refused.
 - **Never throws.** Malformed JSON, a dead provider, a fenced code block, an
   unknown `type` — all degrade to "saved nothing".
 
