@@ -25,6 +25,7 @@ import {
   type MemoryType,
 } from "./mem-types.js";
 import { containsSecret } from "./graph/secret-filter.js";
+import { uncoveredClaims } from "./claim-anchors.js";
 import { BusEvents } from "../bus/index.js";
 import { logger } from "../utils/logger.js";
 import type { MemoryAuxiliaryObserver } from "./auxiliary.js";
@@ -116,6 +117,8 @@ export interface ConsolidationResult {
   promoted: number;
   episodes: number;
   deleted: number;
+  /** Merges refused because the replacement did not carry a source's claims. */
+  skippedMerges: number;
   /** False when nothing was applied — the caller must not advance the baseline. */
   ok: boolean;
 }
@@ -125,6 +128,7 @@ const EMPTY: ConsolidationResult = {
   promoted: 0,
   episodes: 0,
   deleted: 0,
+  skippedMerges: 0,
   ok: false,
 };
 
@@ -289,6 +293,7 @@ export async function consolidateMemories(
     const saved: Array<{ type: string; name: string }> = [];
     let merged = 0;
     let deleted = 0;
+    let skippedMerges = 0;
 
     for (const m of plan.merges.slice(0, MAX_MERGES)) {
       // The model cannot delete something it was never shown.
@@ -301,6 +306,28 @@ export async function consolidateMemories(
         // Refuse the write AND the deletions: dropping the originals for a
         // replacement we would not store is the one way to lose data here.
         logger.debug("[MemoryConsolidate] merge refused: secret in content");
+        continue;
+      }
+
+      // Phase 2 (plan 2026-10-15 §5): the replacement must carry every specific
+      // claim of the memories it consumes — the entry it rewrites and each one
+      // named in `supersedes`. A missing claim means the source is kept and the
+      // merge reported as skipped: a delete a retry cannot undo is the one act
+      // worth refusing on a guess.
+      const consumed = [
+        existing,
+        ...targets.map((name) => findByName(store.list(), name)),
+      ].filter((e): e is MemoryEntry => e !== undefined);
+      const uncovered = consumed.flatMap((e) =>
+        uncoveredClaims(e.content, m.content),
+      );
+      if (uncovered.length > 0) {
+        skippedMerges++;
+        logger.debug("[MemoryConsolidate] merge skipped: claims uncovered", {
+          into: m.into,
+          supersedes: targets,
+          uncovered,
+        });
         continue;
       }
 
@@ -385,7 +412,7 @@ export async function consolidateMemories(
       BusEvents.memorySaved(input.sessionId, saved);
     }
 
-    return { merged, promoted, episodes, deleted, ok: true };
+    return { merged, promoted, episodes, deleted, skippedMerges, ok: true };
   } catch (error) {
     // `{ error }` serialises an Error to `{}`, which is what this line used to
     // do — useless exactly when it matters.

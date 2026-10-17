@@ -18,7 +18,9 @@ function mem(name: string, content = `body of ${name}`): MemoryEntry {
   };
 }
 
-function fixture(fn: (ctx: { path: string; store: MemoryStore }) => Promise<void>) {
+function fixture(
+  fn: (ctx: { path: string; store: MemoryStore }) => Promise<void>,
+) {
   return async () => {
     const path = mkdtempSync(join(tmpdir(), "mem-consolidate-"));
     const store = getMemoryStore(path);
@@ -31,7 +33,12 @@ function fixture(fn: (ctx: { path: string; store: MemoryStore }) => Promise<void
   };
 }
 
-const run = (path: string, reply: string, shown: string[], overflow?: string[]) =>
+const run = (
+  path: string,
+  reply: string,
+  shown: string[],
+  overflow?: string[],
+) =>
   consolidateMemories({
     projectPath: path,
     provider: "test",
@@ -106,7 +113,10 @@ test(
     );
 
     assert.equal(result.deleted, 1, "only the shown one is deleted");
-    assert.ok(store.load("secret-memory", "project"), "unshown memory survives");
+    assert.ok(
+      store.load("secret-memory", "project"),
+      "unshown memory survives",
+    );
     assert.equal(store.load("shown-duplicate", "project"), undefined);
     assert.deepEqual(result.merged, 1, "the merge still applied");
   }),
@@ -129,7 +139,9 @@ test(
           into: `into-${i}`,
           supersedes: [`dup-${i}`],
           description: "d",
-          content: "c",
+          // The replacement has to carry what it consumes (Phase 2), so a stub
+          // body would be refused — this says the same thing as both sources.
+          content: `body of into-${i} and body of dup-${i}`,
         })),
         episode: {
           name: "an-episode",
@@ -177,7 +189,11 @@ test(
     );
 
     assert.equal(result.merged, 0);
-    assert.equal(result.deleted, 0, "dropping originals for a refused write loses data");
+    assert.equal(
+      result.deleted,
+      0,
+      "dropping originals for a refused write loses data",
+    );
     assert.equal(store.load("keeper", "project")?.content, "original body");
     assert.ok(store.load("victim", "project"), "the victim survives");
   }),
@@ -275,13 +291,18 @@ test("parsePlan rejects a promotion of type episode", () => {
       ],
     }),
   );
-  assert.deepEqual(plan?.promote.map((p) => p.name), ["y"]);
+  assert.deepEqual(
+    plan?.promote.map((p) => p.name),
+    ["y"],
+  );
 });
 
 test("parsePlan drops a merge that supersedes only itself", () => {
   const plan = parsePlan(
     JSON.stringify({
-      merges: [{ into: "a", supersedes: ["a"], description: "d", content: "c" }],
+      merges: [
+        { into: "a", supersedes: ["a"], description: "d", content: "c" },
+      ],
       episode: null,
       promote: [],
     }),
@@ -305,3 +326,97 @@ test("parsePlan drops a malformed happened_at but keeps the episode", () => {
   assert.equal(plan?.episode?.name, "e");
   assert.equal(plan?.episode?.happened_at, undefined);
 });
+
+// -----------------------------------------------------------------------------
+// Loss-resistant consolidation (plan 2026-10-15 §5 Phase 2). A merge is the
+// only writer that deletes: it may only delete a memory whose specific claims
+// the replacement carries. When it cannot, the sources are kept and the skip is
+// reported — a wrong delete is the one act a retry cannot undo.
+// -----------------------------------------------------------------------------
+
+function mergeOf(into: string, supersedes: string[], content: string): string {
+  return JSON.stringify({
+    merges: [{ into, supersedes, description: "merged", content }],
+    episode: null,
+    promote: [],
+  });
+}
+
+test(
+  "a merge whose replacement drops a claim keeps both memories",
+  fixture(async ({ path, store }) => {
+    store.save(
+      mem("sqlite-choice", "The thread store is a single SQLite file"),
+    );
+    store.save(mem("deploy-cadence", "We always deploy on Fridays"));
+
+    const result = await run(
+      path,
+      mergeOf(
+        "sqlite-choice",
+        ["deploy-cadence"],
+        "Deploys happen on Fridays.",
+      ),
+      ["sqlite-choice", "deploy-cadence"],
+    );
+
+    assert.equal(result.merged, 0, "the merge is skipped, not applied");
+    assert.equal(result.skippedMerges, 1);
+    assert.equal(
+      result.deleted,
+      0,
+      "nothing may be deleted by a skipped merge",
+    );
+    assert.equal(
+      store.load("sqlite-choice", "project")?.content,
+      "The thread store is a single SQLite file",
+      "the rewritten source keeps its claims",
+    );
+    assert.ok(
+      store.load("deploy-cadence", "project"),
+      "the source named by supersedes survives",
+    );
+  }),
+);
+
+test(
+  "a merge that carries every claim still applies",
+  fixture(async ({ path, store }) => {
+    store.save(mem("deploy-cadence", "We always deploy on Fridays"));
+    store.save(mem("campaign-deadline", "The campaign deadline is Nov 3"));
+
+    const result = await run(
+      path,
+      mergeOf(
+        "deploy-cadence",
+        ["campaign-deadline"],
+        "Deploys happen on Fridays. The campaign deadline is Nov 3.",
+      ),
+      ["deploy-cadence", "campaign-deadline"],
+    );
+
+    assert.equal(result.merged, 1);
+    assert.equal(result.skippedMerges, 0);
+    assert.equal(result.deleted, 1);
+    assert.equal(store.load("campaign-deadline", "project"), undefined);
+  }),
+);
+
+test(
+  "a claim-free source merges unchecked",
+  fixture(async ({ path, store }) => {
+    // Nothing specific to check means no reason to keep a near-duplicate: a
+    // guard that refuses here would end consolidation altogether.
+    store.save(mem("a", "the store keeps notes about the project"));
+    store.save(mem("b", "notes about the project live in the store"));
+
+    const result = await run(
+      path,
+      mergeOf("a", ["b"], "Notes about the project live in the store."),
+      ["a", "b"],
+    );
+
+    assert.equal(result.merged, 1);
+    assert.equal(result.skippedMerges, 0);
+  }),
+);

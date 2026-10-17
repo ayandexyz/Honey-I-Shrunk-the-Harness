@@ -280,7 +280,7 @@ const merge = (projectPath: string, content: string, trace: MemoryWriteTrace) =>
       }),
   });
 
-test("a merge that drops a fact is a consolidation omission", async () => {
+test("a merge that drops a claim is refused, and its sources stay live", async () => {
   const { projectPath, cleanup } = fixture();
   const trace: MemoryWriteTrace = {};
   try {
@@ -291,19 +291,61 @@ test("a merge that drops a fact is a consolidation omission", async () => {
       trace,
     );
 
-    assert.equal(result.merged, 1);
-    // Name-sorted, because that is the order `store.list()` hands back.
-    assert.deepEqual(trace.consolidation?.sources.slice().sort(), [
+    assert.equal(result.merged, 0, "the lossy merge is skipped");
+    assert.equal(result.skippedMerges, 1);
+    assert.deepEqual(trace.consolidation?.deleted, []);
+    assert.deepEqual(trace.consolidation?.live.slice().sort(), [
       "The thread store is a single SQLite file",
       "We always deploy on Fridays",
     ]);
-    assert.deepEqual(trace.consolidation?.proposal, [
-      "Deploys happen on Fridays.",
-    ]);
-    assert.deepEqual(trace.consolidation?.deleted, ["deploy-cadence"]);
-    assert.deepEqual(trace.consolidation?.live, ["Deploys happen on Fridays."]);
+    // The claim the merge would have dropped is still there to be read.
     assert.equal(
       classifyMissingFact("single SQLite file", { trace }),
+      "present",
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("a retention deletion still loses a fact, and the classifier names it", async () => {
+  const { projectPath, cleanup } = fixture();
+  const store = getMemoryStore(projectPath);
+  const trace: MemoryWriteTrace = {};
+  try {
+    // Retention is the deletion path the Phase 2 merge guard does not govern:
+    // an episode over the cap is dropped once a successful call has had its
+    // chance to fold anything durable out of it. When it did not, the fact dies
+    // in consolidation — which is exactly what the classifier has to say out
+    // loud, so the next safeguard has somewhere to start.
+    store.save({
+      name: "session-2026-10-01",
+      type: "episode",
+      description: "a session",
+      content: "The retry ceiling is three attempts",
+      createdAt: 0,
+      updatedAt: 0,
+      happened_at: "2026-10-01",
+    });
+
+    await consolidateMemories({
+      projectPath,
+      provider: "test",
+      prompt: "irrelevant",
+      shownNames: new Set(["session-2026-10-01"]),
+      overflowEpisodes: ["session-2026-10-01"],
+      trace,
+      complete: async () =>
+        JSON.stringify({ merges: [], episode: null, promote: [] }),
+    });
+
+    assert.deepEqual(trace.consolidation?.sources, [
+      "The retry ceiling is three attempts",
+    ]);
+    assert.deepEqual(trace.consolidation?.deleted, ["session-2026-10-01"]);
+    assert.deepEqual(trace.consolidation?.live, []);
+    assert.equal(
+      classifyMissingFact("The retry ceiling is three attempts", { trace }),
       "consolidation_omission",
     );
   } finally {
