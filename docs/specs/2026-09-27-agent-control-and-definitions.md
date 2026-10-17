@@ -407,8 +407,10 @@ envelope:
   guess.
 - Roots are read with the existing path-rule grammar (`matchPath`,
   `permission/rules.ts:117-138`): `//abs`, `~/`, `./rel`, bare = project-relative,
-  gitignore-style globs. `write` roots are also readable — an agent that cannot
-  read what it is told to edit cannot work.
+  gitignore-style globs. A root beginning with a single `/` is refused at load
+  with a hint to write `//`, because the matcher reads a bare leading slash as
+  project-relative — the root would silently match nothing. `write` roots are
+  also readable — an agent that cannot read what it is told to edit cannot work.
 - `network` and `shell` are booleans. There is no host allowlist and no command
   allowlist in v1; command prefixes are what permission rules already express
   (§5.4).

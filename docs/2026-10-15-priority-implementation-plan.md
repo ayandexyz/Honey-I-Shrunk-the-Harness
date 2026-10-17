@@ -162,13 +162,11 @@ The specification is `docs/specs/2026-09-27-agent-control-and-definitions.md`
 §5 — the envelope's semantics, precedence, MCP and inheritance rules, and the
 questions its own §6 leaves open. What remains:
 
-1. Add the envelope to user-defined agent types and validation without changing
-   defaults.
-2. Apply it in tool-definition filtering and again at execution time to prevent
+1. Apply it in tool-definition filtering and again at execution time to prevent
    stale-definition or dynamic-tool bypasses.
-3. Cover built-ins, extension tools, MCP tools, background shells, and nested
+2. Cover built-ins, extension tools, MCP tools, background shells, and nested
    agents.
-4. Expose clear denial events without adding denied calls to `toolSpans`.
+3. Expose clear denial events without adding denied calls to `toolSpans`.
 
 ### Acceptance gate
 
