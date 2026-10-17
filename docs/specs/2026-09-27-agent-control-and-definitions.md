@@ -1,6 +1,6 @@
 # Agent control, definitions, stall notices and continuation
 
-**Status:** Phases 1, 2 and 4 built 2026-09-27 (`tools/agent-control.ts`; `agent/definitions/`; `tools/agent-continue.ts`). Phase 3 dropped after its §3.2 check found no stalls (§3.0).
+**Status:** Phases 1, 2 and 4 built 2026-09-27 (`tools/agent-control.ts`; `agent/definitions/`; `tools/agent-continue.ts`). Phase 3 dropped after its §3.2 check found no stalls (§3.0). Phase 5 specified 2026-10-17, not built.
 **Branch:** `feat/background-subagents` (PR #38).
 **Source:** a read of `pi-herdsman` (a Pi extension for asynchronous subagents,
 `~/Projects/githubProjects/pi-herdsman`). Most of it coordinates separate Pi
@@ -14,9 +14,14 @@ ideas do, and this spec covers them.
 | 2 | Agent definitions from `.md` files | medium | ROADMAP Extensibility item 3; `agentType` is really a provider override and the five `SubagentType` roles are hard-coded |
 | 3 | Stall notice for a background agent | small | A background agent that stops making progress is silent until it finishes |
 | 4 | Continue a finished agent with a new task | small | A follow-up question to an agent re-does its whole investigation |
+| 5 | Subagent capability envelope | large | A writable subagent inherits the parent's path and network reach; the `permissionProfile` path is dormant and its tool map is stale (§5.1) |
 
 Order is 1 → 2 → 4 → 3: Phase 1 is the real gap, 2 is the largest payoff, 4 is
-cheap once 1 exists, and 3 is the least proven need (see §3.2).
+cheap once 1 exists, and 3 is the least proven need (see §3.2). Phase 5 does not
+come from pi-herdsman: it is the priority plan's §6 work
+(`docs/2026-10-15-priority-implementation-plan.md`), and it is the same narrowing
+idea as Phase 2 one level down — a definition already narrows *which* tools a
+spawn may call, and Phase 5 adds *what those tools may touch*.
 
 Non-goals, taken from pi-herdsman and deliberately left: nested delegation
 (`MAX_AGENT_DEPTH` stays 1), chief supervision, `ask_owner` (a subagent asking its
@@ -202,9 +207,11 @@ System prompt for the agent.
 
 Project definitions only shape a prompt and narrow tools. They cannot run code
 or widen permissions, so unlike extensions (`extensions.trustedProjects`) they
-load without a trust step. That matches Claude Code. It is flagged as §5 Q2,
+load without a trust step. That matches Claude Code. It is flagged as §6 Q2,
 because a cloned repo can still steer a subagent's behaviour through its
-prompt.
+prompt. Phase 5's envelope is a narrower form of the same thing — a definition
+may declare less authority for the agents it defines, never more — so it adds
+no trust requirement of its own.
 
 ### 2.6 Surfaces
 
@@ -341,7 +348,192 @@ shells, not its session. The history is on disk under the subagent id.
 
 ---
 
-## 5. Open questions
+## 5. Phase 5 — the capability envelope
+
+A writable subagent inherits its parent's reach. Mode decides *which tools* it
+may call and a definition's `tools` allowlist narrows that further (§2.4), but
+neither says what those tools may touch: an allowed `write` reaches any path the
+user account can, an allowed `bash` reaches the network, an allowed MCP tool
+reaches its server. This phase adds the missing dimension — a declared envelope
+of operations and targets that a spawn may not exceed.
+
+### 5.1 Today
+
+- `permission/profiles.ts` looks like the answer and is not.
+  `createToolOrchestrator` is called with no options at every production site
+  (`agent/loop.ts:653`, `effect/layers.ts:63,179`), so its `isToolAllowed` branch
+  is unreachable, and its `TOOL_PERMISSIONS` map (`profiles.ts:263-275`)
+  contradicts what the tools declare for themselves — `question: ["network"]`,
+  `agent: ["subprocess"]`, `edit: ["file.read","file.write"]` against `[]`,
+  `agent.spawn` and `["file.write"]`. It is a second map, and a stale one.
+- The operations a tool needs are **already declared per tool**:
+  `permissions.operations` (`tools/tool.types.ts:36-53`), read by nothing today,
+  alongside `extractTarget` (`permission/rules.ts:56-71`), which already answers
+  "on what" for the path, URL, command, agent and MCP families.
+- Containment exists only for unattended runs (`autonomous/envelope.ts`,
+  `autonomous/sandbox.ts`), and only because the whole session is the envelope.
+
+### 5.2 Where the truth comes from
+
+Operations: the tool's declared `permissions.operations`. Target:
+`extractTarget`. No new tool metadata and no second map — so `TOOL_PERMISSIONS`
+and the unused `ToolContext.permissionProfile` (`tools/types.ts:34`) are deleted
+as part of this phase rather than left as a parallel vocabulary.
+
+### 5.3 File format
+
+Frontmatter gains one key. The block is **closed and complete**: it states
+everything the agent may do, and names something only to grant it.
+
+```yaml
+---
+name: docs-writer
+description: Edits documentation under docs/
+tools: [read, ls, glob, grep, edit, write]
+envelope:
+  operations: [file.read, file.write, mcp]
+  write: [docs/**, README.md]
+  read: ["**"]
+  network: false
+  shell: false
+  grants: [mcp__linear]
+---
+```
+
+- `operations` is mandatory and every entry must be a `PermissionOperation`; an
+  unknown name rejects the definition at load, listing the valid ones.
+- `read` is required when `file.read` is granted and `write` when `file.write`
+  is. A path operation with no root is a contradiction, and rejection beats a
+  guess.
+- Roots are read with the existing path-rule grammar (`matchPath`,
+  `permission/rules.ts:117-138`): `//abs`, `~/`, `./rel`, bare = project-relative,
+  gitignore-style globs. `write` roots are also readable — an agent that cannot
+  read what it is told to edit cannot work.
+- `network` and `shell` are booleans. There is no host allowlist and no command
+  allowlist in v1; command prefixes are what permission rules already express
+  (§5.4).
+- `grants` names tools the envelope would otherwise refuse because their target
+  cannot be determined (`lsp`, MCP tools, extension tools). Every name must
+  resolve in the roster, the MCP registry, or as an `mcp__server` prefix; an
+  unknown name rejects the definition. A grant **says "I accept that this tool's
+  target cannot be checked"** — it exempts the target check and nothing else, so
+  a granted `mcp__linear` still needs `mcp` in `operations`, which is why the
+  example lists both.
+- No `envelope:` key changes nothing (§5.8). `mode: explore` still implies its
+  own read-only ceiling.
+
+### 5.4 Composition and precedence
+
+- **Effective envelope = parent ∩ child**, axis by axis: operations intersect,
+  a root survives only if a parent root contains it, `network`/`shell` are
+  and-ed, grants intersect. The root session has no envelope, so a top-level
+  spawn's envelope is simply its own.
+- The predicate runs **before mode, before `danger`, and before rules**. An
+  envelope is a ceiling, not a policy: a `danger`-mode parent must not widen an
+  enveloped child (`permission/evaluate.ts:25` returns allow for danger mode
+  today), and a deny rule must not re-grant what the envelope withheld. Rules
+  still apply *inside* the envelope, so a project can further deny what the
+  envelope allowed.
+- One pure `envelopeDecision({operations, target})` in `permission/envelope.ts`,
+  with two call sites:
+  - the tool-list filter where the definition allowlist is applied
+    (`agent/loop.ts:2691-2699`) — operations only, because no target exists yet.
+    Deliberately **not** in `tools/defs-cache.ts`: that cache is keyed by mode,
+    and an envelope dimension would multiply cached tool blocks, which the
+    prompt-cache invariant wants stable turn to turn.
+  - `evaluatePermission` (`permission/evaluate.ts:21`), which adds the target
+    check and is the authoritative gate for tools that arrive after filtering —
+    MCP registration, extension tools, a stale definition. That split is what
+    closes the bypass the priority plan names.
+
+### 5.5 Shell and the sandbox
+
+- `sandboxPlan` (`autonomous/sandbox.ts:205`) generalises from one tree to an
+  envelope: write roots bound read-write, read roots and everything else
+  read-only, `$HOME` and `/tmp` as tmpfs, network unshared when
+  `network: false`, credentials stripped from the environment. Its existing
+  guard — a workdir outside the tree throws — becomes "a workdir outside the
+  write roots throws", so a shell cannot be aimed outside the envelope even
+  before the bind mounts do the work.
+- The plan is carried on the session's envelope rather than on
+  `ctx.unattended`, and reaches `tools/shells/spawn.ts:37` with the envelope's
+  plan in place of the unattended one: foreground, `run_in_background` and
+  `monitor` all register through the same path, and a subagent's shells are
+  already disposed with it.
+- Where no sandbox is available (no bwrap, non-Linux), a granted `shell` is
+  **denied** with a reason naming the platform — never run uncontained. The rest
+  of the envelope still applies, so only `shell` is lost.
+- `subprocess: false` denies `lsp`, which declares `["file.read","subprocess"]`
+  (`tools/lsp.ts:285`). That is what the declaration means; whether it is what
+  we want is §6 Q8.
+
+### 5.6 Dynamic tools and MCP
+
+- A tool whose target cannot be determined has no root to check, so it is denied
+  unless granted (§5.3) — `lsp`, `memory`, `skill`, MCP tools, extension tools.
+  MCP tools carry no path, URL or command metadata — `mcp/convert-tool.ts`
+  preserves only `readOnlyHint` — so `network: false` needs no MCP special case:
+  an ungranted MCP tool is denied outright and a granted one is the user's
+  explicit exception.
+- A tool that declares **no** operations is also denied unless granted, because
+  `buildTool`'s default is an empty list (`tools/factory.ts:35`) and a forgotten
+  declaration is indistinguishable from an honest one. Today that means
+  `todowrite`, `question`, `bashoutput` and `finish-iteration`, none of which
+  reach outside the session. Denying session-state tools is blunt; §6 Q11 asks
+  whether they deserve an exemption instead of a grant.
+- MCP permission rules keep working inside the envelope: name-prefix rules
+  match, and an argument pattern on an MCP tool still fails closed
+  (`permission/rules.ts:79-84`).
+
+### 5.7 Denials and observability
+
+- `DenySource` (`rollout/types.ts:116-122`) gains `"envelope"`. Denials leave
+  through the single `denyToolCall` exit, so they land in `function.denied` →
+  `Trace.deniedSpans` and never in `toolSpans` — the seven consumers that mean
+  "tools that ran" are untouched.
+- The reason names the axis and the offending value: `write to /etc/hosts is
+  outside this agent's write roots (docs/**, README.md)`; `this agent was not
+  granted lsp`; `shell is denied: this build cannot sandbox a shell`.
+- Filter-time pruning is silent by design: a tool the envelope excludes by
+  operation is simply absent from the offered set. Anything the model *does*
+  attempt — a dynamic tool, an MCP tool, a target outside the roots — gets the
+  readable denial, which is what "fails closed with an actionable denial reason"
+  asks for.
+
+### 5.8 Compatibility
+
+- No `envelope:` key ⇒ today's behaviour exactly: mode, allowlist, rules,
+  prompts, all unchanged.
+- An envelope narrows further and never restores what mode or the allowlist
+  removed. Three narrowings, each and-ed.
+- Read-only spawns are unaffected: `explore` mode already denies mutating tools,
+  so an envelope can only remove more.
+- An older build reading a definition whose `envelope:` key it does not know
+  ignores it, because the loader reads only the keys it understands
+  (`agent/definitions/loader.ts:89-135`). Running without the containment the
+  file asks for, silently, is the one wart here; §6 Q9 asks whether the loader
+  should warn on unknown keys.
+
+### 5.9 Tests and evals
+
+- **Unit**, on the predicate: every operation × allowed/denied × target
+  inside/outside/below/undeterminable, plus `..` and symlink symmetry, plus the
+  parent/child intersection.
+- **Loader**: each rejection case (unknown operation, missing root for a granted
+  path operation, unknown grant name, malformed glob) asserted against its error
+  text, and one accepted definition round-tripped.
+- **Integration**, in a temp tree: a spawn with `write: [docs/**]` writes inside,
+  is denied outside by absolute path, `..` and symlink, cannot `cd` outside in a
+  shell, cannot background a shell outside, and is denied `lsp` and MCP until
+  they are granted.
+- **Shell**: an ordinary command still runs under the sandbox, and a simulated
+  platform without one denies `shell` with the platform reason.
+- **Evals**: the denial path is deterministic, so these tests carry it. A
+  real-model case would need an assertion that reads `Trace.deniedSpans`, since
+  `forbidTools` sees only tools that ran (`eval/scorers/trajectory.ts:37`,
+  `:100-110`). That case field lands with the phase that needs it, not before.
+
+## 6. Open questions
 
 1. ~~**Phase 1.** Should `agent_stop` report what the agent had done so far?~~
    **Decided: yes**, the last 2k of its activity.
@@ -353,3 +545,20 @@ shells, not its session. The history is on disk under the subagent id.
    Continuation makes them worth keeping on disk, but they clutter the resume
    picker today. Check the picker before building.
 5. ~~**Phase 3.** Drop it outright if §3.2's log fold finds no stalls?~~ **Dropped**: 0 of 248 runs had a gap over 180 s (§3.0).
+6. **Phase 5.** Should a denial inside an envelope also surface to the user (a
+   bus event), or is the model-visible tool error plus the rollout event enough?
+7. **Phase 5.** Should the envelope also be settable per spawn on the `agent`
+   tool call, as a one-off narrowing, or stay file-only in v1? Proposed: file-only
+   until someone asks, since a per-call envelope is one more thing the model can
+   get wrong.
+8. **Phase 5.** `subprocess: false` denies `lsp`. Is that right, or should `lsp`
+   declare a narrower operation of its own (§5.5)?
+9. **Phase 5.** Should the loader warn on unknown frontmatter keys, so an older
+   build asked for containment it cannot honour says so out loud (§5.8)?
+10. **Phase 5.** On a platform with no sandbox, a granted `shell` is denied
+    (§5.5). Is a platform-specific equivalent worth pursuing, or is "no shell"
+    the honest answer until someone needs it?
+11. **Phase 5.** Should session-state tools with no operations (`todowrite`,
+    `question`, `bashoutput`, `finish-iteration`) be exempt from the envelope's
+    deny-unless-granted rule, or is a grant the price of a rule that cannot be
+    fooled by a forgotten declaration (§5.6)?
