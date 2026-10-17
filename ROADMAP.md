@@ -26,18 +26,17 @@ and `CLAUDE.md`/`AGENTS.md` instructions. Ranked by value per line of work.
 
 ## Subagent permission profiles (added 2026-09-08)
 
-User-defined subagents (Extensibility item 3) shipped without these: a definition restricts a subagent with its mode (explore/build) plus a tool allowlist, not a capability profile. The dead-code half of this (`PROFILES`, `PermissionChecker`, duplicate `PermissionProfile` interface) is also tracked under Tool system in `TODO.md`.
+User-defined subagents (Extensibility item 3) shipped without these: a definition restricts a subagent with its mode (explore/build) plus a tool allowlist, not a capability profile — and §5's agent envelope now bounds path and network reach. The dead-code half (`PROFILES`, `PermissionChecker`, duplicate `PermissionProfile` interface) has been deleted (2026-10-17).
 
 
-**Status:** partly mitigated. Item 3 shipped a per-definition tool allowlist (spec `2026-09-27-agent-control-and-definitions.md` §2.4), which narrows a writing subagent's tools; path and network scoping are still missing.
+**Status:** resolved except the shell/network jail. Item 3 shipped a per-definition tool allowlist (spec `2026-09-27-agent-control-and-definitions.md` §2.4), and §5's capability envelope now bounds a writable subagent's path and network reach. What remains is the §5.5 sandbox: a granted `shell` is not yet jailed to the envelope's roots.
 
-`createToolOrchestrator()` is called with `{}` at all three production sites
-(`effect/layers.ts:63`, `:179`, `agent/loop.ts:429`). `OrchestratorOptions.permissionProfile`
-is real and checked (`tools/orchestrator.ts:150`, `:329`), but nothing outside
-`permission/` ever constructs a profile, so `PROFILES`, `PermissionChecker`,
-`TOOL_PERMISSIONS`, `getProfile`, `createProfile` and `validateProfile` are all
-dead — plus there is a duplicate `PermissionProfile` interface in
-`tools/types.ts:39`.
+The dead half is gone: `permission/profiles.ts` (its `PROFILES`,
+`PermissionChecker`, `TOOL_PERMISSIONS` map and duplicate `PermissionProfile`),
+the unreachable `OrchestratorOptions.permissionProfile` branch and
+`ToolContext.permissionProfile` were deleted (2026-10-17). Operations now come
+from each tool's own `permissions.operations`; there is no second map to keep in
+sync.
 
 Subagents are **not** unsandboxed, which is the part that is easy to overstate:
 `executeSubagent` maps `defaultReadOnly` to `agentMode: "explore"`
@@ -57,16 +56,11 @@ cannot mutate anything. Neither is a substitute for per-agent capabilities: a
 `readOnly: false` subagent under a `danger` parent has the whole toolbox and
 nothing scopes it to the files it was asked about.
 
-Wiring `permissionProfile` in **as it stands would break subagents
-immediately**: the profile axes (`fileRead`/`fileWrite`/`network`/`shell`/
-`subprocess`) are a second, coarser permission model bolted beside
-`permission/rules.ts` + `mode-policy.ts`, and `isToolAllowed` fails closed on
-any tool missing from the hand-maintained `TOOL_PERMISSIONS` map — which today
-lacks `ls`, `grep`, `glob`, `webfetch`, `todowrite`, `lsp`, `bashoutput`,
-`killbash`, and every MCP tool. So before item 3 binds user-defined agents to
-profiles, either complete that map or replace it with a per-subagent tool
-allowlist that rides the existing rules evaluation rather than sitting beside
-it.
+Tool registration and target extraction are now the single source of the
+capability answer (`tools/tool.types.ts` + `permission/rules.ts`), which the
+envelope evaluates — nothing sits beside `permission/rules.ts` +
+`mode-policy.ts` any more. The remaining gap is the sandbox, not the profile
+vocabulary.
 
 ## Memory: knowledge-graph roadmap (docs audit 2026-08-23)
 

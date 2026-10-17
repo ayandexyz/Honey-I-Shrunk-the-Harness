@@ -286,12 +286,6 @@ page's **Known gaps**.
       at all.
 - [ ] **`checkPermissions` has no implementers.** The orchestrator calls it when
       present (`orchestrator.ts:107`); no tool defines it.
-- [ ] **Permission profiles are unreachable.** `createToolOrchestrator()` is
-      called with no arguments at all three production sites (`loop.ts:331`,
-      `effect/layers.ts:63`, `:179`), so `permissionProfile` is always `undefined`
-      and the `isToolAllowed` branch (`orchestrator.ts:145`, `:286`) never runs.
-      `CLAUDE.md` says profiles are "used for subagents" — they are used nowhere.
-      Either pass a profile when spawning a subagent or drop `profiles.ts`.
 - [ ] **`executeTool` in `factory.ts:88` is dead code**, exported and re-exported
       from `tools/index.ts` but called by nothing; it also implements a different
       result contract from the orchestrator's.

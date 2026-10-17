@@ -155,10 +155,7 @@ The long-horizon memory experiment found two distinct failure shapes:
 
 Read-only subagents use `explore` mode, which filters mutating tools and does not
 prompt. Writable subagents can use a tool allowlist, but once a mutating tool is
-allowed they inherit the parent's path and network reach. The dormant
-`permissionProfile` path is not a safe shortcut: it duplicates the live rules
-system and its hand-maintained tool map is incomplete, especially for MCP and
-newer built-ins.
+allowed they inherit the parent's path and network reach.
 
 ### Design direction
 
@@ -172,32 +169,25 @@ Use one permission decision pipeline:
    operation inside that envelope.
 5. Child agents may only reduce, never expand, their parent's authority.
 
-Do not maintain a second map that separately guesses which capabilities each
-tool needs. Tool registration metadata or the existing target extraction should
-provide the authoritative operation and target.
+The operations a tool needs come from its own `permissions.operations` and its
+target from `extractTarget` — there is no second map. The retired
+`permission/profiles.ts` (`TOOL_PERMISSIONS`, `PROFILES`, `PermissionChecker`)
+and its unreachable orchestrator branch are deleted.
 
 ### Phases
 
 The specification is `docs/specs/2026-09-27-agent-control-and-definitions.md`
 §5 — the envelope's semantics, precedence, MCP and inheritance rules, and the
 questions its own §6 leaves open. Enforcement is live: one pure predicate, both
-call sites, the parent ∩ child intersection on every spawn, and a denial that
-lands in `function.denied` with source `envelope`. What remains:
+call sites, the parent ∩ child intersection on every spawn, the ceiling threaded
+into the finish-gate spawn, and a denial that lands in `function.denied` with
+source `envelope`. What remains:
 
 1. The sandbox half of §5.5 — a granted `shell` runs inside the envelope's roots,
    network unshared when `network: false`, so a background shell, a `cd` out of
    the roots, and a network-capable MCP tool are all bounded by mount namespace
    rather than by a tool's declaration. Where no sandbox exists, `shell` is
    denied outright rather than run uncontained.
-2. Thread a ceiling into the finish-gate spawn (`agent/subagent.ts:148`), the one
-   production `loop.run` site that still takes neither a role nor an envelope. An
-   enveloped agent cannot reach it today, because every loop that can hold a
-   ceiling sets `finishTests: false`.
-3. Delete the second map. `permission/profiles.ts`'s `TOOL_PERMISSIONS` and the
-   unused `ToolContext.permissionProfile` are superseded by the envelope and are
-   still shipping (unreachable, because `createToolOrchestrator` is called with no
-   options everywhere) — spec §5.1–§5.2 say they go, and a stale map is one bad
-   call site away from becoming a policy again.
 
 ### Acceptance gate
 

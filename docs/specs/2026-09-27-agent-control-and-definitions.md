@@ -14,7 +14,7 @@ ideas do, and this spec covers them.
 | 2 | Agent definitions from `.md` files | medium | ROADMAP Extensibility item 3; `agentType` is really a provider override and the five `SubagentType` roles are hard-coded |
 | 3 | Stall notice for a background agent | small | A background agent that stops making progress is silent until it finishes |
 | 4 | Continue a finished agent with a new task | small | A follow-up question to an agent re-does its whole investigation |
-| 5 | Subagent capability envelope | large | A writable subagent inherits the parent's path and network reach; the `permissionProfile` path is dormant and its tool map is stale (§5.1) |
+| 5 | Subagent capability envelope | large | A writable subagent inherits the parent's path and network reach; the envelope bounds it, with the §5.5 sandbox still owed (§5.1) |
 
 Order is 1 → 2 → 4 → 3: Phase 1 is the real gap, 2 is the largest payoff, 4 is
 cheap once 1 exists, and 3 is the least proven need (see §3.2). Phase 5 does not
@@ -359,15 +359,13 @@ of operations and targets that a spawn may not exceed.
 
 ### 5.1 Today
 
-- `permission/profiles.ts` looks like the answer and is not.
-  `createToolOrchestrator` is called with no options at every production site
-  (`agent/loop.ts:653`, `effect/layers.ts:63,179`), so its `isToolAllowed` branch
-  is unreachable, and its `TOOL_PERMISSIONS` map (`profiles.ts:263-275`)
-  contradicts what the tools declare for themselves — `question: ["network"]`,
+- `permission/profiles.ts` looked like the answer and was not.
+  `createToolOrchestrator` was called with no options at every production site,
+  so its `isToolAllowed` branch was unreachable, and its `TOOL_PERMISSIONS` map
+  contradicted what the tools declare for themselves — `question: ["network"]`,
   `agent: ["subprocess"]`, `edit: ["file.read","file.write"]` against `[]`,
-  `agent.spawn` and `["file.write"]`. It is a second map, and a stale one. Still
-  present after the enforcement landing, and still unreachable: deleting it is
-  owed (priority plan §6).
+  `agent.spawn` and `["file.write"]`. It was a second, stale map; it and the
+  option that consulted it are now deleted (priority plan §6).
 - The operations a tool needs are **already declared per tool**:
   `permissions.operations` (`tools/tool.types.ts:36-53`), read by nothing today,
   alongside `extractTarget` (`permission/rules.ts:56-71`), which already answers
@@ -378,11 +376,10 @@ of operations and targets that a spawn may not exceed.
 ### 5.2 Where the truth comes from
 
 Operations: the tool's declared `permissions.operations`. Target:
-`extractTarget`. No new tool metadata and no second map — so `TOOL_PERMISSIONS`
-and the unused `ToolContext.permissionProfile` (`tools/types.ts:34`) are
-superseded by the envelope and are owed a deletion rather than left as a parallel
-vocabulary. Until they go, `createToolOrchestrator` staying option-less is what
-keeps that map unreachable.
+`extractTarget`. No new tool metadata and no second map — so `TOOL_PERMISSIONS`,
+the unused `ToolContext.permissionProfile` and the whole dead `profiles.ts` are
+deleted, not left as a parallel vocabulary: `createToolOrchestrator` now takes no
+options at all.
 
 ### 5.3 File format
 
@@ -446,12 +443,11 @@ envelope:
   passes only `role` (the definition) still gets that definition's ceiling, and
   `tools/agent.ts` passes the spawning loop's effective envelope on, so the
   intersection holds at every depth.
-- One production spawn site still takes neither: the loop's own finish-gate
-  subagent (`agent/subagent.ts:148`). An enveloped agent cannot reach it today —
-  every loop that can hold a ceiling (`tools/agent.ts`) is created with
-  `finishTests: false`, and a top-level run has no role and therefore no
-  envelope. Threading a ceiling through it belongs with the sandbox work (§5.5),
-  which is the next phase.
+- The loop's own finish-gate subagent (`verifyChanges` → `executeSubagent`) now
+  carries its parent's ceiling: `loop.run` gets the spawning run's `envelope` and
+  no `role`, so only the ceiling passes down and the verifier keeps its own
+  read-only identity. A top-level run still has no role and therefore no
+  envelope; the sandbox half of §5.5 is the remaining work.
 - The predicate runs **before mode, before `danger`, and before rules**. An
   envelope is a ceiling, not a policy: a `danger`-mode parent must not widen an
   enveloped child, and a deny rule must not re-grant what the envelope withheld.

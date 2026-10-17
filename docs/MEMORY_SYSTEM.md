@@ -388,7 +388,7 @@ excerpts (never a secret-bearing memory's) to the session's provider.
 
 ## 7. Surfaces
 
-**Tool:** `memory` — registered in `tools/index.ts`, `TOOL_PERMISSIONS`
+**Tool:** `memory` — registered in `tools/index.ts`, its `permissions.operations`
 (`file.write`), `DISPLAY_NAMES`. Deliberately **not** in `READONLY_TOOLS`, so it
 is blocked in `plan`/`review`/`explore` like every other tool that writes.
 
