@@ -220,9 +220,6 @@ In suggested order. Each is also a TODO.md entry or a spec phase.
 8. [ ] **37 zero-edit runs with 30–56% reread share** in the 12,370-run history
        scan — open a few with `freecode trace` to tell forgetting from
        truncated/unclear read output.
-9. [ ] **Publishable run**: regenerate candidates with `--since` so the task
-       file records a window, add `minimax-m3` to
-       `instances/model-releases.json`, drop `--contamination-unchecked`.
 
 No release is needed for any of the tooling above; one is needed after a
 behaviour change (item 6 Phase 4).
