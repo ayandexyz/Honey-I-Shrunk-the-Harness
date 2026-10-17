@@ -390,6 +390,9 @@ async function executeSubagent(
         projectPath,
         agentMode: subagentMode,
         role: spawn.role,
+        // The ceiling this run is under, so the child's own envelope
+        // intersects with it rather than replacing it (spec §5.4).
+        envelope: ctx.envelope,
       });
 
       // The loop reports its own interrupt as a clean completion (that is the

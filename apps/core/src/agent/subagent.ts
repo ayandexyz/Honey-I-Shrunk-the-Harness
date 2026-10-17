@@ -145,6 +145,10 @@ export async function executeSubagent(
     const readOnly =
       config.readOnly ?? SUBAGENT_DEFINITIONS[config.type].defaultReadOnly;
 
+    // No `role` and no `envelope`: this path is the loop's own finish-gate
+    // spawn, and every loop that can hold a ceiling sets `finishTests: false`,
+    // so an enveloped agent never reaches it. Threading one through is phase 2's
+    // breadth work (spec §5.4).
     const result = await loop.run({
       prompt,
       sessionId: id,

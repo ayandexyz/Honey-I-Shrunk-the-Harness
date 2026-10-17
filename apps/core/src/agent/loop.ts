@@ -44,10 +44,10 @@ import {
 } from "../providers/cache-warmer.js";
 import type { PermissionRequestResult } from "../hooks/PermissionRequest.js";
 import { evaluatePermission } from "../permission/evaluate.js";
-import { intersectEnvelopes } from "../permission/envelope.js";
+import { envelopeDecision, intersectEnvelopes } from "../permission/envelope.js";
 import { isReadOnlyMode } from "../permission/mode-policy.js";
 import { promptForPermission } from "../permission/prompt.js";
-import { extractTarget } from "../permission/rules.js";
+import { extractTarget, targetKind } from "../permission/rules.js";
 import { PermissionSettingsManager } from "../permission/settings.js";
 import { createInitialSessionState, DEFAULT_LOOP_HEURISTICS } from "./types.js";
 import {
@@ -2698,9 +2698,26 @@ export class AgentLoop {
     const offered = this.unattended
       ? unattendedToolDefs(this.state.agentMode)
       : getToolDefs(this.state.agentMode);
-    const tools = allowed
+    const allowlisted = allowed
       ? offered.filter((t) => allowed.includes(t.name))
       : offered;
+
+    // The envelope's share of the same narrowing (spec §5.4). Operations and
+    // grants are static, so a tool the envelope will never allow is not offered
+    // at all; the path check waits for execution, where the args exist.
+    const envelope = this.state.envelope;
+    const tools = envelope
+      ? allowlisted.filter(
+          (t) =>
+            envelopeDecision({
+              envelope,
+              toolName: t.name,
+              operations: getTool(t.name)?.permissions?.operations ?? [],
+              kind: targetKind(t.name) ?? "none",
+              projectRoot: this.state.projectPath,
+            }).decision === "allow",
+        )
+      : allowlisted;
 
     // Cap tool results in old history turns to prevent token explosion on long
     // sessions. The model already processed those results fully when they were
