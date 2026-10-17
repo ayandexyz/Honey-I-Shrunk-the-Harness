@@ -18,7 +18,7 @@
 
 import { getProvider } from "../providers/index.js";
 import type { ProviderId } from "../providers/index.js";
-import { getMemoryStore } from "./mem-store.js";
+import { getMemoryStore, type MemoryStore } from "./mem-store.js";
 import {
   AUTHORABLE_MEMORY_TYPES,
   type MemoryEntry,
@@ -28,6 +28,7 @@ import { containsSecret } from "./graph/secret-filter.js";
 import { BusEvents } from "../bus/index.js";
 import { logger } from "../utils/logger.js";
 import type { MemoryAuxiliaryObserver } from "./auxiliary.js";
+import type { ConsolidationTrace, MemoryWriteTrace } from "./failure-trace.js";
 
 export const MAX_MERGES = 5;
 export const MAX_PROMOTES = 3;
@@ -106,6 +107,8 @@ export interface ConsolidateInput {
   complete?: (system: string, prompt: string) => Promise<string>;
   /** Reports provider usage when this path makes a real auxiliary call. */
   onAuxiliaryCall?: MemoryAuxiliaryObserver;
+  /** Records the write path for failure diagnosis (plan 2026-10-15 §5 Phase 0). */
+  trace?: MemoryWriteTrace;
 }
 
 export interface ConsolidationResult {
@@ -269,6 +272,20 @@ export async function consolidateMemories(
     }
 
     const store = getMemoryStore(input.projectPath);
+    const stage: ConsolidationTrace = {
+      sources: [],
+      proposal: [],
+      live: [],
+      deleted: [],
+    };
+    // Captured before the merge, and only when a trace was asked for: this is
+    // the list of bodies the model was shown, which `live` no longer contains.
+    if (input.trace) {
+      stage.sources = store
+        .list()
+        .filter((e) => input.shownNames.has(e.name))
+        .map((e) => e.content);
+    }
     const saved: Array<{ type: string; name: string }> = [];
     let merged = 0;
     let deleted = 0;
@@ -296,10 +313,14 @@ export async function consolidateMemories(
       });
       merged++;
       saved.push({ type: existing.type, name: existing.name });
+      stage.proposal.push(m.content);
 
       for (const name of targets) {
         const victim = findByName(store.list(), name);
-        if (victim && store.delete(victim.name, victim.type)) deleted++;
+        if (victim && store.delete(victim.name, victim.type)) {
+          deleted++;
+          stage.deleted.push(victim.name);
+        }
       }
     }
 
@@ -349,8 +370,13 @@ export async function consolidateMemories(
     // keeps its slot until a run actually gives it the fold-first pass.
     for (const name of input.overflowEpisodes ?? []) {
       if (!input.shownNames.has(name)) continue;
-      if (store.delete(name, "episode")) deleted++;
+      if (store.delete(name, "episode")) {
+        deleted++;
+        stage.deleted.push(name);
+      }
     }
+
+    recordConsolidation(input, stage, store);
 
     // Tell the user, on the wire that already exists. Emitted on the bus rather
     // than the turn stream: consolidation finishes after the turn's `done`, so
@@ -376,4 +402,22 @@ function findByName(
   // A name held by two types is ambiguous; guessing here can merge into — or
   // delete — the wrong-type memory, which a retry cannot undo. Refuse instead.
   return matches.length === 1 ? matches[0] : undefined;
+}
+
+/**
+ * Seal the consolidation stage. "Final live entries" is the whole store after
+ * the pass, so a fact the merge carried into the surviving body — or one it
+ * never touched — still reads as live.
+ *
+ * Skipped unless the caller asked for a trace: the list walk only exists to
+ * feed the record.
+ */
+function recordConsolidation(
+  input: ConsolidateInput,
+  stage: ConsolidationTrace,
+  store: MemoryStore,
+): void {
+  if (!input.trace) return;
+  stage.live = store.list().map((e) => e.content);
+  input.trace.consolidation = stage;
 }

@@ -105,9 +105,8 @@ The long-horizon memory experiment found two distinct failure shapes:
 
 The first task is diagnosis, not prompt tuning.
 
-### Phase 0 — preserve and classify the failures
+### Phase 0 — reproduce and classify the failures
 
-- Keep the relevant eval sandboxes and memory stores for inspection.
 - Record extraction candidates, accepted writes, same-name replacements,
   consolidation inputs, proposed replacement, and final live entries using
   controlled fixtures. Do not put memory bodies into rollout or OTLP logs.

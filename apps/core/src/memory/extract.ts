@@ -12,6 +12,7 @@ import { containsSecret } from "./graph/secret-filter.js";
 import { BusEvents } from "../bus/index.js";
 import { logger } from "../utils/logger.js";
 import type { MemoryAuxiliaryObserver } from "./auxiliary.js";
+import type { ExtractionTrace, MemoryWriteTrace } from "./failure-trace.js";
 
 // A runaway extractor fills the store with noise faster than anything cleans it
 // up, and there is no consolidation pass yet. Bound it hard.
@@ -48,6 +49,8 @@ export interface ExtractInput {
   complete?: (system: string, prompt: string) => Promise<string>;
   /** Reports provider usage when this path makes a real auxiliary call. */
   onAuxiliaryCall?: MemoryAuxiliaryObserver;
+  /** Records the write path for failure diagnosis (plan 2026-10-15 §5 Phase 0). */
+  trace?: MemoryWriteTrace;
 }
 
 interface Proposal {
@@ -152,15 +155,33 @@ export async function extractMemories(input: ExtractInput): Promise<number> {
     );
 
     const proposals = parseProposals(raw);
-    if (proposals.length === 0) return 0;
+    const stage: ExtractionTrace = {
+      candidates: proposals.map((p) => p.content),
+      accepted: [],
+      replaced: [],
+      skipped: [],
+      live: [],
+    };
+    if (proposals.length === 0) {
+      recordExtraction(input, stage);
+      return 0;
+    }
 
     const store = getMemoryStore(input.projectPath);
     const savedEntries: Array<{ type: string; name: string }> = [];
     let saved = 0;
     for (const p of proposals) {
-      if (saved >= MAX_SAVES_PER_RUN) break;
+      // Record the refusal instead of `break`ing: nothing past the cap could be
+      // saved anyway, and the dropped candidate is what Phase 0 needs to see.
+      if (saved >= MAX_SAVES_PER_RUN) {
+        stage.skipped.push({ body: p.content, reason: "cap" });
+        continue;
+      }
       // Same rule as the tool (D4): credentials are never written to disk.
-      if (containsSecret(`${p.description}\n${p.content}`)) continue;
+      if (containsSecret(`${p.description}\n${p.content}`)) {
+        stage.skipped.push({ body: p.content, reason: "secret" });
+        continue;
+      }
 
       const existing = store.load(p.name, p.type);
       // Nothing changed — skip rather than churn the file's mtime and force a
@@ -170,8 +191,18 @@ export async function extractMemories(input: ExtractInput): Promise<number> {
         existing.content === p.content &&
         existing.description === p.description
       ) {
+        stage.skipped.push({ body: p.content, reason: "unchanged" });
         continue;
       }
+
+      if (existing) {
+        stage.replaced.push({
+          name: p.name,
+          before: existing.content,
+          after: p.content,
+        });
+      }
+      stage.accepted.push(p.content);
 
       const now = Date.now();
       store.save({
@@ -191,6 +222,8 @@ export async function extractMemories(input: ExtractInput): Promise<number> {
       savedEntries.push({ type: p.type, name: p.name });
     }
 
+    recordExtraction(input, stage);
+
     // Tell the user something was recorded about them. Emitted on the bus, not
     // the turn stream: extraction runs after the turn's `done`, so the stream
     // is closed by now — the bus speaker wire is always live.
@@ -202,4 +235,20 @@ export async function extractMemories(input: ExtractInput): Promise<number> {
     logger.debug("[MemoryExtract] extraction failed", { error });
     return 0;
   }
+}
+
+/**
+ * Seal the extraction stage. "Final live entries" is the whole store, not this
+ * pass's writes — a fact taught in an earlier session is still live, and only a
+ * pass that took it away should look like a loss.
+ *
+ * Skipped entirely unless the caller asked for a trace, so ordinary extraction
+ * does not pay for a directory walk nothing reads.
+ */
+function recordExtraction(input: ExtractInput, stage: ExtractionTrace): void {
+  if (!input.trace) return;
+  stage.live = getMemoryStore(input.projectPath)
+    .list()
+    .map((e) => e.content);
+  input.trace.extraction = stage;
 }
