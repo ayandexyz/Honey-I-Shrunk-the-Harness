@@ -3,8 +3,8 @@
 > **Status:** Active — completed slices removed
 > **Date:** 2026-10-15
 > **Last updated:** 2026-10-18
-> **Scope:** Memory expansion, subagent permission scoping, performance and cost
-> measurement, and instruction hierarchy.
+> **Scope:** Measurement follow-through and instruction hierarchy. Memory
+> expansion and subagent permission scoping are resolved and summarized below.
 > **Explicitly excluded:** Web/Tauri incremental response rendering.
 
 ## 1. Objective
@@ -13,22 +13,18 @@ Resolve the highest-value correctness, release-trust, and safety gaps before
 adding broad new features, then establish the measurements needed to make
 performance and cost changes safely.
 
-This plan is deliberately split into reviewable workstreams. Subagent
-permissions require evidence and design work before implementation.
-Performance and cost work must start with measurement. Instruction hierarchy is
-the next extensibility feature after those foundations are trustworthy.
+This plan is deliberately split into reviewable workstreams. Performance and
+cost work must start with measurement. Instruction hierarchy is the next
+extensibility feature after those foundations are trustworthy.
 
 ## 2. Priority order
 
 | Order | Workstream                            | Why it is here                                                                                                         |
 | ----- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | 1     | Finish measurement follow-through     | The long-task comparison baseline still needs a publishable rerun before any optimization claim.                       |
-| 2     | Scope writable subagents              | Read-only subagents are confined, but writable subagents lack path and network boundaries.                             |
-| 3     | Add an instruction hierarchy          | Implemented 2026-10-17; retain the verification/evidence notes below for follow-up.                                    |
+| 2     | Add an instruction hierarchy          | Implemented 2026-10-17; retain the verification/evidence notes below for follow-up.                                    |
 
-Workstream 1 should begin before any optimization experiment. Workstreams 2–4
-each require their own design or spec amendment and should not be combined into
-one implementation PR.
+Workstream 1 should begin before any optimization experiment.
 
 ## 3. Architectural constraints
 
@@ -142,73 +138,49 @@ slice:
   navigational summary plus on-demand bodies may beat a byte cap, but it changes
   MCP/tool surfaces and prompt-cache behavior.
 
-## 6. Workstream 3 — scoped permissions for writable subagents
+## 6. Resolved: scoped permissions for writable subagents
 
-### Current state
-
-Read-only subagents use `explore` mode, which filters mutating tools and does not
-prompt. Writable subagents can use a tool allowlist, but once a mutating tool is
-allowed they inherit the parent's path and network reach.
-
-### Design direction
-
-Use one permission decision pipeline:
-
-1. Agent mode supplies the coarse read-only/build boundary.
-2. The agent definition supplies an optional tool allowlist.
-3. A subagent capability envelope narrows the parent's authority with path,
-   network, shell, and subprocess constraints.
-4. Existing permission rules evaluate the concrete target and requested
-   operation inside that envelope.
-5. Child agents may only reduce, never expand, their parent's authority.
-
-The operations a tool needs come from its own `permissions.operations` and its
-target from `extractTarget` — there is no second map. The retired
+Closed and removed from the active queue on 2026-10-18; `ROADMAP.md` records
+it as resolved. Enforcement is live end to end: an agent definition's
+`envelope:` block narrows path, network, shell, and subprocess authority on
+top of the existing mode + tool-allowlist + permission-rules pipeline (one
+pure predicate, both call sites, parent ∩ child intersection on every spawn,
+a denial landing in `function.denied` with source `envelope`). The sandbox
+half (`apps/core/src/sandbox/`, built 2026-10-17) jails a granted `shell` to
+the envelope's write roots — `/` read-only, write roots bind-mounted
+read-write, `$HOME`/`/tmp` private, `--unshare-net` when `network: false` —
+so a background shell or a `cd` out of the roots is bounded by the mount
+layout, not by a tool's self-declaration. A write root the planner cannot
+represent as a mount boundary fails closed rather than widening to its
+parent, and `shell` is denied outright where no sandbox exists. The retired
 `permission/profiles.ts` (`TOOL_PERMISSIONS`, `PROFILES`, `PermissionChecker`)
-and its unreachable orchestrator branch are deleted.
+is deleted; nothing in `apps/core/src` references it.
 
-### Phases
+Acceptance gate, verified by test: a writable subagent confined to directory A
+cannot `shell` into B or background a shell there (`sandbox/plan.test.ts`,
+"writes land on the write roots and nowhere else"); a network-disabled
+subagent cannot reach the network through `shell` ("network: false isolates
+the sandbox"); a child cannot request broader authority than its parent
+(`permission/envelope.test.ts`, "an uncontained root is dropped", operations
+and grants intersect); read-only defaults and existing definition tool
+allowlists stay compatible; an unknown dynamic tool with no boundable target
+or no declared operations fails closed and needs an explicit grant. Test
+counts: `permission/envelope.test.ts` + `sandbox/*.test.ts` +
+`evaluate.test.ts` 100/100, `agent/definitions/{envelope,definitions}.test.ts`
+37/37, all passing on this branch.
 
-The specification is `docs/specs/2026-09-27-agent-control-and-definitions.md`
-§5 — the envelope's semantics, precedence, MCP and inheritance rules, and the
-questions its own §6 leaves open. Enforcement is live: one pure predicate, both
-call sites, the parent ∩ child intersection on every spawn, the ceiling threaded
-into the finish-gate spawn, and a denial that lands in `function.denied` with
-source `envelope`.
+One bound is a recorded, permanent exception rather than a gap: a mount
+namespace constrains the sandboxed process, not FreeCode's own, so a
+**granted** MCP tool still reaches its server's network under
+`network: false` (spec §5.6). A grant is the user's explicit exception — the
+operation list never claimed to bound a target that cannot be inspected — so
+grants are not reinterpreted as "all MCP denied when offline." Stronger MCP
+isolation needs per-tool capability metadata or a separate process, not a
+mount, and is out of scope here.
 
-The sandbox half of §5.5 is **built** (2026-10-17, `apps/core/src/sandbox/` —
-one planner for enveloped shells and unattended night runs): a granted `shell`
-runs with `/` read-only and only the envelope's write roots overlaid writable,
-`$HOME` and `/tmp` private, and `--unshare-net` when `network: false`. So a
-background shell and a `cd` out of the roots are bounded by the mount layout
-rather than by a tool's declaration. A writable root the planner cannot represent
-as a mount boundary fails closed instead of widening to its parent, and where no
-sandbox exists `shell` is denied outright rather than run uncontained.
+Reference: `docs/specs/2026-09-27-agent-control-and-definitions.md` §5.
 
-One bound this phase does **not** deliver, recorded in spec §5.6: a mount
-namespace constrains the sandboxed process, not FreeCode's own, so a **granted**
-MCP tool still reaches its server's network under `network: false`. A grant is
-the user's explicit exception — the operation list never claimed to bound a
-target that cannot be inspected — so grants are not reinterpreted as "all MCP
-denied when offline". Stronger MCP isolation needs per-tool capability metadata
-or a separate process, not a mount.
-
-### Acceptance gate
-
-- A writable subagent restricted to directory A cannot **shell** into directory B,
-  and cannot background a shell there. (Writing, editing and `lsp` against B
-  already fail: the root check refuses the target and `lsp` needs a grant plus
-  `subprocess`.)
-- A network-disabled subagent cannot reach the network through a **shell**
-  (`--unshare-net`, proven in `sandbox/plan.test.ts`). Web tools already fail:
-  `network: false` withholds the operation. A **granted** MCP tool is the explicit
-  exception — its target cannot be inspected, and a mount namespace cannot bound a
-  process outside the sandbox (spec §5.6).
-- A child cannot request broader authority than its parent.
-- Read-only defaults and existing definition tool allowlists remain compatible.
-- Unknown dynamic tools fail closed with an actionable denial reason.
-
-## 7. Workstream 4 — instruction hierarchy — implemented 2026-10-17
+## 7. Workstream 2 — instruction hierarchy — implemented 2026-10-17
 
 ### Delivered behavior
 
@@ -280,22 +252,21 @@ Keep review and rollback simple:
 
 - **PR A:** Rebuilt long-task baseline and recorded results; no behavioral
   change.
-- **PR D:** Subagent capability-envelope spec and implementation.
-- **PR E:** Instruction hierarchy in separately gated phases.
 
-Do not combine the remaining permission and instruction changes. Each changes
-what the model sees or what tools can do and therefore needs isolated evidence.
+The subagent capability-envelope (formerly PR D) and instruction hierarchy
+(formerly PR E) have both landed as separately gated phases; only PR A
+remains open.
 
 ## 9. Definition of done
 
 This plan is complete when:
 
 - the repaired long-task benchmark has replaced the broken-tool baseline;
-- memory merges cannot silently discard taught facts;
+- memory merges cannot silently discard taught facts — done, §5;
 - writable subagents can be constrained by path and network without gaining
-  authority through dynamic tools;
+  authority through dynamic tools — done, §6;
 - monorepo, imported, and scoped instructions have deterministic, observable
-  behavior; and
+  behavior — done, §7; and
 - every behavioral default change has the tests and eval evidence required by
   its governing spec.
 
