@@ -13,16 +13,8 @@ skills (incl. `~/.claude/plugins` scope), permission rules via `.freecode/settin
 and `CLAUDE.md`/`AGENTS.md` instructions. Ranked by value per line of work.
 
 
-- [ ] **4. Rules hierarchy** — `context/instructions.ts` reads `CLAUDE.md`/`AGENTS.md` from
-      exactly two dirs (global `~/.freecode/`, project root), first match wins.
-      Missing: walk-up for monorepos, `@imports` (both deferred in the comment at line 6),
-      and glob-scoped rules (the Cursor `.mdc` model — "apply only for `**/*.tsx`").
-      Nested-directory rules would also give scoped skills somewhere to live.
-
 - [ ] **7. MCP server (expose)** — serve FreeCode's tools *as* an MCP server. The client
       side is done. Already listed as deferred in `CLAUDE.md`.
-
-**Suggested order:** 4 first.
 
 ## Subagent permission profiles (added 2026-09-08)
 

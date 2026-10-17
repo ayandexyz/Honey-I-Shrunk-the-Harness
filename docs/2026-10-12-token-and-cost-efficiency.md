@@ -125,7 +125,7 @@ There is a concrete local opportunity. At inspection time:
 | Root `AGENTS.md`                                        | 47,215 bytes |
 | Shipped `session/prompt/system.md` in this working tree | 8,094 bytes  |
 
-These are bytes, not exact token counts. [instructions.ts](../apps/core/src/context/instructions.ts) chooses the first nonempty `CLAUDE.md` or `AGENTS.md` at each of the global and project locations. It sends the selected file in full. It does **not** concatenate both root files. For this repository, root `CLAUDE.md` wins.
+These are bytes, not exact token counts. [instructions.ts](../apps/core/src/context/instructions.ts) loads global instructions, then repository ancestors from root to the active project, with `CLAUDE.md` preferred over `AGENTS.md` in each directory. It also supports bounded relative `@import`s and matching `.freecode/rules/*.md` files. For this repository, the root `CLAUDE.md` remains the selected root-level file.
 
 The project file is therefore a larger source-size target than the base system prompt. Global instructions and overrides can change the actual request; inspect `/context` rather than extrapolating these sizes to every user.
 
@@ -136,7 +136,7 @@ Proposed approach:
 3. Make the loading rule explicit: before touching a subsystem, read its indexed guide/spec. Preserve requirements that must always apply in the root guide.
 4. Verify retrieval across representative tasks: providers, memory, TUI, checkpoints, and cross-cutting changes. Count the topic-document reads as part of the cost.
 
-This loader currently does not implement automatic imports or directory-scoped inheritance. Adding links alone does not inject their contents; the agent must read them. If automatic scoped loading is built later, keep it in core and test instruction precedence and cache behavior.
+`/context` reports the loaded instruction sources and their byte/token contribution without exposing their contents. Scoped rules are selected from the deterministic session file scope so the static prompt prefix remains cacheable.
 
 Do not silently truncate user-authored instructions to a token cap. The current code deliberately removed such truncation. This proposal is an authored documentation restructure with behavioral validation.
 

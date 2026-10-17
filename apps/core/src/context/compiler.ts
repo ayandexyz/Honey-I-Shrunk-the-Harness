@@ -6,7 +6,7 @@
 
 import type { AgentMode } from "../agent/types.js";
 import type { SystemBlock } from "../providers/types.js";
-import { compileInstructionsSection } from "./instructions.js";
+import { loadInstructions, type InstructionSource } from "./instructions.js";
 import { loadSystemPromptFor } from "../session/prompt.js";
 import { modelPromptOverlay } from "../session/model-prompt.js";
 import { renderAvailableSkillsSection } from "../skills/prompt.js";
@@ -54,6 +54,7 @@ export interface SystemSegment {
   label: string;
   /** "" when the section has nothing to contribute (no CLAUDE.md, no skills). */
   text: string;
+  sources?: InstructionSource[];
 }
 
 /** Drop empty sections, then join — how every prompt section has been glued. */
@@ -69,15 +70,18 @@ export class PromptCompiler {
   private projectPath: string;
   private projectName: string;
   private agentMode: AgentMode;
+  private scopePaths: readonly string[];
 
   constructor(
     projectPath: string,
     projectName: string,
     agentMode: AgentMode = "build",
+    scopePaths: readonly string[] = [],
   ) {
     this.projectPath = projectPath;
     this.projectName = projectName;
     this.agentMode = agentMode;
+    this.scopePaths = scopePaths;
   }
 
   /**
@@ -156,11 +160,15 @@ ${tree}`;
           this.compileSystemPrompt(),
         ]),
       },
-      {
+      (() => {
+        const instructions = loadInstructions(this.projectPath, undefined, this.scopePaths);
+        return {
         id: "project-instructions",
         label: "Project instructions",
-        text: compileInstructionsSection(this.projectPath),
-      },
+        text: instructions.text,
+        sources: instructions.sources,
+        };
+      })(),
       { id: "skills", label: "Skills", text: skills },
       {
         id: "agent-types",

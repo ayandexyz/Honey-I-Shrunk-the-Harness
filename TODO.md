@@ -302,8 +302,8 @@ Found while writing `apps/docs/app/getting-started` (installation, quickstart,
 providers, configuration). Each is also listed in that page's **Known gaps**.
 Items already tracked elsewhere (`providers.list` returning models.dev's whole
 catalogue, the `gemini`/`google` id mismatch, hooks not loading under
-`freecode run`, MCP being user-scope only, root-only instruction files) are cited
-on the pages but not repeated here.
+`freecode run`, and MCP being user-scope only) are cited on the pages but not
+repeated here.
 
 ### Real fixes
 

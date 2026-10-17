@@ -25,7 +25,7 @@ the next extensibility feature after those foundations are trustworthy.
 | 1     | Finish measurement follow-through     | The long-task comparison baseline still needs a publishable rerun before any optimization claim.                       |
 | 2     | Diagnose and prevent memory fact loss | Existing long-horizon evidence shows missing and lost facts; new memory features should not be layered on top of that. |
 | 3     | Scope writable subagents              | Read-only subagents are confined, but writable subagents lack path and network boundaries.                             |
-| 4     | Add an instruction hierarchy          | This is the roadmap's highest-value remaining extensibility item and benefits from the measurement foundation.         |
+| 4     | Add an instruction hierarchy          | Implemented 2026-10-17; retain the verification/evidence notes below for follow-up.                                      |
 
 Workstream 1 should begin before any optimization experiment. Workstreams 2–4
 each require their own design or spec amendment and should not be combined into
@@ -215,50 +215,61 @@ or a separate process, not a mount.
 - Read-only defaults and existing definition tool allowlists remain compatible.
 - Unknown dynamic tools fail closed with an actionable denial reason.
 
-## 7. Workstream 4 — instruction hierarchy
+## 7. Workstream 4 — instruction hierarchy — implemented 2026-10-17
 
-### Current state
+### Delivered behavior
 
-The loader reads one non-empty `CLAUDE.md` or `AGENTS.md` from the global
-directory and one from the project root. `CLAUDE.md` wins within a directory.
-It does not walk a monorepo hierarchy, resolve imports, or apply glob-scoped
-rules.
+`apps/core/src/context/instructions.ts` now loads global instructions followed
+by repository ancestors from the repository boundary to the active project.
+`CLAUDE.md` still wins over `AGENTS.md` within a directory. Explicit
+`@import path` directives resolve relative to their source and are bounded by
+the global or repository policy root, with real-path symlink checks, duplicate
+suppression, a 16-level depth limit, 64 imported files, and a 1 MB imported
+content budget. Missing or invalid imports are ignored without changing the
+parent instruction.
 
-### Required specification decisions
+`.freecode/rules/*.md` supports a small frontmatter form:
 
-Before implementation, settle:
+```md
+---
+globs: [src/**/*.ts]
+---
+Use the TypeScript conventions for this scope.
+```
 
-- the directory walk boundaries and ordering;
-- whether the session project or repository root anchors the walk;
-- precedence between `CLAUDE.md`, `AGENTS.md`, imports, and scoped rule files;
-- cycle, depth, size, and outside-project rules for imports;
-- how symlinks and duplicate real paths are handled;
-- when a glob-scoped rule becomes relevant;
-- whether scoped rules are frozen for a session or placed in the ephemeral tail;
-- how `/context` explains source, precedence, scope, and byte/token contribution.
+Matching rules are selected against the deterministic project file scope and
+remain in the static, cacheable prompt prefix for the session. `/context`
+reports each loaded source's path, kind, scope, byte count, and token estimate;
+contents are never returned in the report.
 
-### Recommended phases
+### Decisions recorded by the implementation
 
-1. **Walk-up hierarchy:** load deterministic ancestor instructions from the
-   repository boundary to the active project, preserving the existing
-   per-directory `CLAUDE.md` preference unless the spec changes it.
-2. **Explicit imports:** add bounded, cycle-safe imports with paths resolved
-   relative to the importing file and a clear policy for leaving the project.
-3. **Glob-scoped rules:** define a `.freecode/rules/` format and inject matching
-   guidance based on files actually in scope, without rewriting stable cache
-   prefixes on every inner-loop turn.
-4. **Observability:** extend `/context` so users can see which files and rules
-   were loaded and why, without logging their contents.
+- The active project anchors the walk; if it is inside a Git repository, the
+  repository root is the boundary. A non-repository project keeps the old
+  root-only behavior.
+- Global instructions precede repository hierarchy. Ancestors are ordered root
+  to leaf. `CLAUDE.md` wins within a directory; imports expand in place; scoped
+  rules are sorted by filename after hierarchy instructions.
+- Imports cannot leave their policy root, follow an escaping symlink, recurse
+  indefinitely, or exceed the documented depth/file/byte limits.
+- Scoped rules are frozen with the session's deterministic project scope and
+  are visible in `/context` without exposing contents.
+
+### Completed phases
+
+1. **Walk-up hierarchy** — complete.
+2. **Explicit imports** — complete.
+3. **Glob-scoped rules** — complete.
+4. **Observability** — complete.
 
 ### Verification
 
-- Precedence matrix covering global, repository, nested project, imported, and
-  scoped instructions.
-- Cycle, missing-import, symlink, and outside-project tests.
-- Windows and POSIX path/glob tests.
-- Prompt-cache tests proving stable ordering and no needless prefix churn.
-- An eval A/B across representative provider, memory, TUI, and checkpoint tasks
-  before changing the default loading behavior.
+Automated coverage now includes root-to-leaf precedence, imports and outside
+imports, scoped glob selection, escaping import symlinks, prompt segment
+stability, and `/context` rendering. Focused tests and core/TUI typechecks pass.
+The remaining follow-up is evidence rather than implementation: run the
+cross-provider eval A/B across representative provider, memory, TUI, and
+checkpoint tasks before making any further default-loading changes.
 
 ### Acceptance gate
 
@@ -267,8 +278,8 @@ Before implementation, settle:
 - Imports cannot escape policy boundaries or recurse indefinitely.
 - Scoped rules activate only for matching work and their inclusion is visible
   in `/context`.
-- Existing root-only projects see no semantic change unless they opt into new
-  files or features.
+- Existing root-only projects keep the previous behavior unless they add
+  ancestor instructions, imports, or `.freecode/rules/` files.
 
 ## 8. Delivery slices
 

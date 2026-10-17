@@ -333,6 +333,15 @@ export interface ContextSegmentStat {
   tokens: number;
 }
 
+export interface ContextInstructionSource {
+  path: string;
+  kind: "global" | "hierarchy" | "import" | "scoped-rule";
+  precedence: number;
+  scope?: string[];
+  bytes: number;
+  tokens: number;
+}
+
 /**
  * Where the context window is going, as of right now.
  *
@@ -354,6 +363,8 @@ export interface ContextBreakdown {
   toolCount: number;
   mcpToolCount: number;
   messageCount: number;
+  /** Loaded instruction sources; contents are intentionally never returned. */
+  instructionSources?: ContextInstructionSource[];
 }
 
 // =============================================================================

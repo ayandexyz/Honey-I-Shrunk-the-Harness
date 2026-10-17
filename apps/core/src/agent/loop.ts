@@ -50,6 +50,7 @@ import { promptForPermission } from "../permission/prompt.js";
 import { extractTarget, targetKind } from "../permission/rules.js";
 import { sandboxAvailable } from "../sandbox/index.js";
 import { PermissionSettingsManager } from "../permission/settings.js";
+import { collectScopePaths } from "../context/instructions.js";
 import { createInitialSessionState, DEFAULT_LOOP_HEURISTICS } from "./types.js";
 import {
   toEditTransition,
@@ -960,6 +961,7 @@ export class AgentLoop {
         input.projectPath,
         contextResult.value.name,
         this.state.agentMode,
+        collectScopePaths(input.projectPath),
       );
 
       // Load session history from persistent storage first, so we can tell
