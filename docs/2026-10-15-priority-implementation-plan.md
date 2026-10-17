@@ -103,35 +103,7 @@ The long-horizon memory experiment found two distinct failure shapes:
 2. Consolidation merged and deleted memories, after which an earlier fact was
    missing or wrong in two of three trials.
 
-The first task is diagnosis, not prompt tuning.
-
-### Phase 0 — reproduce and classify the failures
-
-- Record extraction candidates, accepted writes, same-name replacements,
-  consolidation inputs, proposed replacement, and final live entries using
-  controlled fixtures. Do not put memory bodies into rollout or OTLP logs.
-- Classify each missing fact as extraction omission, save collision,
-  consolidation omission, retrieval miss, judge rejection, or rendering-budget
-  drop.
-
-### Phase 1 — safe extraction updates
-
-- Add a deterministic fixture where multiple turns teach additive facts under
-  the same topic.
-- Define whether a same-name save replaces, merges, or versions an entry.
-- Prevent silent loss when the new extraction contains only a subset of the
-  existing durable facts.
-
-### Phase 2 — loss-resistant consolidation
-
-- Give each merge explicit source-memory provenance.
-- Validate that the proposed replacement covers the durable claims represented
-  by its sources before deleting any source entry.
-- If coverage cannot be established, retain the sources and report the merge as
-  skipped or degraded.
-- Preserve the existing rule that there is no unconstrained delete verb.
-
-### Phase 3 — evaluation
+### Evaluation
 
 - Rerun the long-horizon case with retained stores and inspect all failure
   classifications.
@@ -140,7 +112,7 @@ The first task is diagnosis, not prompt tuning.
 - Measure both fact retention and irrelevant-memory growth; solving loss by
   retaining everything without bound is not acceptable.
 
-### Phase 4 — scale and historical coverage, only after fidelity
+### Scale and historical coverage, only after fidelity
 
 - Add the VectorStore id-to-index map before larger corpora make full sync
   quadratic; retain rebuildability from the Markdown source of truth.
@@ -154,7 +126,6 @@ The first task is diagnosis, not prompt tuning.
 
 - The three taught regional facts survive extraction, consolidation, retrieval,
   and rendering in every required trial.
-- A failed or uncertain merge deletes no source memory.
 - Recall quality does not regress and injected bytes remain within the existing
   budget.
 
@@ -265,15 +236,12 @@ Before implementation, settle:
 
 Keep review and rollback simple:
 
-1. **PR A:** Rebuilt long-task baseline and recorded results; no behavioral
-   change.
-2. **PR B:** Memory failure instrumentation and deterministic reproductions.
-3. **PR C:** Memory extraction/consolidation safeguards, gated by memory
-   benchmarks.
-4. **PR D:** Subagent capability-envelope spec and implementation.
-5. **PR E:** Instruction hierarchy in separately gated phases.
+- **PR A:** Rebuilt long-task baseline and recorded results; no behavioral
+  change.
+- **PR D:** Subagent capability-envelope spec and implementation.
+- **PR E:** Instruction hierarchy in separately gated phases.
 
-Do not combine the memory, permissions, and instruction changes. Each changes
+Do not combine the remaining permission and instruction changes. Each changes
 what the model sees or what tools can do and therefore needs isolated evidence.
 
 ## 9. Definition of done
