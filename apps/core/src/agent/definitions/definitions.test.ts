@@ -194,3 +194,61 @@ test("frontmatter: an inline list splits on commas, so a glob containing one nee
   const block = parseFrontmatter("---\nwrite:\n  - docs/a,b.md\n---\n");
   assert.deepEqual(block?.fields, { write: ["docs/a,b.md"] });
 });
+
+test("resolve: the definition's envelope rides on the role", () => {
+  const dir = project({
+    ".freecode/agents/doc-writer.md":
+      "---\nname: doc-writer\ndescription: Docs\ntools: Read, Write\nenvelope:\n  operations: [file.read, file.write]\n  read: [\"**\"]\n  write: [docs/**]\n---\nDocs.",
+  });
+  try {
+    const spawn = resolveSpawn({ subagent_type: "doc-writer" }, dir);
+    assert.ok(spawn && "role" in spawn, "resolved");
+    const role = spawn.role;
+    assert.ok(role, "the role exists");
+    assert.deepEqual(role.envelope, {
+      operations: ["file.read", "file.write"],
+      read: ["**"],
+      write: ["docs/**"],
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("resolve: an envelope-only definition still gets a role", () => {
+  const dir = project({
+    ".freecode/agents/bare.md":
+      "---\nname: bare\ndescription: Nothing but an envelope\nenvelope:\n  operations: [file.read]\n  read: [\"**\"]\n---\n",
+  });
+  try {
+    const spawn = resolveSpawn({ subagent_type: "bare" }, dir);
+    assert.ok(spawn && "role" in spawn, "resolved");
+    const role = spawn.role;
+    assert.ok(role, "no prompt and no allowlist, but the envelope is the role");
+    assert.deepEqual(role.envelope?.read, ["**"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("scopes: a definition refused for its envelope does not shadow a lower one", () => {
+  const h = mkdtempSync(join(tmpdir(), "freecode-agent-defs-env-"));
+  mkdirSync(join(h, ".freecode", "agents"), { recursive: true });
+  writeFileSync(
+    join(h, ".freecode", "agents", "scout.md"),
+    "---\nname: scout\ndescription: user scout\ntools: Read\n---\nUser.",
+  );
+  const dir = project({
+    ".freecode/agents/scout.md":
+      "---\nname: scout\ndescription: project scout\ntools: Read\nenvelope:\n  operations: [file.write]\n---\nProject.",
+  });
+  try {
+    const { definitions } = loadAgentDefinitions({ projectPath: dir, knownTools: KNOWN, homeDir: h, env: {} });
+    const scout = definitions.find((d) => d.name === "scout");
+    assert.equal(scout?.scope, "user");
+    assert.equal(scout?.description, "user scout");
+  } finally {
+    rmSync(h, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

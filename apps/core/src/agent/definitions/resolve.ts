@@ -68,9 +68,11 @@ export function resolveSpawn(
     }
   }
 
-  const role =
-    definition.prompt || definition.tools
-      ? { name: definition.name, prompt: definition.prompt, tools: definition.tools }
-      : undefined;
+  // A role exists for any of the three: the envelope alone is reason enough,
+  // because it is what the subagent's loop has to enforce.
+  const has = definition.prompt || definition.tools || definition.envelope;
+  const role = has
+    ? { name: definition.name, prompt: definition.prompt, tools: definition.tools, envelope: definition.envelope }
+    : undefined;
   return { definition, role, provider: chosen?.provider, model: chosen?.model };
 }

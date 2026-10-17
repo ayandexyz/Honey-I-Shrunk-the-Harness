@@ -53,4 +53,6 @@ export interface AgentRole {
   name: string;
   prompt: string;
   tools?: string[];
+  /** The ceiling the subagent's loop must enforce; undefined = none declared. */
+  envelope?: AgentEnvelope;
 }
