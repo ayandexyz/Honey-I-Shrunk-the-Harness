@@ -139,25 +139,29 @@ function latestConcreteUserText(transcript: string): string {
  * Rank only when there is competition, using the latest user message as a
  * salience signal; ties retain provider order for deterministic behavior.
  */
-function prioritizeLatest(proposals: Proposal[], transcript: string): Proposal[] {
+function prioritizeLatest(
+  proposals: Proposal[],
+  transcript: string,
+): Proposal[] {
   if (proposals.length <= MAX_SAVES_PER_RUN) return proposals;
   const latestUser =
     latestConcreteUserText(transcript) || latestUserText(transcript);
   if (!latestUser) return proposals;
-  const ranked = proposals
-    .map((proposal, index) => ({
-      proposal,
-      index,
-      score: lexicalSimilarity(
-        latestUser,
-        `${proposal.name} ${proposal.description} ${proposal.content}`,
-      ),
-    }));
+  const ranked = proposals.map((proposal, index) => ({
+    proposal,
+    index,
+    score: lexicalSimilarity(
+      latestUser,
+      `${proposal.name} ${proposal.description} ${proposal.content}`,
+    ),
+  }));
   // A single shared stop-word such as "the" is not evidence of relevance.
   // Reuse the graph's topic threshold so generic transcripts retain provider
   // order rather than causing an arbitrary reorder at the cap.
   if (Math.max(...ranked.map((entry) => entry.score)) < 0.12) return proposals;
-  return ranked.sort((a, b) => b.score - a.score || a.index - b.index).map(({ proposal }) => proposal);
+  return ranked
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .map(({ proposal }) => proposal);
 }
 
 async function oneShot(
@@ -214,12 +218,14 @@ export async function extractMemories(input: ExtractInput): Promise<number> {
     );
     let parsed = parseProposals(raw);
     const latestConcreteUser = latestConcreteUserText(transcript);
+    let retried = false;
     // A cheap extractor occasionally returns [] for an explicit value-bearing
     // fact even though the latest user message contains several concrete
     // anchors (for example `ap-northeast-1` and `10`). Give only that narrow
     // contradiction one second look. Generic chatter and genuine empty turns
     // still cost one call, and the hard write cap remains unchanged.
     if (parsed.length === 0 && latestConcreteUser) {
+      retried = true;
       raw = await complete(
         SYSTEM,
         `Re-evaluate the latest user message. It contains concrete identifiers ` +
@@ -231,7 +237,7 @@ export async function extractMemories(input: ExtractInput): Promise<number> {
       parsed = parseProposals(raw);
     }
 
-    const proposals = prioritizeLatest(parsed, transcript);
+    let proposals = prioritizeLatest(parsed, transcript);
     const stage: ExtractionTrace = {
       candidates: proposals.map((p) => p.content),
       accepted: [],
@@ -247,80 +253,107 @@ export async function extractMemories(input: ExtractInput): Promise<number> {
     const store = getMemoryStore(input.projectPath);
     const savedEntries: Array<{ type: string; name: string }> = [];
     let saved = 0;
-    for (const p of proposals) {
-      // Record the refusal instead of `break`ing: nothing past the cap could be
-      // saved anyway, and the dropped candidate is what Phase 0 needs to see.
-      if (saved >= MAX_SAVES_PER_RUN) {
-        stage.skipped.push({ body: p.content, reason: "cap" });
-        continue;
-      }
-      // Same rule as the tool (D4): credentials are never written to disk.
-      if (containsSecret(`${p.description}\n${p.content}`)) {
-        stage.skipped.push({ body: p.content, reason: "secret" });
-        continue;
-      }
+    const saveProposals = (batch: Proposal[]): void => {
+      for (const p of batch) {
+        // Record the refusal instead of `break`ing: nothing past the cap could be
+        // saved anyway, and the dropped candidate is what Phase 0 needs to see.
+        if (saved >= MAX_SAVES_PER_RUN) {
+          stage.skipped.push({ body: p.content, reason: "cap" });
+          continue;
+        }
+        // Same rule as the tool (D4): credentials are never written to disk.
+        if (containsSecret(`${p.description}\n${p.content}`)) {
+          stage.skipped.push({ body: p.content, reason: "secret" });
+          continue;
+        }
 
-      const existing = store.load(p.name, p.type);
-      // Nothing changed — skip rather than churn the file's mtime and force a
-      // pointless re-embed through onMemoryChange.
-      if (
-        existing &&
-        existing.content === p.content &&
-        existing.description === p.description
-      ) {
-        stage.skipped.push({ body: p.content, reason: "unchanged" });
-        continue;
-      }
+        const existing = store.load(p.name, p.type);
+        // Nothing changed — skip rather than churn the file's mtime and force a
+        // pointless re-embed through onMemoryChange.
+        if (
+          existing &&
+          existing.content === p.content &&
+          existing.description === p.description
+        ) {
+          stage.skipped.push({ body: p.content, reason: "unchanged" });
+          continue;
+        }
 
-      // A rewrite carrying fewer facts than the entry already holds, with none
-      // of its own, is a silent loss rather than an update (plan 2026-10-15 §5
-      // Phase 1). The entry keeps what it had; an update, which brings a claim
-      // of its own, is untouched by this.
-      if (existing && isSubtractive(existing.content, p.content)) {
-        stage.skipped.push({ body: p.content, reason: "lossy" });
-        continue;
-      }
+        // A rewrite carrying fewer facts than the entry already holds, with none
+        // of its own, is a silent loss rather than an update (plan 2026-10-15 §5
+        // Phase 1). The entry keeps what it had; an update, which brings a claim
+        // of its own, is untouched by this.
+        if (existing && isSubtractive(existing.content, p.content)) {
+          stage.skipped.push({ body: p.content, reason: "lossy" });
+          continue;
+        }
 
-      // A reused name is normally an intentional correction or expansion. A
-      // low-overlap rewrite that also drops anchored claims is different: it
-      // is usually the extractor reusing a topic slug for a second fact. Keep
-      // both bodies rather than silently destroying the first fact; later
-      // consolidation can merge them once it has the full candidate set.
-      const collision =
-        existing &&
-        lexicalSimilarity(existing.content, p.content) < 0.12;
-      const content = collision
-        ? `${existing.content}\n\n${p.content}`
-        : p.content;
-      const description = collision
-        ? `${existing.description}; ${p.description}`
-        : p.description;
+        // A reused name is normally an intentional correction or expansion. A
+        // low-overlap rewrite that also drops anchored claims is different: it
+        // is usually the extractor reusing a topic slug for a second fact. Keep
+        // both bodies rather than silently destroying the first fact; later
+        // consolidation can merge them once it has the full candidate set.
+        const collision =
+          existing && lexicalSimilarity(existing.content, p.content) < 0.12;
+        const content = collision
+          ? `${existing.content}\n\n${p.content}`
+          : p.content;
+        const description = collision
+          ? `${existing.description}; ${p.description}`
+          : p.description;
 
-      if (existing) {
-        stage.replaced.push({
+        if (existing) {
+          stage.replaced.push({
+            name: p.name,
+            before: existing.content,
+            after: content,
+          });
+        }
+        stage.accepted.push(content);
+
+        const now = Date.now();
+        store.save({
           name: p.name,
-          before: existing.content,
-          after: content,
+          description,
+          type: p.type,
+          content,
+          createdAt: existing?.createdAt ?? now,
+          updatedAt: now,
+          // The extractor knows nothing about graph metadata; dropping it here
+          // would sever the entry's HasTag/Supersedes edges on every update.
+          tags: existing?.tags,
+          supersedes: existing?.supersedes,
+          happened_at: existing?.happened_at,
         });
+        saved++;
+        savedEntries.push({ type: p.type, name: p.name });
       }
-      stage.accepted.push(content);
+    };
 
-      const now = Date.now();
-      store.save({
-        name: p.name,
-        description,
-        type: p.type,
-        content,
-        createdAt: existing?.createdAt ?? now,
-        updatedAt: now,
-        // The extractor knows nothing about graph metadata; dropping it here
-        // would sever the entry's HasTag/Supersedes edges on every update.
-        tags: existing?.tags,
-        supersedes: existing?.supersedes,
-        happened_at: existing?.happened_at,
-      });
-      saved++;
-      savedEntries.push({ type: p.type, name: p.name });
+    saveProposals(proposals);
+
+    // A non-empty model reply can still contribute nothing: cheap extractors
+    // sometimes repeat an existing memory instead of capturing the latest
+    // concrete fact. Treat an all-unchanged/lossy batch like an empty reply and
+    // spend the same single bounded retry on the explicit latest message.
+    const staleBatch =
+      stage.skipped.length > 0 &&
+      stage.skipped.every(
+        ({ reason }) => reason === "unchanged" || reason === "lossy",
+      );
+    if (!retried && saved === 0 && latestConcreteUser && staleBatch) {
+      retried = true;
+      raw = await complete(
+        SYSTEM,
+        `The previous proposals added no new durable information. Extract the ` +
+          `concrete fact in the latest user message instead of repeating an ` +
+          `existing memory. Do not save turn-local no-edit or acknowledgement ` +
+          `instructions.\n\nLatest concrete user message:\n${latestConcreteUser}\n\n` +
+          `Session transcript:\n\n${transcript.slice(-MAX_TRANSCRIPT_CHARS)}`,
+      );
+      proposals = prioritizeLatest(parseProposals(raw), transcript);
+      stage.candidates.push(...proposals.map((p) => p.content));
+      saveProposals(proposals);
     }
 
     recordExtraction(input, stage);

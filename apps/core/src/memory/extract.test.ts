@@ -70,7 +70,9 @@ test("when capped, prioritizes a fact from the latest user message", async () =>
       provider: "anthropic",
       complete: async () => JSON.stringify(proposals),
     });
-    const names = getMemoryStore(projectPath).list().map((entry) => entry.name);
+    const names = getMemoryStore(projectPath)
+      .list()
+      .map((entry) => entry.name);
     assert.ok(names.includes("ap-northeast-rate"));
     assert.equal(names.length, MAX_SAVES_PER_RUN);
   } finally {
@@ -149,7 +151,10 @@ test("the extractor treats no-edit acknowledgement language as turn-local", asyn
     assert.match(system, /apply only to that turn/i);
     assert.match(system, /never save them/i);
     assert.match(system, /save the durable fact underneath/i);
-    assert.match(system, /concrete enduring rule, identifier, value, or correction/i);
+    assert.match(
+      system,
+      /concrete enduring rule, identifier, value, or correction/i,
+    );
   } finally {
     cleanup();
   }
@@ -187,11 +192,55 @@ test("an empty result retries once for a concrete identifier and value", async (
     assert.equal(calls, 2);
     assert.equal(saved, 1);
     assert.ok(
-      getMemoryStore(projectPath).load(
-        "ap-northeast-1-tax-rate",
-        "project",
-      ),
+      getMemoryStore(projectPath).load("ap-northeast-1-tax-rate", "project"),
     );
+  } finally {
+    cleanup();
+  }
+});
+
+test("an unchanged result retries the latest concrete fact", async () => {
+  const { projectPath, cleanup } = fixture();
+  let calls = 0;
+  try {
+    const store = getMemoryStore(projectPath);
+    const existing = {
+      type: "project" as const,
+      name: "tax-rates",
+      description: "Known regional tax rates",
+      content: "The tax rate for us-east-1 is 8.875 percent.",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    store.save(existing);
+
+    const saved = await extractMemories({
+      transcript:
+        "user: The region table also needs ap-northeast-1 at 10 percent.\n" +
+        "assistant: noted\nuser: Just acknowledge, no edits.\nassistant: acknowledged",
+      projectPath,
+      provider: "anthropic",
+      complete: async (_system, prompt) => {
+        calls++;
+        if (calls === 1) return JSON.stringify([existing]);
+        assert.match(
+          prompt,
+          /previous proposals added no new durable information/i,
+        );
+        return JSON.stringify([
+          {
+            type: "project",
+            name: "ap-northeast-1-tax-rate",
+            description: "ap-northeast-1 tax rate is 10 percent",
+            content: "The tax rate for ap-northeast-1 is 10 percent.",
+          },
+        ]);
+      },
+    });
+
+    assert.equal(calls, 2);
+    assert.equal(saved, 1);
+    assert.ok(store.load("ap-northeast-1-tax-rate", "project"));
   } finally {
     cleanup();
   }
@@ -435,12 +484,20 @@ test("a rewrite that restates the facts in new words still updates the entry", a
 test("a low-overlap same-name proposal preserves the earlier fact", async () => {
   const { projectPath, cleanup } = fixture();
   try {
-    await teach(projectPath, withContent("sso-provider", "SSO is required for all internal tools"));
+    await teach(
+      projectPath,
+      withContent("sso-provider", "SSO is required for all internal tools"),
+    );
     assert.equal(
-      await teach(projectPath, withContent("sso-provider", "The SSO provider is Okta")),
+      await teach(
+        projectPath,
+        withContent("sso-provider", "The SSO provider is Okta"),
+      ),
       1,
     );
-    const content = getMemoryStore(projectPath).load("sso-provider", "project")?.content ?? "";
+    const content =
+      getMemoryStore(projectPath).load("sso-provider", "project")?.content ??
+      "";
     assert.ok(content.includes("SSO is required for all internal tools"));
     assert.ok(content.includes("The SSO provider is Okta"));
   } finally {
