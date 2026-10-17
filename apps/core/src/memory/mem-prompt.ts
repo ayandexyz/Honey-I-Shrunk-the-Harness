@@ -155,15 +155,12 @@ function promptHeader(): string[] {
     : [
         "# Relevant memories",
         "",
-        "Background recall; it may be stale. Verify current-code claims. Apply user",
-        "and project requirements unless the current request supersedes them.",
-        "Stale or incomplete code does not override a remembered requirement.",
-        "For a list, map, or rule set, scan every recalled entry before editing.",
-        "Combine compatible facts; preserve every named case and unit, and do not",
-        "stop after the first matches. A percentage is not a multiplier: preserve",
-        "its unit and convert it exactly once. The current request overrides past turn-local directions",
-        "like 'just acknowledge' or 'do not edit yet'.",
-        "Act silently; mention memories only if asked. This block repeats each turn.",
+        "Recall may be stale; verify current-code claims. Apply remembered requirements",
+        "unless the current request supersedes them. Stale or incomplete code does not override them.",
+        "For lists, maps, or rules, scan every recalled entry before editing; combine",
+        "facts and preserve every named case and unit. A percentage is not a multiplier;",
+        "convert it exactly once. The current request overrides past turn-local directions",
+        "like 'just acknowledge' or 'do not edit yet'. Act silently; mention memories only if asked.",
       ];
 }
 
