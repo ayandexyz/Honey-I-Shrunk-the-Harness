@@ -14,7 +14,11 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { COMMAND_TOOLS, extractTarget } from "../permission/rules.js";
+import {
+  COMMAND_TOOLS,
+  extractTarget,
+  realpathOrSelf,
+} from "../permission/rules.js";
 
 /**
  * Denied for every night run, seeded into the session's DENY tier so a user's
@@ -75,23 +79,6 @@ export function insideTree(tree: string, target: string): boolean {
   const resolved = realpathOrSelf(path.resolve(tree, target));
   const rel = path.relative(realTree, resolved);
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
-}
-
-function realpathOrSelf(p: string): string {
-  // Walk up to the nearest existing ancestor: `realpathSync` throws on a path
-  // that does not exist yet, which is every file a write is about to create.
-  let current = p;
-  const tail: string[] = [];
-  for (;;) {
-    try {
-      return path.join(fs.realpathSync(current), ...tail.reverse());
-    } catch {
-      const parent = path.dirname(current);
-      if (parent === current) return p; // hit the root; nothing resolvable
-      tail.push(path.basename(current));
-      current = parent;
-    }
-  }
 }
 
 /**
