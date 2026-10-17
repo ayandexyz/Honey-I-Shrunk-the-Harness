@@ -160,19 +160,29 @@ provide the authoritative operation and target.
 
 The specification is `docs/specs/2026-09-27-agent-control-and-definitions.md`
 §5 — the envelope's semantics, precedence, MCP and inheritance rules, and the
-questions its own §6 leaves open. What remains:
+questions its own §6 leaves open. Enforcement is live: one pure predicate, both
+call sites, the parent ∩ child intersection on every spawn, and a denial that
+lands in `function.denied` with source `envelope`. What remains:
 
-1. Apply it in tool-definition filtering and again at execution time to prevent
-   stale-definition or dynamic-tool bypasses.
-2. Cover built-ins, extension tools, MCP tools, background shells, and nested
-   agents.
-3. Expose clear denial events without adding denied calls to `toolSpans`.
+1. The sandbox half of §5.5 — a granted `shell` runs inside the envelope's roots,
+   network unshared when `network: false`, so a background shell, a `cd` out of
+   the roots, and a network-capable MCP tool are all bounded by mount namespace
+   rather than by a tool's declaration. Where no sandbox exists, `shell` is
+   denied outright rather than run uncontained.
+2. Thread a ceiling into the finish-gate spawn (`agent/subagent.ts:148`), the one
+   production `loop.run` site that still takes neither a role nor an envelope. An
+   enveloped agent cannot reach it today, because every loop that can hold a
+   ceiling sets `finishTests: false`.
 
 ### Acceptance gate
 
-- A writable subagent restricted to directory A cannot write, shell into, or
-  launch a subprocess targeting directory B.
-- A network-disabled subagent cannot use web tools or network-capable MCP tools.
+- A writable subagent restricted to directory A cannot **shell** into directory B,
+  and cannot background a shell there. (Writing, editing and `lsp` against B
+  already fail: the root check refuses the target and `lsp` needs a grant plus
+  `subprocess`.)
+- A network-disabled subagent cannot reach the network through a **shell** or a
+  network-capable MCP tool. (Web tools already fail: `network: false` withholds
+  the operation.)
 - A child cannot request broader authority than its parent.
 - Read-only defaults and existing definition tool allowlists remain compatible.
 - Unknown dynamic tools fail closed with an actionable denial reason.
