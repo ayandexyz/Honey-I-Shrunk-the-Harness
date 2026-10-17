@@ -42,6 +42,9 @@ Each row identifies its layer:
 Do not add those rows together: an `end_to_end` row already contains its
 component layers. Work counts explain what each timing processed—bytes,
 entries, chunks, renders, or files—so a faster result cannot hide less work.
+For Markdown streaming, `renderRequests` counts requested frames while
+`markdownRenders` counts actual component-tree rebuilds. The timed frontend
+subtotal includes the final canonical reconciliation render.
 
 The harness is a measurement tool, not a noisy millisecond CI gate. Its stable
 logic is checked with `pnpm test:local-bench`; optimization decisions should use

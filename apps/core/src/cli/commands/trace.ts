@@ -16,6 +16,8 @@ import {
 import { buildTrace } from "../../rollout/trace.js";
 import { formatDuration, renderTrace } from "../../rollout/trace-render.js";
 import { exportTrace, otlpTargetFromEnv } from "../../rollout/otlp.js";
+import { loadTaskCostLedger } from "../../rollout/cost-ledger.js";
+import { formatUsd } from "../../providers/pricing.js";
 
 /** Most recently written session, which is nearly always the one in question. */
 function latestSessionId(): string | undefined {
@@ -49,6 +51,7 @@ interface TraceArgs {
   json?: boolean;
   list?: boolean;
   otlp?: string;
+  costLedger?: boolean;
 }
 
 export const traceCommand: CommandModule<object, TraceArgs> = {
@@ -87,6 +90,11 @@ export const traceCommand: CommandModule<object, TraceArgs> = {
         describe:
           "Ship the trace to an OTLP collector (Langfuse, Phoenix, Jaeger). " +
           "Defaults to $OTEL_EXPORTER_OTLP_ENDPOINT",
+      })
+      .option("cost-ledger", {
+        type: "boolean",
+        describe:
+          "Show provider attempts across the root session and child agents",
       }),
 
   handler: async (argv) => {
@@ -106,6 +114,49 @@ export const traceCommand: CommandModule<object, TraceArgs> = {
     if (!sessionId) {
       console.error("No recorded sessions found under ~/.freecode/rollout.");
       process.exitCode = 1;
+      return;
+    }
+
+    if (argv.costLedger) {
+      if (!loadSessionEvents(sessionId)) {
+        console.error(`No recorded events for session ${sessionId}`);
+        process.exitCode = 1;
+        return;
+      }
+      const ledger = loadTaskCostLedger(sessionId, {
+        now: argv.follow ? Date.now() : undefined,
+      });
+      if (argv.json) {
+        console.log(JSON.stringify(ledger, null, 2));
+      } else {
+        console.log(`Cost ledger ${ledger.rootSessionId}`);
+        console.log(`prices: ${ledger.pricingVintage}`);
+        for (const attempt of ledger.runtimeAttempts) {
+          const cost =
+            attempt.costUsd === undefined
+              ? "unpriced"
+              : formatUsd({ usd: attempt.costUsd, partial: false });
+          console.log(
+            `${attempt.sessionId}  ${attempt.purpose}  ${attempt.provider}/${attempt.model ?? "unknown"}  ` +
+              `${attempt.completion}  ${attempt.usageStatus} usage  ${cost}`,
+          );
+        }
+        const total =
+          ledger.runtime.usd === undefined
+            ? "unpriced"
+            : formatUsd({
+                usd: ledger.runtime.usd,
+                partial: ledger.runtime.partial,
+              });
+        console.log(
+          `runtime: ${ledger.runtime.attempts} attempt(s), ${total}; grader: ${ledger.grader.attempts} attempt(s) (separate)`,
+        );
+        if (ledger.missingChildSessionIds.length > 0) {
+          console.log(
+            `missing child logs: ${ledger.missingChildSessionIds.join(", ")}`,
+          );
+        }
+      }
       return;
     }
 

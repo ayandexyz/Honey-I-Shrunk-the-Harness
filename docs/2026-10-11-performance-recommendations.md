@@ -2,7 +2,7 @@
 
 Date: 2026-10-11  
 Reviewed checkout: `97793b1e`  
-Status: recommendations based on source inspection; no performance changes or benchmarks were run for this document.
+Status: partially implemented; local benchmark and TUI streaming optimization built 2026-10-17.
 
 For prompt changes, token reduction, model selection, and billing efficiency, see the separate [token and cost efficiency guide](2026-10-12-token-and-cost-efficiency.md).
 
@@ -24,13 +24,12 @@ The recommendations below come from inspecting FreeCode's code. Priority reflect
 | -------- | -------------------------------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------- |
 | P0       | Measure complete startup, send, resume, and rendering journeys | Identify where users actually wait                 | Existing tracing and frame statistics provide a foundation; medium effort           |
 | P1       | Handle incremental text in `apps/web-app`                      | Earlier visible output in desktop/browser sessions | Missing delta handling confirmed in source; medium effort including lifecycle tests |
-| P1       | Reduce repeated Markdown work in the TUI's active reply        | Smoother long answers and more responsive input    | Full active-message renderer rebuilt when dirty; medium–high effort                 |
 | P1       | Isolate unchanged React messages and control autoscroll        | Less work as desktop/browser transcripts grow      | Re-render, parsing, and scrolling paths confirmed; small–medium effort              |
 | P2       | Avoid reparsing unchanged session history                      | Faster follow-up sends and long-session resume     | Full JSONL read and parse on `getMessages`; medium effort                           |
 | P2       | Profile checkpoint capture and reduce unnecessary work         | Faster preparation in large repositories           | Capture is awaited before the provider; medium effort, correctness-sensitive        |
 | P3       | Profile packaged startup and local context misses              | Faster cold launch where local setup dominates     | Several obvious startup optimizations already exist; measure before changing        |
 
-If the TUI is the main surface you use, prioritize its streaming renderer after P0. If you use `freecode web` or desktop, prioritize the two web-app items together. The runtime browser UI is served from `apps/web-app/dist`; optimizing the Next.js website alone would miss that path. See [web-server.ts](../apps/core/src/web-server.ts).
+The TUI streaming renderer item is now built and measured below. If you use `freecode web` or desktop, prioritize the two web-app items together. The runtime browser UI is served from `apps/web-app/dist`; optimizing the Next.js website alone would miss that path. See [web-server.ts](../apps/core/src/web-server.ts).
 
 ## 1. Measure what the user experiences
 
@@ -76,25 +75,23 @@ Accumulate deltas between scheduled UI updates so a burst does not cause one ful
 
 **Acceptance:** a fixture with a delayed final snapshot displays its initial delta early; the final transcript matches the authoritative snapshots; cancellation preserves partial output; reconnects and session switches neither duplicate nor misroute text. Compare delta-received → visible latency and input responsiveness.
 
-## 3. Reduce work on the TUI's growing answer
+## 3. Reduce work on the TUI's growing answer — built 2026-10-17
 
 ### What is already optimized
 
 [VirtualMessageList](../apps/tui/src/components/virtual-message-list.ts) caches rendered lines for settled messages above the live region, retains a bounded message window, and invalidates for width and explicit message changes. [SafeTUI](../apps/tui/src/render-guard.ts) memoizes child renders within a frame. These optimizations already have tests; adding another generic conversation cache is unlikely to be the first useful step.
 
-### Remaining candidate
+### Implemented change
 
-In [message-row.ts](../apps/tui/src/components/message-row.ts), `StreamingAssistantMessage.append` marks the buffer dirty. The next render calls `createAssistantMessageComponent(this.text)` with the whole accumulated answer. Deltas are already coalesced until rendering, but a dirty render still rebuilds the active message's Markdown component tree.
+In [message-row.ts](../apps/tui/src/components/message-row.ts), `StreamingAssistantMessage` now coalesces Markdown-tree rebuilds to at most one per 16 ms window while continuing to accept every delta. `finalize()` always performs one canonical rebuild from the authoritative completed snapshot.
 
-For a long response, repeatedly processing its growing prefix can make total work rise much faster than the final output size. Measure it with fixed output sizes and chunk schedules before changing the parser.
+This bounds repeated prefix processing during bursty streams without freezing a Markdown region whose meaning could change later. Width changes still render the current component normally, and the final rebuild preserves the existing renderer as the source of truth.
 
-Prototype reuse of stable rendered regions inside the active message, with the unfinished region remaining mutable. Key cached results by content, terminal width, and presentation settings. Keep the final authoritative snapshot as a reconciliation point.
+The deterministic streaming fixture now reports both render requests and actual Markdown rebuilds. Tests compare settled output with the canonical renderer across tables, fenced code, reference definitions, Unicode, and multiple widths.
 
-Markdown needs care: a later reference definition, fence delimiter, or table continuation can change interpretation of earlier text. Only freeze regions whose semantics are safe, or explicitly invalidate affected regions. Preserve the existing appearance, resize behavior, selection, and abort handling.
+On the published 16 KiB / 128-byte fixture (7 samples after 2 warmups), Markdown rebuilds fell from 130 to 2 and end-to-end p95 fell from 4,473.7 ms to 90.2 ms. This is a local synthetic rendering result, not a claim about provider latency or every terminal workload.
 
-**Acceptance:** identical final rendered lines against the current renderer for representative fixtures, lower cumulative parsing/highlighting work, and lower p95 rendering cost during a long answer. Extend [streaming-text.test.ts](../apps/tui/src/components/streaming-text.test.ts), [virtual-message-list.test.ts](../apps/tui/src/components/virtual-message-list.test.ts), and [render-guard.test.ts](../apps/tui/src/render-guard.test.ts).
-
-Start with reuse and invalidation. A worker for highlighting is a later option if profiling shows highlighting dominates enough to justify serialization, scheduling, and runtime compatibility costs.
+The published local benchmark records the measured p95 and work-count change. Further region caching or worker-based highlighting is intentionally deferred until profiling shows the bounded rebuild cadence is insufficient.
 
 ## 4. Keep React updates local to the changed message
 
@@ -173,9 +170,8 @@ fixture details.
 ### Next changes: one measurable improvement each
 
 1. Add delta/snapshot handling and local React update isolation together for the web-app, with separate reviewable changes if useful.
-2. Prototype the TUI active-message optimization and compare identical output fixtures.
-3. Implement a history cache only if the new preparation timings show meaningful repeated work.
-4. Optimize checkpoint scanning or startup only where the profiles justify it.
+2. Implement a history cache only if the new preparation timings show meaningful repeated work.
+3. Optimize checkpoint scanning or startup only where the profiles justify it.
 
 For each change, record the user-facing metric, local work metric, correctness result, and memory/cost tradeoff. Keep a small performance result beside the relevant benchmark so future changes can be compared.
 
@@ -200,4 +196,4 @@ The `--slow` view hides the tool waterfall; use the ordinary trace or JSON outpu
 
 In the TUI, open **Shift+Ctrl+D**, stream a long answer, and compare rendering statistics with a short transcript and a long one. This is a useful first observation; the fixtures above are how to turn it into a reproducible result.
 
-My first implementation choice would be the baseline instrumentation plus the TUI streaming experiment for daily CLI use. For desktop/browser use, the missing delta handler is the clearest immediate opportunity because the backend already supplies the data required to show an earlier response.
+The baseline instrumentation and TUI streaming experiment are complete. For desktop/browser use, the missing delta handler is now the clearest immediate opportunity because the backend already supplies the data required to show an earlier response.

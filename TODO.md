@@ -461,12 +461,10 @@ spec's §12; these are the parts that are actionable independently of it.
 
 ### Real fixes
 
-- [ ] **There is no cost accounting in USD anywhere.** `usage/tracker.ts` records
-      tokens and `usage.get` serves them, but a price table exists in exactly one
-      file — `providers/minimax.ts`. A shared `providers/pricing.ts` keyed by
-      `provider/model` would give `freecode trace`, `usage.get`, and the eval
-      harness's efficiency scorer a real number. Without it, "this change made
-      every turn 18% more expensive" is undetectable.
+- [x] ~~**There is no cost accounting in USD anywhere.**~~ Shared pricing,
+      trace/eval cost folds, and the root-plus-child provider-attempt ledger are
+      implemented. Run `freecode trace <session> --cost-ledger --json`; unknown
+      usage remains visibly partial rather than being reported as free.
 - [ ] **OTLP export has no session-level root span** (`rollout/otlp.ts`). Model
       spans are emitted per call, so a multi-turn session renders in Langfuse as N
       unrelated LLM calls. An `invoke_agent` root span plus

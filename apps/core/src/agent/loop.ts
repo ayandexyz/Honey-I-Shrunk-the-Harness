@@ -1551,6 +1551,7 @@ export class AgentLoop {
               testResult: this.lastTestResult,
               unwired: this.lastUnwired,
               parentSessionId: this.state.sessionId,
+              parentRecorder: this.recorder,
             });
             if (this.abort.signal.aborted)
               return await this.complete(
@@ -1714,7 +1715,12 @@ export class AgentLoop {
     try {
       const aiProvider = getProvider(provider as any);
       return {
-        llmSummarize: createLlmSummarizer(aiProvider, model, this.abort.signal),
+        llmSummarize: createLlmSummarizer(
+          aiProvider,
+          model,
+          this.abort.signal,
+          (call) => this.recordMemoryAuxiliary(undefined, call),
+        ),
       };
     } catch {
       return {};
@@ -3031,6 +3037,7 @@ export class AgentLoop {
           cacheWriteTokens:
             u?.cacheWriteInputTokens ?? u?.cacheCreationInputTokens,
           authMode: subscriptionAuth(r.provider),
+          outcome: "succeeded",
         });
         recordDailyUsage({
           inputTokens: u?.inputTokens ?? 0,
@@ -3048,6 +3055,18 @@ export class AgentLoop {
           cacheReadTokens: u?.cacheReadInputTokens,
           cacheWriteTokens:
             u?.cacheWriteInputTokens ?? u?.cacheCreationInputTokens,
+        });
+      },
+      onFailed: (r) => {
+        this.recorder.recordCacheWarm({
+          provider: r.provider,
+          model: r.model,
+          phase: r.phase,
+          delayMs: r.delayMs,
+          expectedSavingsUsd: r.decision.expectedSavingsUsd,
+          warmCostUsd: r.decision.warmCostUsd,
+          authMode: subscriptionAuth(r.provider),
+          outcome: "failed",
         });
       },
       onStopped: (reason) =>
@@ -3297,6 +3316,8 @@ export class AgentLoop {
       // PostToolUseFailure/Notification hook ever saw a cwd — a command hook
       // that validates it (an approval bridge, for one) silently got nothing.
       cwd: this.state.projectPath,
+      onAuxiliaryCall: (call: MemoryAuxiliaryCall) =>
+        this.recordMemoryAuxiliary(`turn-${this.state.turnCount}`, call),
     };
 
     // A tool outside the role's allowlist was never offered; a call to one
@@ -4169,6 +4190,14 @@ export class AgentLoop {
     }
 
     const outcome = await requestRedirect({ packet, provider, model });
+    this.recordMemoryAuxiliary(turnId, {
+      purpose: "redirection",
+      provider: outcome.provider,
+      model: outcome.model,
+      duration_ms: outcome.latency_ms,
+      outcome: outcome.providerOutcome,
+      usage: outcome.usage,
+    });
     if (!outcome.ok) {
       this.recorder.recordRedirectSkipped(turnId, outcome.skip);
       return undefined;

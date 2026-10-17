@@ -1,7 +1,8 @@
 # Priority Implementation Plan
 
-> **Status:** Proposed
+> **Status:** Active — completed slices removed
 > **Date:** 2026-10-15
+> **Last updated:** 2026-10-17
 > **Scope:** Memory fidelity, subagent permission scoping, performance and cost
 > measurement, and instruction hierarchy.
 > **Explicitly excluded:** Web/Tauri incremental response rendering.
@@ -21,7 +22,7 @@ the next extensibility feature after those foundations are trustworthy.
 
 | Order | Workstream                            | Why it is here                                                                                                         |
 | ----- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| 1     | Build measurement foundations         | Performance and cost changes cannot be evaluated credibly without complete accounting and repeatable fixtures.         |
+| 1     | Finish measurement follow-through     | Experiments still need an append-only ledger and a repaired long-task comparison baseline.                             |
 | 2     | Diagnose and prevent memory fact loss | Existing long-horizon evidence shows missing and lost facts; new memory features should not be layered on top of that. |
 | 3     | Scope writable subagents              | Read-only subagents are confined, but writable subagents lack path and network boundaries.                             |
 | 4     | Add an instruction hierarchy          | This is the roadmap's highest-value remaining extensibility item and benefits from the measurement foundation.         |
@@ -49,32 +50,12 @@ one implementation PR.
 - Rollout and OTLP events remain body- and path-free. Better observability means
   safe counts, identifiers, and attribution, not logging user content.
 
-## 4. Workstream 1 — measurement foundations
+## 4. Workstream 1 — measurement follow-through
 
 This workstream blocks claims that an optimization is faster or cheaper. It
 does not block independent correctness fixes.
 
-### 4.1 Complete cost accounting
-
-Define one ledger entry per provider attempt, linked to:
-
-- root task and session;
-- child session, when applicable;
-- operation purpose;
-- resolved provider, model, and auth mode;
-- token and cache usage;
-- pricing-table vintage;
-- completion state, including unknown or partial usage.
-
-Extend task-level cost folding to include subagents, verifier calls, compaction
-summarization, memory auxiliary calls, redirection, and cache warming. Count each
-attempt exactly once. Keep benchmark-grader cost separate from runtime cost.
-
-Acceptance requires a synthetic task containing a main turn, child agent,
-compaction, memory operation, and cache refresh to reconcile with a known call
-ledger.
-
-### 4.2 Experiment ledger
+### 4.1 Experiment ledger
 
 Add an append-only record for each performance or cost experiment with:
 
@@ -87,39 +68,35 @@ Add an append-only record for each performance or cost experiment with:
 Reuse the existing eval experiment format where it fits instead of inventing a
 second incompatible result model.
 
-### 4.3 Re-establish the long-task baseline
+### 4.2 Re-establish the long-task baseline
 
 Rebuild the benchmark image containing `rg`, rerun the nine long-task trials,
 and rejudge them with the documented judge configuration. Treat the earlier v2
 numbers as historical evidence, not a valid comparison baseline, because all 88
 of their `grep` calls failed.
 
-### 4.4 Measurement-gated optimization queue
+### 4.3 Measurement-gated optimization queue
 
 Do not implement every candidate at once. Use the harness to admit one change at
 a time:
 
-1. **TUI active-message rendering:** `StreamingAssistantMessage` rebuilds the
-   Markdown component from the entire accumulated reply whenever dirty. Reuse
-   only semantically stable regions and prove final rendered-line equality for
-   fences, tables, references, Unicode, resizing, and interruption.
-2. **Session history cache:** `readEntries` reparses the complete JSONL file on
+1. **Session history cache:** `readEntries` reparses the complete JSONL file on
    each send. Implement a bounded store-owned cache only if preparation timing
    is material; invalidate it on append, compaction, navigation, rewind,
    import, deletion, and detected external changes.
-3. **Checkpoint scanning:** untracked-file size checks call `stat` sequentially.
+2. **Checkpoint scanning:** untracked-file size checks call `stat` sequentially.
    Split capture timing first, then try bounded parallel reads only if this phase
    dominates. The pre-tool checkpoint barrier and shadow-index isolation must
    remain intact.
-4. **Project-instruction size:** this repository's selected root `CLAUDE.md` is
+3. **Project-instruction size:** this repository's selected root `CLAUDE.md` is
    now over 82 KB, roughly ten times the shipped base system prompt. Prototype a
    compact root guide plus topic documents only after real request attribution
    exists, and use eval A/B to prove required subsystem rules are still found.
-5. **Operation-specific model and effort:** extraction, compaction, and
+4. **Operation-specific model and effort:** extraction, compaction, and
    verification may use different policies only after their full cost and
    fallback behavior are visible. Respect an explicit user selection unless a
    configured routing policy says otherwise.
-6. **Selective tool results and repeat-work reduction:** target observed output
+5. **Selective tool results and repeat-work reduction:** target observed output
    families and repeated reads, not global compression. The previous blanket
    Bash-compression experiment increased total cost and must not be retried as
    an unmeasured default.
@@ -129,8 +106,7 @@ metric, correctness result, memory tradeoff, and full task-cost result.
 
 ### Acceptance gate
 
-- A paid A/B report clearly separates runtime, child-agent, auxiliary, and
-  grader cost.
+- Every experiment records its hypothesis, workload, result, and verdict.
 - The long-task baseline uses a functioning tool image and records its exact
   commit, model, and judge.
 
@@ -311,14 +287,13 @@ Before implementation, settle:
 
 Keep review and rollback simple:
 
-1. **PR A:** Complete cost ledger and task-tree aggregation.
-2. **PR B:** Rebuilt long-task baseline and recorded results; no behavioral
+1. **PR A:** Rebuilt long-task baseline and recorded results; no behavioral
    change.
-3. **PR C:** Memory failure instrumentation and deterministic reproductions.
-4. **PR D:** Memory extraction/consolidation safeguards, gated by memory
+2. **PR B:** Memory failure instrumentation and deterministic reproductions.
+3. **PR C:** Memory extraction/consolidation safeguards, gated by memory
    benchmarks.
-5. **PR E:** Subagent capability-envelope spec and implementation.
-6. **PR F:** Instruction hierarchy in separately gated phases.
+4. **PR D:** Subagent capability-envelope spec and implementation.
+5. **PR E:** Instruction hierarchy in separately gated phases.
 
 Do not combine the memory, permissions, and instruction changes. Each changes
 what the model sees or what tools can do and therefore needs isolated evidence.
@@ -327,7 +302,6 @@ what the model sees or what tools can do and therefore needs isolated evidence.
 
 This plan is complete when:
 
-- complete task-cost baselines are reproducible;
 - the repaired long-task benchmark has replaced the broken-tool baseline;
 - memory merges cannot silently discard taught facts;
 - writable subagents can be constrained by path and network without gaining

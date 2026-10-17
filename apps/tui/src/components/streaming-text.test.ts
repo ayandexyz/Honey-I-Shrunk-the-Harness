@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test, { beforeEach } from "node:test";
-import { StreamingAssistantMessage } from "./message-row.js";
+import {
+  StreamingAssistantMessage,
+  createAssistantMessageComponent,
+} from "./message-row.js";
 import {
   appendAssistantDelta,
   finalizeAssistantText,
@@ -37,6 +40,48 @@ test("finalize without a snapshot keeps what streamed (abort path)", () => {
   msg.finalize();
   assert.equal(msg.content, "got this far");
   assert.equal(msg.done, true);
+});
+
+test("streaming coalesces Markdown rebuilds within one frame", () => {
+  let now = 0;
+  const msg = new StreamingAssistantMessage("one", () => now);
+  msg.render(80);
+  assert.equal(msg.markdownRebuilds, 1);
+
+  msg.append(" two");
+  msg.render(80);
+  msg.append(" three");
+  msg.render(80);
+  assert.equal(msg.markdownRebuilds, 1);
+
+  now = 16;
+  assert.ok(msg.render(80).join("\n").includes("one two three"));
+  assert.equal(msg.markdownRebuilds, 2);
+});
+
+test("settled streaming Markdown exactly matches the canonical renderer", () => {
+  const cases = [
+    "| item | value |\n| --- | ---: |\n| café | 42 |",
+    "```ts\nexport const answer = 42;\n```",
+    "A [reference][ref].\n\n[ref]: https://example.com",
+    "## Unicode\n\nこんにちは 👋 — café",
+  ];
+  for (const content of cases) {
+    let now = 0;
+    const streamed = new StreamingAssistantMessage("", () => now);
+    for (let index = 0; index < content.length; index += 3) {
+      streamed.append(content.slice(index, index + 3));
+      streamed.render(index % 2 === 0 ? 80 : 100);
+      now += 1;
+    }
+    streamed.finalize(content);
+    for (const width of [60, 80, 100]) {
+      assert.deepEqual(
+        streamed.render(width),
+        createAssistantMessageComponent(content).render(width),
+      );
+    }
+  }
 });
 
 test("deltas share one row; the snapshot settles it; the next turn starts a new row", () => {

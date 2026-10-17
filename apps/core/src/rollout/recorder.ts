@@ -305,11 +305,16 @@ export class RolloutRecorder {
   // ===========================================================================
   // PUBLIC: recordSubagentStart()
   // ===========================================================================
-  recordSubagentStart(subagentId: string, task: string): void {
+  recordSubagentStart(
+    subagentId: string,
+    task: string,
+    agentType?: string,
+  ): void {
     const event = this.makeEvent("subagent.start", {
       aggregateID: this.sessionId,
       subagentId,
       task,
+      fields: agentType ? { agentType } : undefined,
     });
     this.write(event);
   }

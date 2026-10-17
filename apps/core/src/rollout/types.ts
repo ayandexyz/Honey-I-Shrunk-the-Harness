@@ -181,6 +181,8 @@ export interface SubagentStartEvent extends BaseEvent {
   type: "subagent.start";
   subagentId: string;
   task: string;
+  /** Definition/type used for cost attribution (for example `verifier`). */
+  agentType?: string;
 }
 
 export interface SubagentStopEvent extends BaseEvent {
@@ -313,7 +315,14 @@ export interface ModelErrorEvent extends BaseEvent {
 export interface MemoryAuxiliaryEvent extends BaseEvent {
   type: "memory.auxiliary";
   turnId?: string;
-  purpose: "retrieval_judge" | "extraction" | "consolidation" | "final_flush";
+  purpose:
+    | "retrieval_judge"
+    | "extraction"
+    | "consolidation"
+    | "compaction"
+    | "redirection"
+    | "hook"
+    | "final_flush";
   provider: string;
   model?: string;
   duration_ms: number;
@@ -504,6 +513,8 @@ export interface CacheWarmEvent extends BaseEvent {
   cacheReadTokens?: number;
   cacheWriteTokens?: number;
   authMode?: "oauth" | "api-key";
+  /** Missing on older logs, where cache.warm meant success. */
+  outcome?: "succeeded" | "failed";
 }
 
 // ============================================================================

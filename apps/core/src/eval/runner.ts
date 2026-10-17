@@ -633,6 +633,7 @@ async function runTrialIn(
     ...trace,
     modelSpans: [trace, ...earlierTraces].flatMap((t) => t.modelSpans),
     auxiliarySpans: [trace, ...earlierTraces].flatMap((t) => t.auxiliarySpans),
+    cacheWarmSpans: [trace, ...earlierTraces].flatMap((t) => t.cacheWarmSpans),
   };
   const sumOf = (pick: (t: Trace) => number) =>
     [trace, ...earlierTraces].reduce((n, t) => n + pick(t), 0);

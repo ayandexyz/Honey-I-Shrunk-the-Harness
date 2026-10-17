@@ -64,6 +64,28 @@ test("fully reported memory calls price as a complete total", () => {
   assert.deepEqual(traceCost(trace), { usd: 6, partial: false });
 });
 
+test("cache warming is included once and split from runtime agent cost", () => {
+  const trace = buildTrace("s1", [
+    event("cache.warm", 5000, {
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      phase: "idle",
+      delayMs: 1,
+      expectedSavingsUsd: 1,
+      warmCostUsd: 0.3,
+      inputTokens: 1_000_000,
+      outputTokens: 0,
+      cacheReadTokens: 1_000_000,
+      outcome: "succeeded",
+    }),
+  ]);
+  assert.deepEqual(traceCost(trace), { usd: 0.3, partial: false });
+  assert.deepEqual(traceCostByOperation(trace).cache_warm, {
+    usd: 0.3,
+    partial: false,
+  });
+});
+
 test("the per-operation split sums to the whole and keeps unknowns visible", () => {
   const trace = buildTrace("s1", [
     aux("retrieval_judge", "succeeded"),
@@ -81,5 +103,5 @@ test("the per-operation split sums to the whole and keeps unknowns visible", () 
   const rendered = renderTrace(trace);
   assert.match(rendered, /by op .*retrieval_judge=\$3\.00/);
   assert.match(rendered, /consolidation=unpriced/);
-  assert.match(rendered, /1 memory call\(s\) reported no usage/);
+  assert.match(rendered, /1 auxiliary call\(s\) reported no usage/);
 });

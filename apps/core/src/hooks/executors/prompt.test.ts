@@ -5,6 +5,7 @@ import { registerProvider } from "../../providers/registry.js";
 import type { PromptHook, HookContext, ToolCallInput } from "../types.js";
 import type { AIProvider, ExecuteResult } from "../../providers/types.js";
 import type { ProviderId } from "../../providers/config.js";
+import type { MemoryAuxiliaryCall } from "../../memory/auxiliary.js";
 
 let nextContent = "";
 let lastPrompt: string | undefined;
@@ -32,6 +33,7 @@ registerProvider("test-prompt-hook" as ProviderId, {
         stopReason: "stop",
         provider: "test-prompt-hook",
         model: "fake-model",
+        usage: { inputTokens: 12, outputTokens: 3 },
       };
     },
   }),
@@ -75,16 +77,44 @@ test("prompt hook: non-JSON response fails open with raw text as context", async
 
 test("prompt hook: includes tool name and input in the rendered prompt", async () => {
   nextContent = '{"decision":"allow"}';
-  const hook: PromptHook = { type: "prompt", prompt: "Evaluate this tool call." };
+  const hook: PromptHook = {
+    type: "prompt",
+    prompt: "Evaluate this tool call.",
+  };
   await executePromptHook(hook, input, context);
   assert.match(lastPrompt ?? "", /Evaluate this tool call\./);
   assert.match(lastPrompt ?? "", /Bash/);
   assert.match(lastPrompt ?? "", /rm -rf \//);
 });
 
+test("prompt hook reports its provider attempt for the cost ledger", async () => {
+  nextContent = '{"decision":"allow"}';
+  const calls: MemoryAuxiliaryCall[] = [];
+  await executePromptHook({ type: "prompt", prompt: "Evaluate" }, input, {
+    ...context,
+    onAuxiliaryCall: (call: MemoryAuxiliaryCall) => calls.push(call),
+  });
+  assert.equal(calls.length, 1);
+  assert.deepEqual(
+    { ...calls[0], duration_ms: 0 },
+    {
+      purpose: "hook",
+      provider: "test-prompt-hook",
+      model: "fake-model",
+      duration_ms: 0,
+      outcome: "succeeded",
+      usage: { inputTokens: 12, outputTokens: 3 },
+    },
+  );
+});
+
 test("prompt hook: unknown provider returns a non-blocking error", async () => {
   const hook: PromptHook = { type: "prompt", prompt: "Should I allow this?" };
-  const badContext: HookContext = { sessionId: "s1", turnCount: 1, provider: "nonexistent-provider" };
+  const badContext: HookContext = {
+    sessionId: "s1",
+    turnCount: 1,
+    provider: "nonexistent-provider",
+  };
   const result = await executePromptHook(hook, input, badContext);
   assert.equal(result.success, false);
   assert.equal(result.blocked, false);

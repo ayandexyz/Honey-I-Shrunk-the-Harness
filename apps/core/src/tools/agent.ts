@@ -162,9 +162,14 @@ async function executeSubagent(
   // unknown name is a readable refusal, not a session left behind. A
   // continuation takes all of it from the agent it continues.
   const continued = params.continue
-    ? resolveContinuation(params as unknown as Record<string, unknown>, ctx.sessionId, agents)
+    ? resolveContinuation(
+        params as unknown as Record<string, unknown>,
+        ctx.sessionId,
+        agents,
+      )
     : undefined;
-  if (continued && "error" in continued) return { success: false, error: continued.error };
+  if (continued && "error" in continued)
+    return { success: false, error: continued.error };
   const spawn = continued
     ? {
         agentLabel: continued.config.definition,
@@ -181,7 +186,8 @@ async function executeSubagent(
           provider: r.provider,
           model: r.model,
           // An explicit readOnly wins; otherwise the definition's mode decides.
-          readOnly: coerceBoolean(params.readOnly) ?? r.definition.mode === "explore",
+          readOnly:
+            coerceBoolean(params.readOnly) ?? r.definition.mode === "explore",
           role: r.role,
         };
       })();
@@ -229,7 +235,8 @@ async function executeSubagent(
     if (forking) await discardSession();
     return {
       success: false,
-      error: "agent: no provider — none was given, and the parent session has none",
+      error:
+        "agent: no provider — none was given, and the parent session has none",
     };
   }
 
@@ -349,7 +356,7 @@ async function executeSubagent(
         parentSessionId,
         params.task,
       );
-      parentRecorder?.recordSubagentStart(subagentId, params.task);
+      parentRecorder?.recordSubagentStart(subagentId, params.task, agentLabel);
 
       const subAgentLoop = new AgentLoop(subagentId, {
         maxIterations: 50,
@@ -396,7 +403,9 @@ async function executeSubagent(
         ...subAgentLoop
           .takeUndeliveredSteers()
           .filter((s) => s.synthetic === "steer")
-          .map((s) => s.text.replace(/^Message from the agent that started you:\n/, "")),
+          .map((s) =>
+            s.text.replace(/^Message from the agent that started you:\n/, ""),
+          ),
         ...agents.takeUndelivered(subagentId),
       ];
       const message = interrupted ? "interrupted" : result.message;

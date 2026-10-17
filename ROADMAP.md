@@ -194,11 +194,6 @@ check both hold. The two bugs those docs found are in `TODO.md`.
 
 ### TUI and web app
 
-- [ ] **TUI: stop re-parsing the whole reply while it streams.**
-      `StreamingAssistantMessage` rebuilds the full Markdown component when
-      dirty (`apps/tui/src/components/message-row.ts:382`), so total work grows
-      faster than the reply. Reuse stable regions; rendered lines must stay
-      identical. Perf doc §3.
 - [ ] **Web app: memoize unchanged messages and follow output only near the
       bottom.** Perf doc §4.
 
@@ -213,10 +208,6 @@ check both hold. The two bugs those docs found are in `TODO.md`.
 
 ### Cost
 
-- [ ] **Complete cost accounting.** `traceCost` does not include subagent
-      sessions, `cache.warm` events, or compaction summarizer calls
-      (`compaction/llm-summarizer.ts` does not return usage). Fix before any
-      cost A/B, or a cheaper-looking variant may just be uncounted. Cost doc §4.
 - [ ] **Split root `CLAUDE.md`** (75,962 bytes, sent in full on every session)
       into a short guide plus topic docs, and check that the right topic doc
       still gets read. Changes what the model sees → `eval ab`. Cost doc §5.

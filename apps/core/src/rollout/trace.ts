@@ -95,7 +95,14 @@ export interface ToolSpan {
 /** A background or retrieval model call made by the memory system. */
 export interface MemoryAuxiliarySpan {
   turnId?: string;
-  purpose: "retrieval_judge" | "extraction" | "consolidation" | "final_flush";
+  purpose:
+    | "retrieval_judge"
+    | "extraction"
+    | "consolidation"
+    | "compaction"
+    | "redirection"
+    | "hook"
+    | "final_flush";
   provider: string;
   /** Missing on old or failed events; it deliberately prices as unknown. */
   model?: string;
@@ -108,6 +115,20 @@ export interface MemoryAuxiliarySpan {
   cacheWriteTokens?: number;
   reasoningTokens?: number;
   authMode?: "oauth";
+}
+
+/** A cache-refresh provider attempt, kept separate from foreground turns. */
+export interface CacheWarmSpan {
+  purpose: "cache_warm";
+  provider: string;
+  model: string;
+  startedAt: number;
+  outcome: "succeeded" | "failed";
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  authMode?: "oauth" | "api-key";
 }
 
 /**
@@ -151,6 +172,7 @@ export interface Trace {
   modelSpans: ModelSpan[];
   /** Memory retrieval and maintenance calls, separate from foreground turns. */
   auxiliarySpans: MemoryAuxiliarySpan[];
+  cacheWarmSpans: CacheWarmSpan[];
   /** Tools that RAN. A refused call is in `deniedSpans`, never here. */
   toolSpans: ToolSpan[];
   /** Calls refused before execution. Empty on logs predating the event. */
@@ -216,6 +238,7 @@ export function buildTrace(
 ): Trace {
   const modelSpans: ModelSpan[] = [];
   const auxiliarySpans: MemoryAuxiliarySpan[] = [];
+  const cacheWarmSpans: CacheWarmSpan[] = [];
   const toolSpans: ToolSpan[] = [];
   const deniedSpans: DeniedSpan[] = [];
   const compactionSpans: CompactionSpan[] = [];
@@ -368,6 +391,28 @@ export function buildTrace(
           memoryEstimatedTokens += event.estimatedTokens;
         }
         break;
+      case "cache.warm":
+        cacheWarmSpans.push({
+          purpose: "cache_warm",
+          provider: event.provider,
+          model: event.model,
+          startedAt: event.timestamp,
+          outcome: event.outcome ?? "succeeded",
+          ...(event.inputTokens === undefined
+            ? {}
+            : { inputTokens: event.inputTokens }),
+          ...(event.outputTokens === undefined
+            ? {}
+            : { outputTokens: event.outputTokens }),
+          ...(event.cacheReadTokens === undefined
+            ? {}
+            : { cacheReadTokens: event.cacheReadTokens }),
+          ...(event.cacheWriteTokens === undefined
+            ? {}
+            : { cacheWriteTokens: event.cacheWriteTokens }),
+          ...(event.authMode ? { authMode: event.authMode } : {}),
+        });
+        break;
       case "redirect.triggered":
         redirects++;
         break;
@@ -431,6 +476,7 @@ export function buildTrace(
     wall_ms: Math.max(0, (now ?? endedAt) - startedAt),
     modelSpans,
     auxiliarySpans,
+    cacheWarmSpans,
     toolSpans,
     deniedSpans,
     compactionSpans,

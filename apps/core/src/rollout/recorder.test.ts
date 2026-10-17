@@ -179,6 +179,21 @@ test("memory auxiliary calls retain usage separately from model responses", () =
   }
 });
 
+test("subagent starts retain the agent type used for task cost attribution", () => {
+  const dir = mkdtempSync(join(tmpdir(), "freecode-rollout-"));
+  try {
+    const recorder = new RolloutRecorder("s1", { rolloutDir: dir });
+    recorder.recordSubagentStart("verifier-1", "verify the change", "verifier");
+
+    const [event] = readEvents(dir) as Array<Record<string, unknown>>;
+    assert.equal(event.type, "subagent.start");
+    assert.equal(event.subagentId, "verifier-1");
+    assert.equal(event.agentType, "verifier");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("memory exposure records every provider-request measurement", () => {
   const dir = mkdtempSync(join(tmpdir(), "freecode-rollout-"));
   try {

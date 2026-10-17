@@ -280,6 +280,7 @@ async function streamFixture(
   const scheduledChunks = utf8Chunks(content, chunkBytes);
   const chunks = scheduledChunks.length;
   const total = options.warmup + options.iterations;
+  let markdownRebuilds = 0;
 
   for (let iteration = 0; iteration < total; iteration++) {
     const component = new StreamingAssistantMessage();
@@ -297,8 +298,11 @@ async function streamFixture(
       component.render(100);
       frontendMs += performance.now() - frontendStarted;
     }
+    const finalizeStarted = performance.now();
     component.finalize(content);
     component.render(100);
+    frontendMs += performance.now() - finalizeStarted;
+    markdownRebuilds = component.markdownRebuilds;
     const elapsed = performance.now() - started;
     if (iteration >= options.warmup) {
       backend.push(backendMs);
@@ -312,7 +316,8 @@ async function streamFixture(
     bytesStreamed: Buffer.byteLength(content),
     chunks,
     maxChunkBytes: chunkBytes,
-    markdownRenders: chunks + 1,
+    markdownRenders: markdownRebuilds,
+    renderRequests: chunks + 1,
   };
   return [
     resultFromSamples(name, "backend", backend, work),

@@ -106,6 +106,7 @@ export interface RenderOptions {
 export function renderTrace(trace: Trace, opts: RenderOptions = {}): string {
   const threshold = opts.slowerThanMs ?? 0;
   const out: string[] = [];
+  const cacheWarmSpans = trace.cacheWarmSpans ?? [];
 
   const first = trace.modelSpans[0];
   out.push(
@@ -126,7 +127,7 @@ export function renderTrace(trace: Trace, opts: RenderOptions = {}): string {
       at: span.startedAt,
       lines: [
         `${dim(clock(span.startedAt))} ${dim(formatDuration(span.duration_ms).padStart(7))} ` +
-          `${dim("memory ")}${span.purpose} ${dim(`${span.provider}/${span.model ?? "unknown"}`)}`,
+          `${dim("aux ")} ${span.purpose} ${dim(`${span.provider}/${span.model ?? "unknown"}`)}`,
       ],
     });
   }
@@ -187,7 +188,7 @@ export function renderTrace(trace: Trace, opts: RenderOptions = {}): string {
   );
   if (trace.auxiliarySpans.length > 0) {
     out.push(
-      `  memory  ${formatDuration(trace.memory_ms).padStart(8)}  ${pct(trace.memory_ms, trace.wall_ms)}  ${dim(`${trace.auxiliarySpans.length} calls`)}`,
+      `  aux     ${formatDuration(trace.memory_ms).padStart(8)}  ${pct(trace.memory_ms, trace.wall_ms)}  ${dim(`${trace.auxiliarySpans.length} calls`)}`,
     );
   }
   if (trace.memoryExposures > 0) {
@@ -204,7 +205,7 @@ export function renderTrace(trace: Trace, opts: RenderOptions = {}): string {
   if (trace.auxiliarySpans.length > 0) {
     out.push(
       dim(
-        `  memory tokens  in=${count(trace.memoryInputTokens)} out=${count(trace.memoryOutputTokens)} cached=${count(trace.memoryCacheReadTokens)}`,
+        `  aux tokens  in=${count(trace.memoryInputTokens)} out=${count(trace.memoryOutputTokens)} cached=${count(trace.memoryCacheReadTokens)}`,
       ),
     );
   }
@@ -222,9 +223,11 @@ export function renderTrace(trace: Trace, opts: RenderOptions = {}): string {
   // Subscription calls have no per-token price at all (OAuth spec §5), so they
   // are what the missing dollars ARE — say "subscription" rather than leaving
   // the reader to read an unexplained `*`, or no line, as free.
-  const subscription = [...trace.modelSpans, ...trace.auxiliarySpans].some(
-    (s) => s.authMode === "oauth",
-  );
+  const subscription = [
+    ...trace.modelSpans,
+    ...trace.auxiliarySpans,
+    ...cacheWarmSpans,
+  ].some((s) => s.authMode === "oauth");
   if (cost) {
     const why = cost.partial
       ? subscription
@@ -239,20 +242,23 @@ export function renderTrace(trace: Trace, opts: RenderOptions = {}): string {
   } else if (subscription) {
     out.push(dim(`  cost    subscription ${dim("(no per-token price)")}`));
   }
-  // Split only when memory spent something: a session without auxiliary calls
+  // Split only when auxiliary work spent something: a plain agent session
   // has one operation, and the line above already is its total.
-  if (trace.auxiliarySpans.length > 0) {
+  if (trace.auxiliarySpans.length > 0 || cacheWarmSpans.length > 0) {
     const parts = Object.entries(traceCostByOperation(trace)).map(
       ([op, c]) => `${op}=${c ? formatUsd(c) : "unpriced"}`,
     );
-    const noUsage = trace.auxiliarySpans.filter(
-      auxiliaryUsageUnavailable,
-    ).length;
+    const noUsage =
+      trace.auxiliarySpans.filter(auxiliaryUsageUnavailable).length +
+      cacheWarmSpans.filter(
+        (span) =>
+          span.inputTokens === undefined && span.outputTokens === undefined,
+      ).length;
     out.push(
       dim(
         `  by op   ${parts.join(" ")}` +
           (noUsage > 0
-            ? ` ${yellow(`(${noUsage} memory call(s) reported no usage)`)}`
+            ? ` ${yellow(`(${noUsage} auxiliary call(s) reported no usage)`)}`
             : ""),
       ),
     );

@@ -78,7 +78,7 @@ test("folds memory calls separately and includes them in total cost", () => {
   assert.equal(trace.memory_ms, 700);
   assert.equal(trace.memoryInputTokens, 1_000_000);
   assert.equal(traceCost(trace)?.usd, 3);
-  assert.match(renderTrace(trace), /memory.*retrieval_judge/);
+  assert.match(renderTrace(trace), /aux.*retrieval_judge/);
 });
 
 test("counts repeated memory exposure separately from unique turns", () => {

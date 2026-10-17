@@ -11,7 +11,10 @@ import { palette } from "../palette.js";
 import { defaultMarkdownTheme } from "../themes.js";
 import type { MessageType } from "./message-types.js";
 import { formatTokenCount } from "../utils/format-tokens.js";
-import { formatDuration, formatDurationSeconds } from "../utils/format-duration.js";
+import {
+  formatDuration,
+  formatDurationSeconds,
+} from "../utils/format-duration.js";
 import { shimmer } from "../utils/shimmer.js";
 
 // Live output-token estimate for the streaming turn, fed from the streamed
@@ -265,10 +268,15 @@ export function createUserMessageComponent(
   // without an image protocol, Image renders a one-line `[Image: …]` fallback.
   const imageRows = images.map(
     (img) =>
-      new Image(img.data, img.mediaType, { fallbackColor: chalk.dim }, {
-        maxWidthCells: 60,
-        maxHeightCells: 20,
-      }),
+      new Image(
+        img.data,
+        img.mediaType,
+        { fallbackColor: chalk.dim },
+        {
+          maxWidthCells: 60,
+          maxHeightCells: 20,
+        },
+      ),
   );
 
   return {
@@ -276,7 +284,10 @@ export function createUserMessageComponent(
       prefixPending = true;
       const lines = boundedBox.render(width);
       if (imageRows.length === 0) return lines;
-      return [...lines, ...imageRows.flatMap((img) => ["", ...img.render(width)])];
+      return [
+        ...lines,
+        ...imageRows.flatMap((img) => ["", ...img.render(width)]),
+      ];
     },
     invalidate() {
       if (typeof boundedBox.invalidate === "function") boundedBox.invalidate();
@@ -365,12 +376,20 @@ export function createAssistantMessageComponent(content: string): Component {
  * requestRender is enough — the same pattern ThinkingMessage uses.
  */
 export class StreamingAssistantMessage implements Component {
+  /** One Markdown rebuild per display frame is enough; deltas arriving inside
+   * the same frame stay buffered and are rendered together. */
+  private static readonly MIN_REBUILD_INTERVAL_MS = 16;
   private text: string;
   private inner: Component | null = null;
   private dirty = true;
   private isDone = false;
+  private lastRebuildAt = Number.NEGATIVE_INFINITY;
+  private rebuilds = 0;
 
-  constructor(initial = "") {
+  constructor(
+    initial = "",
+    private readonly now: () => number = Date.now,
+  ) {
     this.text = initial;
   }
 
@@ -380,6 +399,11 @@ export class StreamingAssistantMessage implements Component {
 
   get content(): string {
     return this.text;
+  }
+
+  /** Exposed for the local performance harness and deterministic tests. */
+  get markdownRebuilds(): number {
+    return this.rebuilds;
   }
 
   append(delta: string): void {
@@ -396,17 +420,31 @@ export class StreamingAssistantMessage implements Component {
   finalize(content?: string): void {
     if (content !== undefined && content !== this.text) {
       this.text = content;
-      this.dirty = true;
     }
+    // Even when the snapshot matches, the live renderer may intentionally be
+    // one frame behind. Force one canonical full render so settled output is
+    // byte-for-byte identical to createAssistantMessageComponent().
+    this.dirty = true;
+    this.inner = null;
     this.isDone = true;
   }
 
   render(width: number): string[] {
-    if (!this.inner || this.dirty) {
+    const now = this.now();
+    const rebuildDue =
+      !this.inner ||
+      this.isDone ||
+      now - this.lastRebuildAt >=
+        StreamingAssistantMessage.MIN_REBUILD_INTERVAL_MS;
+    if (this.dirty && rebuildDue) {
       this.inner = createAssistantMessageComponent(this.text);
       this.dirty = false;
+      this.rebuilds += 1;
+      // Timestamp after construction so an expensive parse does not make the
+      // immediately following delta look overdue already.
+      this.lastRebuildAt = this.now();
     }
-    return this.inner.render(width);
+    return this.inner?.render(width) ?? [];
   }
 
   invalidate(): void {
@@ -470,11 +508,19 @@ export class ThinkingMessage implements Component {
     if (!this.isDone) {
       const elapsedMs = Date.now() - this.startTime;
       const duration = formatDuration(elapsedMs);
-      header = palette.yellow(this.isCollapsed ? `▶ Thinking (${duration})...` : `▼ Thinking (${duration})...`);
+      header = palette.yellow(
+        this.isCollapsed
+          ? `▶ Thinking (${duration})...`
+          : `▼ Thinking (${duration})...`,
+      );
     } else {
       const elapsedMs = this.endTime ? this.endTime - this.startTime : 0;
       const duration = formatDuration(elapsedMs);
-      header = chalk.dim(this.isCollapsed ? `▶ Thought (${duration})` : `▼ Thought (${duration})`);
+      header = chalk.dim(
+        this.isCollapsed
+          ? `▶ Thought (${duration})`
+          : `▼ Thought (${duration})`,
+      );
     }
 
     lines.push(header);
@@ -483,8 +529,12 @@ export class ThinkingMessage implements Component {
       const rawLines = this.content.split("\n");
       for (const line of rawLines) {
         const truncated = truncateToWidth(line, maxContentWidth);
-        const prefix = this.isDone ? chalk.dim("  │") : chalk.dim(palette.yellow("  │"));
-        const text = this.isDone ? chalk.dim(truncated) : chalk.dim(palette.yellow(truncated));
+        const prefix = this.isDone
+          ? chalk.dim("  │")
+          : chalk.dim(palette.yellow("  │"));
+        const text = this.isDone
+          ? chalk.dim(truncated)
+          : chalk.dim(palette.yellow(truncated));
         lines.push(`${prefix} ${text}`);
       }
     }

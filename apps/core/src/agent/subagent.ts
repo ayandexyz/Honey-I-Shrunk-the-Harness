@@ -14,6 +14,7 @@ import { createSessionStore, type SessionStore } from "../session/store.js";
 import { getAgentRegistry } from "./registry/index.js";
 import { disposeSubagentShells } from "../tools/shells/index.js";
 import { logger } from "../utils/logger.js";
+import type { RolloutRecorder } from "../rollout/recorder.js";
 
 export interface SubagentResult {
   success: boolean;
@@ -57,6 +58,8 @@ export async function executeSubagent(
    * invisible pause mid-turn.
    */
   parentSessionId?: string,
+  /** Parent-owned recorder: preserves one sequence for the shared log. */
+  parentRecorder?: RolloutRecorder,
 ): Promise<SubagentResult> {
   let id: string = randomUUID();
   let sessionStore: SessionStore | undefined;
@@ -74,6 +77,7 @@ export async function executeSubagent(
     parentSessionId ?? "",
     config.taskPrompt,
   );
+  parentRecorder?.recordSubagentStart(id, config.taskPrompt, config.type);
 
   const agents = getAgentRegistry();
   const rootId = parentSessionId ? agents.rootOf(parentSessionId) : undefined;
@@ -158,6 +162,7 @@ export async function executeSubagent(
 
     // Emit subagent completed event
     BusEvents.subagentCompleted(id, config.type, "", success, message);
+    parentRecorder?.recordSubagentStop(id, message ?? "");
 
     return {
       success,
@@ -172,6 +177,7 @@ export async function executeSubagent(
 
     // Emit subagent completed with error
     BusEvents.subagentCompleted(id, config.type, "", false, message);
+    parentRecorder?.recordSubagentStop(id, message);
 
     return {
       success: false,
@@ -248,9 +254,15 @@ export function buildVerifierTask(input: VerifierTaskInput): string {
     `Original user request:\n${input.originalRequest}`,
     "",
     `Files changed:\n${input.changedFiles.map((f) => `- ${f}`).join("\n")}`,
-    ...(input.testResult ? ["", `Tests run before finishing: ${input.testResult}`] : []),
+    ...(input.testResult
+      ? ["", `Tests run before finishing: ${input.testResult}`]
+      : []),
     ...(input.unwired?.length
-      ? ["", "Added in this run and called by nothing outside tests:", ...input.unwired.map((d) => `- ${d.name} (${d.file}:${d.line})`)]
+      ? [
+          "",
+          "Added in this run and called by nothing outside tests:",
+          ...input.unwired.map((d) => `- ${d.name} (${d.file}:${d.line})`),
+        ]
       : []),
     "",
     "Read the changed files and confirm they actually satisfy the request and are",
@@ -306,6 +318,7 @@ export async function verifyChanges(input: {
   unwired?: VerifierTaskInput["unwired"];
   /** The session being verified, so the verifier shows up in /agents. */
   parentSessionId?: string;
+  parentRecorder?: RolloutRecorder;
 }): Promise<VerificationResult> {
   const task = buildVerifierTask(input);
 
@@ -320,6 +333,7 @@ export async function verifyChanges(input: {
     input.provider,
     input.model,
     input.parentSessionId,
+    input.parentRecorder,
   );
 
   const report = result.content || result.message || "(no verifier output)";
