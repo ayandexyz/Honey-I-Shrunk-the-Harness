@@ -22,7 +22,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { judgeComplete, type JudgeUsage } from "./core-complete.js";
 import { auditAgreement, judgeAudited, MAX_AUDIT_GAP, MIN_AUDITS } from "./judge-audit.js";
-import { assertNoCollision, judgePanel, resolveJudges } from "./judge.js";
+import { assertNoCollision, JUDGE_TIMEOUT_MS, judgePanel, resolveJudges } from "./judge.js";
 import type { FinalCheckOutput, JudgeInput } from "./judge-prompt.js";
 import { INSTANCE_PREFIX, REPO_DIR, loadJudgedTasks } from "./judged-instances.js";
 import { BASELINE_FILE } from "./judged-trial.js";
@@ -91,7 +91,9 @@ async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<v
 async function main(): Promise<void> {
   const runDir = process.argv[2];
   if (!runDir || runDir.startsWith("--"))
-    throw new Error("usage: pnpm bench:judge <results/run> [--panel] [--rejudge] [--judges haiku,gpt,deepseek] [--tasks <file>] [--concurrency N]");
+    throw new Error(
+      "usage: pnpm bench:judge <results/run> [--panel] [--rejudge] [--judges haiku,gpt,deepseek,glm] [--judge-timeout <minutes>] [--tasks <file>] [--concurrency N]",
+    );
   const reportFile = path.join(runDir, "report.json");
   const report = JSON.parse(fs.readFileSync(reportFile, "utf-8")) as Report;
   if (report.set !== "freecode-commits") {
@@ -99,6 +101,9 @@ async function main(): Promise<void> {
   }
   const panel = process.argv.includes("--panel");
   const rejudge = process.argv.includes("--rejudge");
+  // BuffBench's 20 minutes per judge unless overridden: a free-tier judge can
+  // exceed it, and a timed-out judge in a panel trial is a trial one judge short.
+  const timeoutMs = Number(arg("judge-timeout") ?? JUDGE_TIMEOUT_MS / 60_000) * 60_000;
   // --tasks: an alternative approved task file (a smoke test, or a frozen copy
   // of the set a published run used).
   const tasks = new Map(loadJudgedTasks(arg("tasks")).map((t) => [`${INSTANCE_PREFIX}${t.id}`, t]));
@@ -131,11 +136,12 @@ async function main(): Promise<void> {
     }
     const input = judgeInput(task, trial);
     const verdict = panel
-      ? { ...(await judgePanel(input, complete, { label, judges })), scoredBy: "panel" }
+      ? { ...(await judgePanel(input, complete, { label, judges, timeoutMs })), scoredBy: "panel" }
       : await judgeAudited(input, complete, {
           auditKey: `${task.id}|${trial.agent}|${trial.trial}`,
           label,
           judges,
+          timeoutMs,
         });
     fs.writeFileSync(path.join(ROOT, trial.artifactDir, "judging.json"), JSON.stringify(verdict, null, 2));
     const summary: TrialJudging = {

@@ -340,7 +340,8 @@ pnpm bench:tasks approve --by <you> <id|short-sha>...    # or --all
 pnpm bench:agents --set freecode-commits --trials 3 --isolate [--instances add-x,fix-y]
 
 # 5. Judge (resumable; --rejudge to redo, --panel for both judges on every trial).
-#    --judges picks the panel by name: haiku,gpt (default) / deepseek (free, no subscription)
+#    --judges picks the panel by name: haiku,gpt (default) / deepseek,glm (free, no subscription)
+#    --judge-timeout <minutes> raises BuffBench's 20 per judge; a free-tier judge needs it
 pnpm bench:judge bench/agent-bench/results/<run>
 ```
 
@@ -397,23 +398,25 @@ a passed contamination check.
   the GPT judge all run `codex exec -m gpt-5.6-luna` on that login.
 - `claude` CLI (Claude Code) logged in to your Claude subscription. The Haiku
   judge runs `claude -p --model claude-haiku-4-5` on that login — no API key.
-- Neither of those subscriptions? `--judges deepseek` needs no login at all: the
-  DeepSeek judge runs `opencode run -m opencode/deepseek-v4.1-flash-free` on
-  OpenCode's free tier. It has to go through OpenCode's own binary — the free
-  tier answers every other client (including core, and including with an API
-  key) with `FreeTierError` — so its context carries OpenCode's `build` agent
-  preamble and tools, and its `judgeTokens` row counts calls only. One judge
-  cannot clear the two-judge bar: `--judges deepseek --panel` runs, and reports
-  DEGRADED, rather than a publishable number. Measured on the 2026-10-17 judged
-  set (9 trials, twice): 12 calls, 10 scored, 2 came back unparseable — both on
-  `add-agent-control`, the task with the largest diff — and each is counted as a
-  **blackout**, which scores that trial 0. Which trial loses is not fixed, so it
-  is noise rather than one bad task; pair the free judge with Haiku rather than
-  publishing from it alone.
+- Neither of those subscriptions? `--judges deepseek,glm` needs no login at all: the
+  DeepSeek and GLM judges run `opencode run -m opencode/deepseek-v4.1-flash-free` and
+  `-m opencode/glm-5.3-flash-free` on OpenCode's free tier. They have to go through
+  OpenCode's own binary — the free tier answers every other client (including core, and
+  including with an API key) with `FreeTierError` — so their context carries OpenCode's
+  `build` agent preamble and tools, and their `judgeTokens` rows count calls only. A free
+  judge is also slower, so raise the 20-minute cap with `--judge-timeout <minutes>`: a
+  judge that times out leaves its trial one judge short, and that shortfall is the only
+  thing the 10% bar counts. One judge cannot clear that bar at all: `--judges deepseek
+  --panel` runs, and reports DEGRADED, rather than a publishable number. Measured on the
+  2026-10-17 judged set (9 trials, twice): 12 calls, 10 scored, 2 came back unparseable —
+  both on `add-agent-control`, the task with the largest diff — and each is counted as a
+  **blackout**, which scores that trial 0. Which trial loses is not fixed, so it is noise
+  rather than one bad task; pair the free judges with Haiku rather than publishing from
+  them alone.
 - Neither judge may share a model family with the agents' pinned model:
   `assertNoCollision` refuses MiniMax judges while agents run MiniMax-M3, and
   would refuse the GPT judge if agents were pinned to an OpenAI model, or the
-  DeepSeek judge if they were pinned to a DeepSeek one.
+  DeepSeek/GLM judges if they were pinned to a DeepSeek or GLM one.
 
 **Judging is audit mode by default.** Haiku 4.5 scores every trial (primary
 since 2026-10-13; it was Gemini 3.5 Flash until that key went invalid). GPT

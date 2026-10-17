@@ -222,7 +222,7 @@ Their **output schema, verbatim**: `analysis`, `strengths[]`, `weaknesses[]`,
 ### 4.6 The panel (their arithmetic, exactly)
 
 - **Two judges, run in parallel** (`runner/judge.ts` `JUDGE_REGISTRY` / `JUDGES`, pinned
-  2026-09-29; since 2026-10-17 `--judges haiku,gpt,deepseek` selects the panel by name, in
+  2026-09-29; since 2026-10-17 `--judges haiku,gpt,deepseek,glm` selects the panel by name, in
   that order — the first named judge is the primary, and a one-judge panel can never clear
   the two-judge bar below):
   - **`judge-haiku`: `claude-haiku-4-5`** (primary since 2026-10-13), through `claude -p` on
@@ -244,22 +244,30 @@ Their **output schema, verbatim**: `analysis`, `strengths[]`, `weaknesses[]`,
     model under test's **family** (the `codex` transport counts as `openai`, and `deepseek`
     was added to `familyOf` on 2026-10-17 with the DeepSeek judge), so pinning the agents to
     an OpenAI — or DeepSeek — model retires the matching judge.
-  - **`judge-deepseek`: `deepseek-v4.1-flash-free`** (2026-10-17), through `opencode run`
-    (`runner/opencode-complete.ts`) — the judge that needs no subscription. It is reachable
-    **only** through OpenCode's own binary: OpenCode Zen's free tier answers any other client
-    with `FreeTierError` ("OpenCode's free tier can only be used from within OpenCode",
-    re-measured 2026-10-17 with and without an API key), and no Zen credential exists on this
-    machine. The disclosure it forces: OpenCode's own `build` agent preamble and tool
-    definitions sit in this judge's context, so unlike `claude -p` and `codex exec` it is not
-    a bare completion, and `opencode run --format json` reports no token usage (v2.0.32), so
-    its `judgeTokens` row counts `calls` only. Its reply is also the least reliable of the
-    three: on the 2026-10-17 judged set it failed `parseJudging` twice in 12 calls (both times
-    on the task with the largest diff, but not the same trial twice), and `aggregatePanel`
-    counts each miss as a **blackout** — that trial scores 0. So it is usable beside Haiku
-    (which covers the blackout) and not on its own, which is what `--judges deepseek` reports:
-    DEGRADED.
-  - Both ids are written into every judged report. A retired id is how a judge dies quietly
-    (`EVAL.md`'s retired-Gemini incident, BuffBench's dead Gemini judge).
+  - **`judge-deepseek` + `judge-glm`: `deepseek-v4.1-flash-free` and `glm-5.3-flash-free`**
+    (2026-10-17), through `opencode run` (`runner/opencode-complete.ts`) — the two judges that
+    need no subscription, and together a two-judge panel with no login and no bill. They are
+    reachable **only** through OpenCode's own binary: OpenCode Zen's free tier answers any
+    other client with `FreeTierError` ("OpenCode's free tier can only be used from within
+    OpenCode", re-measured 2026-10-17 with and without an API key), and no Zen credential
+    exists on this machine. The disclosure this forces: OpenCode's own `build` agent preamble
+    and tool definitions sit in these judges' context, so unlike `claude -p` and `codex exec`
+    they are not bare completions; `opencode run --format json` reports no token usage
+    (v2.0.32), so their `judgeTokens` rows count `calls` only; and a free model is both weaker
+    and noisier than Haiku or GPT — re-judging the same three trials twice moved 2 of 3
+    scores by 2 points — so a run scored by these two is a second reading, never a
+    replacement for the subscribed pair. Their replies are also the least reliable of the
+    four judges: on the 2026-10-17 judged set DeepSeek failed `parseJudging` twice in 12
+    calls (both times on the task with the largest diff, but not the same trial twice), and
+    `aggregatePanel` counts each miss as a **blackout** — that trial scores 0. So a free
+    judge is usable beside Haiku (which covers the blackout) and not on its own, which is
+    what `--judges deepseek` reports: DEGRADED.
+  - **`--judge-timeout <minutes>`** raises BuffBench's 20 minutes per judge (2026-10-17).
+    A judge that times out leaves its trial short of two judges, which is exactly what the
+    10% bar measures, and a free-tier judge exceeded the 20 in 1 of 9 calls of the first
+    OpenCode panel — so a free-judge panel is run with the cap raised.
+  - Every judge's id is written into every judged report. A retired id is how a judge dies
+    quietly (`EVAL.md`'s retired-Gemini incident, BuffBench's dead Gemini judge).
 - **Transport** (`core-complete.ts` `judgeComplete` routes by `provider`):
   - Gemini goes through `apps/core/src/providers/` (`getProvider`), the same path
     `eval/scorers/judge.ts` uses. This deliberately differs from `proxy/price.ts`, which
