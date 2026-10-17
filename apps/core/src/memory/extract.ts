@@ -9,6 +9,7 @@ import type { ProviderId } from "../providers/index.js";
 import { getMemoryStore } from "./mem-store.js";
 import { AUTHORABLE_MEMORY_TYPES, type MemoryType } from "./mem-types.js";
 import { containsSecret } from "./graph/secret-filter.js";
+import { isSubtractive } from "./claim-subset.js";
 import { BusEvents } from "../bus/index.js";
 import { logger } from "../utils/logger.js";
 import type { MemoryAuxiliaryObserver } from "./auxiliary.js";
@@ -192,6 +193,15 @@ export async function extractMemories(input: ExtractInput): Promise<number> {
         existing.description === p.description
       ) {
         stage.skipped.push({ body: p.content, reason: "unchanged" });
+        continue;
+      }
+
+      // A rewrite carrying fewer facts than the entry already holds, with none
+      // of its own, is a silent loss rather than an update (plan 2026-10-15 §5
+      // Phase 1). The entry keeps what it had; an update, which brings a claim
+      // of its own, is untouched by this.
+      if (existing && isSubtractive(existing.content, p.content)) {
+        stage.skipped.push({ body: p.content, reason: "lossy" });
         continue;
       }
 

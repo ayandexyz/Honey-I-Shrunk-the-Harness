@@ -32,7 +32,7 @@ export type MemoryFailureCause =
 export type MemoryFactPresence = "present" | "unmeasured";
 
 /** Why an extracted candidate never reached the store. */
-export type ExtractionDropReason = "cap" | "secret" | "unchanged";
+export type ExtractionDropReason = "cap" | "secret" | "unchanged" | "lossy";
 
 /** Recorded by `extractMemories`. Bodies are `MemoryEntry.content`. */
 export interface ExtractionTrace {

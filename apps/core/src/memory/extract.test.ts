@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { extractMemories, MAX_SAVES_PER_RUN } from "./extract.js";
 import { getMemoryStore } from "./mem-store.js";
+import type { MemoryWriteTrace } from "./failure-trace.js";
 import { bus } from "../bus/index.js";
 
 function fixture(): { projectPath: string; cleanup: () => void } {
@@ -215,6 +216,127 @@ test("stays silent when nothing was saved", async () => {
     assert.equal(cap.events.length, 0, "an empty extraction must not notify");
   } finally {
     cap.stop();
+    cleanup();
+  }
+});
+
+// -----------------------------------------------------------------------------
+// Multi-turn additive facts under one topic. Extraction is idempotent on
+// (type, name) — a later turn updates the entry — so the failure to guard
+// against is a rewrite that carries less than what is already stored, with
+// nothing new in its place.
+// -----------------------------------------------------------------------------
+
+function withContent(name: string, content: string) {
+  return { type: "project", name, description: `about ${name}`, content };
+}
+
+const teach = (
+  projectPath: string,
+  ...entries: Array<{
+    type: string;
+    name: string;
+    description: string;
+    content: string;
+  }>
+) =>
+  extractMemories({
+    transcript: TRANSCRIPT,
+    projectPath,
+    provider: "anthropic",
+    complete: async () => JSON.stringify(entries),
+  });
+
+const TWO_RULES = "We always deploy on Fridays and never on Mondays";
+
+test("a rewrite that only subtracts facts is refused, and the entry keeps them", async () => {
+  const { projectPath, cleanup } = fixture();
+  try {
+    assert.equal(
+      await teach(projectPath, withContent("deploy-cadence", TWO_RULES)),
+      1,
+    );
+    // The next turn's extractor reuses the topic and drops the second rule. A
+    // stored fact is not the extractor's to forget, so the write is refused.
+    assert.equal(
+      await teach(
+        projectPath,
+        withContent("deploy-cadence", "We always deploy on Fridays"),
+      ),
+      0,
+    );
+    assert.equal(
+      getMemoryStore(projectPath).load("deploy-cadence", "project")?.content,
+      TWO_RULES,
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("a same-name rewrite that adds a fact still updates the entry", async () => {
+  const { projectPath, cleanup } = fixture();
+  try {
+    await teach(
+      projectPath,
+      withContent("deploy-cadence", "We always deploy on Fridays"),
+    );
+    assert.equal(
+      await teach(projectPath, withContent("deploy-cadence", TWO_RULES)),
+      1,
+      "learning more is an update, not a loss",
+    );
+    assert.equal(
+      getMemoryStore(projectPath).load("deploy-cadence", "project")?.content,
+      TWO_RULES,
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("a rewrite that restates the facts in new words still updates the entry", async () => {
+  const { projectPath, cleanup } = fixture();
+  try {
+    await teach(
+      projectPath,
+      withContent("deploy-cadence", "The campaign deadline is Nov 3"),
+    );
+    assert.equal(
+      await teach(
+        projectPath,
+        withContent("deploy-cadence", "The campaign deadline moved to Dec 1"),
+      ),
+      1,
+    );
+    assert.equal(
+      getMemoryStore(projectPath).load("deploy-cadence", "project")?.content,
+      "The campaign deadline moved to Dec 1",
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("a refused rewrite is recorded instead of vanishing", async () => {
+  const { projectPath, cleanup } = fixture();
+  const trace: MemoryWriteTrace = {};
+  try {
+    await teach(projectPath, withContent("deploy-cadence", TWO_RULES));
+    await extractMemories({
+      transcript: TRANSCRIPT,
+      projectPath,
+      provider: "anthropic",
+      complete: async () =>
+        JSON.stringify([
+          withContent("deploy-cadence", "We always deploy on Fridays"),
+        ]),
+      trace,
+    });
+    assert.deepEqual(trace.extraction?.skipped, [
+      { body: "We always deploy on Fridays", reason: "lossy" },
+    ]);
+  } finally {
     cleanup();
   }
 });
