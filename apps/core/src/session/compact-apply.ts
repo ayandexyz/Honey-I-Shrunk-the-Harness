@@ -11,10 +11,16 @@ import { markAllReadsCompacted } from "../tools/read-state.js";
 export interface ApplyCompactionResult {
   compacted: boolean;
   reason?: string;
+  /** MemoryService's local transcript estimate, not provider usage. */
   tokensBefore: number;
+  /** MemoryService's local transcript estimate, not provider usage. */
   tokensAfter: number;
   messagesBefore: number;
   messagesAfter: number;
+  /** Session-store entry ids removed from the active provider transcript. */
+  compactedMessageIds: string[];
+  /** Session-store entry ids left in the active provider transcript. */
+  preservedMessageIds: string[];
 }
 
 /**
@@ -74,6 +80,8 @@ export async function applyCompaction(opts: {
       tokensAfter: result.tokenCountAfter,
       messagesBefore: 0,
       messagesAfter: 0,
+      compactedMessageIds: [],
+      preservedMessageIds: [],
     };
   }
 
@@ -88,11 +96,16 @@ export async function applyCompaction(opts: {
   }
 
   markAllReadsCompacted(opts.sessionId);
+  const preservedIds = new Set(preserve.map((message) => message.id));
   return {
     compacted: true,
     tokensBefore: result.tokenCountBefore,
     tokensAfter: result.tokenCountAfter,
     messagesBefore: stored.length,
     messagesAfter: preserve.length,
+    compactedMessageIds: stored
+      .filter((message) => !preservedIds.has(message.id))
+      .map((message) => message.id),
+    preservedMessageIds: preserve.map((message) => message.id),
   };
 }

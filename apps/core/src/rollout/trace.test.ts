@@ -514,11 +514,18 @@ test("compactions are folded, with the tokens they removed", () => {
     request(0),
     response(1_000, 1_000),
     event("compact.occurred", 1_100, {
-      beforeTokens: 30_000,
-      afterTokens: 8_000,
+      estimatedTranscriptTokensBefore: 30_000,
+      estimatedTranscriptTokensAfter: 8_000,
+      providerRequestTokensBefore: 196_000,
+      messagesBefore: 12,
+      messagesAfter: 4,
+      compactedMessageIds: ["m1", "m2"],
+      preservedMessageIds: ["m3"],
     }),
     request(1_200),
     response(2_000, 800),
+    // Legacy event: beforeTokens/afterTokens were also local estimates. The
+    // fold must keep old logs readable while exposing the explicit new shape.
     event("compact.occurred", 2_100, {
       beforeTokens: 26_000,
       afterTokens: 9_000,
@@ -526,6 +533,25 @@ test("compactions are folded, with the tokens they removed", () => {
   ]);
   assert.equal(trace.compactions, 2);
   assert.equal(trace.compactedTokens, 22_000 + 17_000);
+  assert.equal(trace.compactedEstimatedTranscriptTokens, 22_000 + 17_000);
+  assert.deepEqual(trace.compactionSpans[0], {
+    at: 1_100,
+    estimatedTranscriptTokensBefore: 30_000,
+    estimatedTranscriptTokensAfter: 8_000,
+    providerRequestTokensBefore: 196_000,
+    messagesBefore: 12,
+    messagesAfter: 4,
+    compactedMessageIds: ["m1", "m2"],
+    preservedMessageIds: ["m3"],
+  });
+  assert.equal(
+    trace.compactionSpans[1]?.estimatedTranscriptTokensBefore,
+    26_000,
+  );
+  const rendered = renderTrace(trace);
+  assert.match(rendered, /estimated transcript 30\.0k→8\.0k/);
+  assert.match(rendered, /provider request before=196\.0k/);
+  assert.match(rendered, /messages 12→4/);
 });
 
 test("a run that never compacted reports zero, not undefined", () => {
@@ -534,6 +560,7 @@ test("a run that never compacted reports zero, not undefined", () => {
   const trace = buildTrace("s1", [request(0), response(1_000, 1_000)]);
   assert.equal(trace.compactions, 0);
   assert.equal(trace.compactedTokens, 0);
+  assert.equal(trace.compactedEstimatedTranscriptTokens, 0);
 });
 
 test("a compaction that grew the transcript cannot cancel out a real saving", () => {

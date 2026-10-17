@@ -4,11 +4,10 @@ Debt only: bugs, dead code, stale docs, uncalibrated numbers. **This file is
 meant to shrink** — the "Real fixes" here are what must reach zero before
 1.0.0. Verify each entry against the code before fixing (several audit
 sections predate the provider refactor); delete an entry, and its twin in the
-docs page's *Known gaps*, in the same PR that fixes it.
+docs page's _Known gaps_, in the same PR that fixes it.
 
 Not here: unbuilt features → `ROADMAP.md`; deliberate behaviour that must not
 be "fixed" → `docs/DECISIONS.md`.
-
 
 ## Small known limitations
 
@@ -77,7 +76,7 @@ header prefix to `RATE_LIMIT_HEADER_PREFIXES` so it waits the window out. Spec
 
 **Status:** known, bounded, low priority.
 
-`ShellRegistry` caps *running* shells at `MAX_SHELLS_PER_SESSION` (16) but does
+`ShellRegistry` caps _running_ shells at `MAX_SHELLS_PER_SESSION` (16) but does
 not cap settled ones — a completed shell keeps its record and up to
 `SHELL_BUFFER_CHARS` (256k) of output until the user presses `d` in `/shells`
 or the session ends. A long session that backgrounds many short commands
@@ -129,15 +128,6 @@ Each is also listed in that page's **Known gaps** section. Deliberate behaviour 
 - [ ] **Dangling wikilinks are invisible** — skipped correctly (`builder.ts:78`),
       but a typo'd `[[link]]` never surfaces anywhere. The explorer should list
       unresolved links.
-- [ ] **`compact.occurred` under-reports what compaction did** — it records
-      `MemoryService`'s ESTIMATED transcript sizes, while the real trim is
-      `keepLastNUserTurns` over the session store. Measured on the new
-      `compaction-boundary` eval case: the event says 872 → 748 tokens for a
-      request that measured 16K. So `freecode trace` and the harness's
-      `Trace.compactedTokens` understate compaction by an order of magnitude.
-      `ApplyCompactionResult` already carries `messagesBefore`/`messagesAfter`
-      and neither is recorded — record those, and the measured count alongside
-      the estimate.
 - [ ] **Dead export: `renderPromptMemoryContext()`** (`selector.ts:64`) —
       referenced only by `loop.ts` comments explaining why it must not be used.
 - [ ] **`getContextLimit(model)` ignores its argument** (`tokens.ts:20`) and
@@ -151,6 +141,7 @@ Each is also listed in that page's **Known gaps** section. Deliberate behaviour 
       multiplexing. Blocks any multi-session UI over one core process.
 
         One thing I checked and didn't report as a bug: manual /compact builds its own MemoryService separate from the loop's. That would be a divergence risk,
+
   except a fresh loop (and service) is constructed per turn at server.ts:199 and reloads state from disk, so they stay consistent.
 
 ## Docs-audit findings (reference: CLI, settings, env, IPC, hooks — 2026-08-23)
@@ -204,7 +195,7 @@ that page's **Known gaps**.
       `compaction/tokens.ts:105`). `FREECODE_MAX_TURN_TOKENS` is unset unless the
       user sets it, so nothing caps actual spend. `freecode run` now has
       `--max-turns` for a turn cap, but nothing caps tokens by default, and
-      loop-health only *warns* on the stuck patterns most likely to burn quota
+      loop-health only _warns_ on the stuck patterns most likely to burn quota
       (stagnation never stops at all). Consider a default ceiling for headless
       runs.
 
@@ -498,7 +489,7 @@ spec's §12; these are the parts that are actionable independently of it.
 
 ### Docs findings (eval Phase 2 — sandbox + outcome scorer, 2026-08-27)
 
-- [ ] **`bash` escapes the sandbox.** `eval/sandbox.ts` scopes the *file* tools
+- [ ] **`bash` escapes the sandbox.** `eval/sandbox.ts` scopes the _file_ tools
       and the runner's permission answers to the tmpdir, but a coding case needs
       `bash` and `bash` reaches the whole filesystem (spec §6.3 says so
       explicitly). Cases are trusted fixtures, so this is a limit rather than a
@@ -531,7 +522,7 @@ spec's §12; these are the parts that are actionable independently of it.
       keep sitting there looking like a source of truth. It already misled the
       eval spec (§5.1's table, corrected in §8.1).
 - [ ] **`eval add` cannot harvest a coding case.** A recorded session has no
-      `files` fixture, so `--suite coding` is refused. Harvesting a *sandboxed*
+      `files` fixture, so `--suite coding` is refused. Harvesting a _sandboxed_
       case would mean reconstructing the fixture from the tool calls that
       created it — possible in principle, not attempted.
 - [ ] **`expectMaxTurns` is harvested as the observed count exactly**, so a
@@ -548,7 +539,7 @@ spec's §12; these are the parts that are actionable independently of it.
       cannot be priced without threading that through.
 - [ ] **The built-in price table has no refresh path.** Six models, stamped
       `PRICES_AS_OF = "2026-05"`. Nothing warns when it goes stale, and a stale
-      table is only safe because the contract is *comparison, not billing* —
+      table is only safe because the contract is _comparison, not billing_ —
       which holds only while everyone remembers it.
 - [ ] **`attrs()` in `rollout/otlp.ts` rounds numerics to integers**, with an
       explicit `FRACTIONAL` exception set. Adding a future rate-valued
@@ -585,7 +576,7 @@ Closes the four items above that stood between "the harness runs" and "the
 harness can block a release". Remaining:
 
 - [ ] **`evalsDir()` is still CWD-relative.** `pnpm eval` covers a checkout and
-      the CI workflow sets nothing, but an *installed* binary run from anywhere
+      the CI workflow sets nothing, but an _installed_ binary run from anywhere
       but a repo root still needs `FREECODE_EVALS_DIR`.
 - [ ] **No shipped case pins `model`**, though spec §11 says every one should.
       The hazard — comparing across models — is now caught by `baselineFor`
@@ -676,14 +667,6 @@ for what makes its long-running sessions survivable.
 
 ### Long-session fidelity
 
-- [ ] **`compact.occurred` records magnitude, not content.**
-      `rollout/types.ts:125` carries `beforeTokens`/`afterTokens` only. When a
-      long session forgets something, "which events left the view" is the first
-      question `freecode trace` should answer. OpenHands' `CondensationEvent`
-      carries `forgotten_event_ids`. The ids are known at the call site and
-      contain no message bodies, so this does not threaten the leak-free OTLP
-      constraint.
-
 - [ ] **`rollout/history.ts` has no range query.** `loadSessionEvents` (whole
       file), `getEventsByType`, `getEventCount` — no cursor, no timestamp
       window. Prerequisite for backing SSE replay with the durable log rather
@@ -708,7 +691,7 @@ page's Known gaps.
 
 - [ ] **Tool names are forwarded unmapped on the OAuth path.** jcode renames
       tools to the ones Claude Code ships; freecode does not. Spec §9 Q1 — a
-      tool-use-*quality* question, not an access or billing one, and it waits on
+      tool-use-_quality_ question, not an access or billing one, and it waits on
       a real turn.
 
 ## Findings (ephemeral-tail cache fix — 2026-09-06)
@@ -725,7 +708,7 @@ anchors). Detector gained a one-sample deferral for provider blips
       from a real rewrite by usage numbers alone and produces the same warning.
       `FREECODE_DEBUG_CACHE=1` segment hashes are the manual tiebreak.
 - [ ] **The UserPromptSubmit hook no longer sees memory/todo/reminder text.**
-      The hook rewrites the joined *system* prompt, and those blocks are message
+      The hook rewrites the joined _system_ prompt, and those blocks are message
       content now. No known hook depended on them; if one surfaces, the hook
       contract needs a decision (expose the tail read-only, or accept the loss).
 - [ ] **`FREECODE_EPHEMERAL_TAIL=0` should eventually be deleted.** It existed
@@ -745,7 +728,7 @@ anchors). Detector gained a one-sample deferral for provider blips
       `admit-what-is-not-there` 1–2 for correct, tool-free answers ("made
       claims without reading any files") that Gemini scored 5/5 seventeen
       times; the rubric says to penalise only a claim the tool list
-      *contradicts*. Do not use it as the judged-gate judge until
+      _contradicts_. Do not use it as the judged-gate judge until
       `freecode eval calibrate` has human labels showing it agrees.
 - [ ] **`frustrated-user-gets-no-padding` answers from `CLAUDE.md` without
       reading.** 3/3 tool-free with memory recall off too, occasionally wrong

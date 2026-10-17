@@ -26,28 +26,28 @@
 
 ## 0. Read this first (plain language)
 
-Our eval harness asks one question per case — *did the right tool fire* — and it
+Our eval harness asks one question per case — _did the right tool fire_ — and it
 asks it in the weakest form available: **anywhere in the run**. A case that greps
 immediately and a case that websearches, flails, reads three wrong files, and
-*then* greps score identically. That is the exact distinction §4 of the eval spec
+_then_ greps score identically. That is the exact distinction §4 of the eval spec
 was written to capture ("trajectory over outcome"), and we currently score the
 outcome of the trajectory rather than its shape.
 
 Separately, an `EvalCase` carries no record of **why it exists**. There is no
 field saying which failure mode it defends against, no field saying why a
 deterministic unit test could not cover it, and no field recording that a case is
-a *known gap* rather than a break. So a suite of 20 trajectory cases cannot tell
+a _known gap_ rather than a break. So a suite of 20 trajectory cases cannot tell
 you what it covers, what it does not, or which of its reds are news.
 
 fx solved both with schema rather than machinery: every case is a row that
 declares its failure category, its justification for costing money, its expected
-*first* action, and its current-versus-target result. A free, model-less test then
+_first_ action, and its current-versus-target result. A free, model-less test then
 audits the registry itself. That is the part worth taking.
 
-The fourth change is unrelated to schema. Our `compare.ts` diffs two *finished
-reports*, so every A/B we run is confounded with whatever drifted between the two
+The fourth change is unrelated to schema. Our `compare.ts` diffs two _finished
+reports_, so every A/B we run is confounded with whatever drifted between the two
 run dates. fx runs both sides now, interleaved. That is a better instrument for
-the one question we keep needing to answer — *did that prompt edit help?*
+the one question we keep needing to answer — _did that prompt edit help?_
 
 ---
 
@@ -57,11 +57,11 @@ The plan is nine days old at the time of writing and three of its premises have
 moved. Recorded here because it is the plan's phasing table that is stale, not
 its analysis:
 
-| Plan says | Actually |
-| --- | --- |
-| "`scorers/efficiency.ts` … **was never written**; `gate.ts` has no efficiency rule" (§7) | **Built.** `scorers/efficiency.ts` exists, folded per trial at `runner.ts:309`, compared at `gate.ts:104` as a reported-never-blocking row. Phase B is done. |
-| "Our 20 trajectory cases" / "backfill the 31 existing cases" (§4, §9) | Still accurate. 39 cases across five suites — `trajectory` 20, `coding` 6, `judged` 5, `redirect` 5, `redirect-build` 3. The two redirect suites were added since. |
-| `evals/quarantine.txt` populated as part of calibration (§9 closing note) | **Done 2026-08-29** — three entries, from the first 3-trial bootstrap. See eval-harness spec §14.1, including why four of `--quarantine-report`'s seven proposals were rejected. |
+| Plan says                                                                                | Actually                                                                                                                                                                         |
+| ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| "`scorers/efficiency.ts` … **was never written**; `gate.ts` has no efficiency rule" (§7) | **Built.** `scorers/efficiency.ts` exists, folded per trial at `runner.ts:309`, compared at `gate.ts:104` as a reported-never-blocking row. Phase B is done.                     |
+| "Our 20 trajectory cases" / "backfill the 31 existing cases" (§4, §9)                    | Still accurate. 39 cases across five suites — `trajectory` 20, `coding` 6, `judged` 5, `redirect` 5, `redirect-build` 3. The two redirect suites were added since.               |
+| `evals/quarantine.txt` populated as part of calibration (§9 closing note)                | **Done 2026-08-29** — three entries, from the first 3-trial bootstrap. See eval-harness spec §14.1, including why four of `--quarantine-report`'s seven proposals were rejected. |
 
 Phases A, C, D, E and F of the plan remain unbuilt. This spec is A, C, F, plus one
 item the plan described in fx and then did not propose adopting (§5 below).
@@ -70,12 +70,12 @@ item the plan described in fx and then did not propose adopting (§5 below).
 
 ## 2. The four changes
 
-| # | Change | Shape | Cost |
-| --- | --- | --- | --- |
-| 1 | **First tool as a set** — `expectFirstToolIn`, `expectBashMatches` | pure fold over `trace.toolSpans` | ~half a day |
-| 2 | **Justification fields** — `failureCategory`, `whyModelBacked` | two fields + closed set + free assertions | ~1 day + backfill |
-| 3 | **Known-gap ledger** — `knownGap: { status, notes, target }` | one field + a non-equality assertion | ~half a day |
-| 4 | **Paired A/B** — `freecode eval ab` | new runner, alternating order | ~2 days |
+| #   | Change                                                             | Shape                                     | Cost              |
+| --- | ------------------------------------------------------------------ | ----------------------------------------- | ----------------- |
+| 1   | **First tool as a set** — `expectFirstToolIn`, `expectBashMatches` | pure fold over `trace.toolSpans`          | ~half a day       |
+| 2   | **Justification fields** — `failureCategory`, `whyModelBacked`     | two fields + closed set + free assertions | ~1 day + backfill |
+| 3   | **Known-gap ledger** — `knownGap: { status, notes, target }`       | one field + a non-equality assertion      | ~half a day       |
+| 4   | **Paired A/B** — `freecode eval ab`                                | new runner, alternating order             | ~2 days           |
 
 1–3 are schema and cost nothing at run time. 4 is a new command and does not touch
 the gate.
@@ -100,7 +100,7 @@ Membership, not position. Two consequences:
    different questions. The harness exists to ask the first and asks the second.
 2. **A needle is over-specific.** Our own history contains `read-named-file`
    failing as `'rollout/types.ts' not in args[file_path]` — the model did the right
-   *kind* of thing and the case tested a spelling. Eval spec §4.1 warns about
+   _kind_ of thing and the case tested a spelling. Eval spec §4.1 warns about
    exactly this and supplies no tool to avoid it.
 
 ### The change
@@ -145,18 +145,18 @@ forbidBashMatches?: string;
   concurrent calls to the same tool swapped each other's arguments. Old logs
   without `callId` fall back to oldest-call-first, which still yields ascending
   call order.
-- Denied calls stay invisible here, as everywhere: `toolSpans` means *tools that
-  ran* and a refusal is a `deniedSpan` (`specs/2026-08-10-agent-observability.md`
+- Denied calls stay invisible here, as everywhere: `toolSpans` means _tools that
+  ran_ and a refusal is a `deniedSpan` (`specs/2026-08-10-agent-observability.md`
   §5.1). A case that wants to assert on a refusal still cannot, and this change
   does not pretend otherwise.
 - `expectBashMatches` is satisfied by **any** `bash` span whose command matches —
   a model that runs `ls` then `git log` has still run `git log`. Pair it with
   `expectFirstToolIn: ["bash"]` when the ordering matters too.
 - Both compose with `expectTool` rather than replacing it. `expectTool` keeps its
-  membership semantics, including `expectTool: null` meaning *nothing fired*.
+  membership semantics, including `expectTool: null` meaning _nothing fired_.
   Nothing in the existing 39 cases changes meaning.
 - **Added 2026-09-05:** `forbidBashMatches` fails the case when **any** `bash`
-  span's command matches. Like `forbidTools` it sees only commands that *ran*
+  span's command matches. Like `forbidTools` it sees only commands that _ran_
   (a denied call is a `deniedSpan`), so a mode that blocks bash passes it
   vacuously — pair it with a positive expectation, as `evals/security.jsonl`
   does. Its validation and load-time regex compilation are shared with
@@ -207,7 +207,7 @@ field is there for the sandboxed suites.
 ### The defect
 
 `EvalCase` (`eval/types.ts:16`) has `id`, `prompt`, expectations, fixtures, rubric.
-Nothing answers *why does this need a real model*. The eval spec's own rule —
+Nothing answers _why does this need a real model_. The eval spec's own rule —
 anything that does not run a real agent turn is a `*.test.ts` and belongs next to
 its code — is prose in `CLAUDE.md` with no mechanism enforcing it. `dataset.ts:93`
 rejects a case that asserts nothing; it accepts a case that a unit test should
@@ -249,20 +249,20 @@ of them do not describe misbehaviour at all: `coding` asks whether the agent can
 edit code, `judged` asks whether the prose was good, and the two `redirect`
 suites ask whether it stalls. Forcing those into a misbehaviour taxonomy would
 have meant either a junk-drawer category or an honest field that half the suite
-lies in, so the set covers both readings of *what breaks if this goes red*.
+lies in, so the set covers both readings of _what breaks if this goes red_.
 
 ### The coverage payoff
 
 This is the larger half of the value, and the tagging confirmed it. Across all
 39 cases:
 
-| Category | Cases |
-| --- | --- |
-| `tool-routing` | 17 |
-| `stuck-loop` | 8 |
-| `code-edit` | 6 |
-| `answer-quality` | 5 |
-| `permission` | 3 |
+| Category            | Cases |
+| ------------------- | ----- |
+| `tool-routing`      | 17    |
+| `stuck-loop`        | 8     |
+| `code-edit`         | 6     |
+| `answer-quality`    | 5     |
+| `permission`        | 3     |
 | **the other eight** | **0** |
 
 Phase 4 then closed four of the eight, taking the suite to 46 cases: `recovery`
@@ -272,7 +272,7 @@ not unwritten but unreachable — §9.1.
 We have real code and zero eval coverage for `recovery` (`agent/recovery/`),
 `stale-context`, `compaction-boundary`, `memory-recall`, `large-output`,
 `resume`, `frustration` and `mcp-failure`. `frustration` is the sharpest of them:
-*"This is taking too long. What are you doing?"* is a real user turn with a real
+_"This is taking too long. What are you doing?"_ is a real user turn with a real
 correct behaviour, and nothing in `evals/` asks for it.
 
 Per-category pass rate then becomes the number that directs work. It is nearly
@@ -292,7 +292,7 @@ is what makes `freecode eval add --write` safe.
 ### The defect
 
 Today a case that fails for a reason we already understand has exactly one home:
-`evals/quarantine.txt`, which encodes *"do not turn the build red"* and nothing
+`evals/quarantine.txt`, which encodes _"do not turn the build red"_ and nothing
 else. No why, no definition of passing, no way to tell a genuinely flaky case from
 a known-broken behaviour we have chosen not to fix yet. The file is also empty,
 so in practice we have no vocabulary for a known gap at all.
@@ -330,8 +330,8 @@ knownGap?: {
   those pass rates with cases that were never expected to pass.
 - A case may be both. `knownGap` explains, `quarantine.txt` unblocks.
 - **`notes` must not equal `target`.** fx asserts this
-  (`agent-quality-matrix.test.ts:112`, *"separates current baseline observations
-  from target behavior"*) and it is the assertion that makes the field honest —
+  (`agent-quality-matrix.test.ts:112`, _"separates current baseline observations
+  from target behavior"_) and it is the assertion that makes the field honest —
   otherwise the aspiration gets written into the status field and the gap
   disappears without being fixed.
 - `status: "unmeasured"` is illegal on a case that has ever produced a trial
@@ -356,7 +356,7 @@ silently updated model behind a stable id, a provider-side routing change, a
 different cache state — is confounded into the delta and reported as ours.
 
 Eval spec §9.2 makes the resolved model part of baseline identity, which catches
-an *id* change. It cannot catch the same id serving different weights.
+an _id_ change. It cannot catch the same id serving different weights.
 
 ### The change
 
@@ -370,14 +370,14 @@ freecode eval ab <suite> --baseline <variant> --candidate <variant> \
 **A side is an in-process VARIANT, not a git ref** — §10's open question, settled
 in Phase 5. A variant is `model=<p/m>` and/or `env:NAME=value`, comma-separated;
 an empty string is the identity, so one axis can be A/B'd while the other stays
-at whatever the config resolves. `env:NAME=` *unsets* rather than empties.
+at whatever the config resolves. `env:NAME=` _unsets_ rather than empties.
 
 Git refs were the other candidate and are the more general instrument — they are
 what you would want for a system-prompt change. They were rejected for now
 because they fight the runner: `runner.ts` is deliberately in-process so a case
 can be stepped through in a debugger, and a ref-based A/B needs worktree, build
 and spawn plumbing around it. Variants cost a day and answer the two questions
-we actually have — *is this model better here*, and *does redirect help* — the
+we actually have — _is this model better here_, and _does redirect help_ — the
 second of which is the measurement parked since 2026-08-27.
 
 This works **only because every setting worth flipping is read per turn**:
@@ -399,12 +399,12 @@ the read site first.
 
 Four properties, all taken from `agent-quality-ab.ts`:
 
-| Property | Why |
-| --- | --- |
-| **Alternate which side runs first each trial** (`trialIndex % 2`) | Cancels ordering and warm-cache bias. A fixed order silently advantages one side, and with prompt caching in play the advantage is not small. |
-| **Record each side's identity in every artifact** — commit sha, resolved provider/model, and the model the response *echoed back* | "Which build produced this number" must be answerable a week later. The echo check is the one that matters: `eval_runs.jsonl` holds runs with `model: undefined`, and a gateway serving something other than what was asked is invisible without it. |
-| **Redact credential-shaped env values** before writing artifacts | We write reports under `~/.freecode/` and export to OTLP. The OTLP path is already committed to being leak-free; this is the same rule one layer out. |
-| **Classify each case as `improved` / `regressed` / `unchanged-pass` / `unchanged-fail` / `inconclusive`** | The fifth bucket is the honest verdict for a low-trial paired run. Refusing to emit it is how an A/B harness launders noise into a decision. |
+| Property                                                                                                                          | Why                                                                                                                                                                                                                                                  |
+| --------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Alternate which side runs first each trial** (`trialIndex % 2`)                                                                 | Cancels ordering and warm-cache bias. A fixed order silently advantages one side, and with prompt caching in play the advantage is not small.                                                                                                        |
+| **Record each side's identity in every artifact** — commit sha, resolved provider/model, and the model the response _echoed back_ | "Which build produced this number" must be answerable a week later. The echo check is the one that matters: `eval_runs.jsonl` holds runs with `model: undefined`, and a gateway serving something other than what was asked is invisible without it. |
+| **Redact credential-shaped env values** before writing artifacts                                                                  | We write reports under `~/.freecode/` and export to OTLP. The OTLP path is already committed to being leak-free; this is the same rule one layer out.                                                                                                |
+| **Classify each case as `improved` / `regressed` / `unchanged-pass` / `unchanged-fail` / `inconclusive`**                         | The fifth bucket is the honest verdict for a low-trial paired run. Refusing to emit it is how an A/B harness launders noise into a decision.                                                                                                         |
 
 ### What it is not
 
@@ -412,9 +412,9 @@ Not a gate, not CI-wired, not a baseline writer. It writes nothing to
 `eval_runs.jsonl`. It is an instrument you point at a prompt change; the gate
 remains majority-of-N against a sticky baseline, unchanged.
 
-`fx` labels its own version *"intentionally not a no-key CI gate: results are
+`fx` labels its own version _"intentionally not a no-key CI gate: results are
 noisy model-backed signals, reported as paired pass-rate deltas with raw artifacts
-for inspection."* That framing is correct and we adopt it verbatim in intent.
+for inspection."_ That framing is correct and we adopt it verbatim in intent.
 
 ### Smallest useful slice — built, and not where this section put it
 
@@ -422,7 +422,7 @@ Two of the three items in the table were **already dead** when Phase 2 started,
 and finding that out is most of what Phase 2 was:
 
 - **`model: undefined` in `eval_runs.jsonl`** — fixed by `fc4be56` before this
-  spec was written. `suite.ts` records the *resolved* model, and all 18 runs in
+  spec was written. `suite.ts` records the _resolved_ model, and all 18 runs in
   history carry one. The plan's observation was stale; so was this section's
   repetition of it.
 - **Env redaction** — nothing in the eval report or OTLP path writes an env var
@@ -438,21 +438,21 @@ from the providers, which is a different subsystem and a bigger change than
 Built as (all four adapters use the AI SDK, so the stream path is one change,
 not four):
 
-| Layer | Change |
-| --- | --- |
-| `providers/types.ts` | `ExecuteResult.echoedModel`; the `done` chunk carries it too, rather than a new chunk type every consumer must learn to ignore |
-| `providers/streaming.ts` | reads `finish-step`'s `response.modelId` — the only `fullStream` part that carries it; `finish` does not |
-| the four adapters | `result.response?.modelId` on the `execute()` path |
-| `rollout/types.ts`, `trace.ts` | `echoedModel` on `ModelResponseEvent` and `ModelSpan` |
-| `agent/loop.ts` | both `recordModelResponse` sites |
-| `eval/model-echo.ts` | `echoedModels()` fold + `echoDisagreements()`; surfaced on `TrialResult`, `SuiteReport`, and one CLI line |
+| Layer                          | Change                                                                                                                         |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| `providers/types.ts`           | `ExecuteResult.echoedModel`; the `done` chunk carries it too, rather than a new chunk type every consumer must learn to ignore |
+| `providers/streaming.ts`       | reads `finish-step`'s `response.modelId` — the only `fullStream` part that carries it; `finish` does not                       |
+| the four adapters              | `result.response?.modelId` on the `execute()` path                                                                             |
+| `rollout/types.ts`, `trace.ts` | `echoedModel` on `ModelResponseEvent` and `ModelSpan`                                                                          |
+| `agent/loop.ts`                | both `recordModelResponse` sites                                                                                               |
+| `eval/model-echo.ts`           | `echoedModels()` fold + `echoDisagreements()`; surfaced on `TrialResult`, `SuiteReport`, and one CLI line                      |
 
 **Reported, never gated on** — the same call `SuiteReport.judge` makes, and for a
 sharper reason than fx had. fx fails the trial on a mismatch because it routes
 through a gateway. We call providers directly, where the common case is an alias
 resolving to a dated snapshot (`claude-sonnet-4-6` → `claude-sonnet-4-6-2026…`),
 which is correct behaviour. `echoDisagreements` therefore treats an echo that
-*extends* the request, or drops our `provider/` routing prefix, as agreement, and
+_extends_ the request, or drops our `provider/` routing prefix, as agreement, and
 flags only an echo that is not the requested model at all. A provider that echoes
 nothing stays `undefined` rather than defaulting to the requested id — silence is
 not evidence of agreement.
@@ -475,7 +475,7 @@ Everything in §4 and §5 is auditable without a model. These go in
    the actual empty set. As written this assertion would have failed the moment
    it was added, and the pressure it creates is to delete the eight empty
    categories — which destroys the exact signal the closed set exists to give. A
-   golden list makes coverage *changes* fail review instead: adding the first
+   golden list makes coverage _changes_ fail review instead: adding the first
    case in a category breaks the test, and so does removing the last one.
 2. Every case has a non-empty `whyModelBacked`.
 3. `knownGap.notes !== knownGap.target` (§5).
@@ -486,7 +486,7 @@ Everything in §4 and §5 is auditable without a model. These go in
    checks within a file; harvesting into the wrong suite can currently produce a
    collision no loader sees.
 
-fx does the same thing — `agent-quality-matrix.test.ts` tests the *registry*, not
+fx does the same thing — `agent-quality-matrix.test.ts` tests the _registry_, not
 the agent, and is the cheapest test in its repo.
 
 ---
@@ -497,7 +497,7 @@ the agent, and is the cheapest test in its repo.
   and much larger than these four; it stays as plan §3 / Phase E with its open
   decision intact. Nothing here depends on it.
 - **fx's judge.** `eval-judge.ts` defaults the judge to the model under test
-  (`opts.judgeModel ?? EVAL_MODEL`), runs it *through the agent binary*, dumps up
+  (`opts.judgeModel ?? EVAL_MODEL`), runs it _through the agent binary_, dumps up
   to 150,000 chars of the work dir into the prompt, and grades 1–10 with pass ≥ 7.
   `judge-config.ts` throws on the first of those and eval spec §7 argues the last.
   The one idea worth lifting later is its **per-requirement decomposition**
@@ -516,13 +516,13 @@ the agent, and is the cheapest test in its repo.
 
 ## 9. Phasing
 
-| Phase | Deliverable | Blocks |
-| --- | --- | --- |
-| ~~**1**~~ | §3 — `expectFirstToolIn` + `expectBashMatches` in `scorers/trajectory.ts` and `dataset.ts`. **Done 2026-08-29.** No case was re-expressed; see §3 for why the "relax the needles" half of this phase turned out to rest on a false premise | — |
-| ~~**2**~~ | §6 smallest slice. **Done 2026-08-29**, but only one of its three items existed: the model-echo check, plumbed from the providers through the rollout log rather than bolted onto the report. The other two were already fixed or guarded nothing — see §6 | — |
-| ~~**3**~~ | §4 + §5 — `failureCategory`, `whyModelBacked`, `knownGap`; the §7 assertions; all 39 cases backfilled. **Done 2026-08-29.** Three categories were added to the closed set and §7's first assertion became a golden list; both are explained in place | — |
-| ~~**4**~~ | Cases for the eight empty categories. **Half done 2026-08-29**: recovery (2), large-output (2), frustration (2), stale-context (1) — 7 new cases, 39 → 46. The other four are not unwritten but UNREACHABLE; see §9.1 | — |
-| ~~**5**~~ | §6 in full — `freecode eval ab` with interleaving. **Done 2026-08-29.** In-process variants rather than git refs; see §6 for why | — |
+| Phase     | Deliverable                                                                                                                                                                                                                                                | Blocks |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| ~~**1**~~ | §3 — `expectFirstToolIn` + `expectBashMatches` in `scorers/trajectory.ts` and `dataset.ts`. **Done 2026-08-29.** No case was re-expressed; see §3 for why the "relax the needles" half of this phase turned out to rest on a false premise                 | —      |
+| ~~**2**~~ | §6 smallest slice. **Done 2026-08-29**, but only one of its three items existed: the model-echo check, plumbed from the providers through the rollout log rather than bolted onto the report. The other two were already fixed or guarded nothing — see §6 | —      |
+| ~~**3**~~ | §4 + §5 — `failureCategory`, `whyModelBacked`, `knownGap`; the §7 assertions; all 39 cases backfilled. **Done 2026-08-29.** Three categories were added to the closed set and §7's first assertion became a golden list; both are explained in place       | —      |
+| ~~**4**~~ | Cases for the eight empty categories. **Half done 2026-08-29**: recovery (2), large-output (2), frustration (2), stale-context (1) — 7 new cases, 39 → 46. The other four are not unwritten but UNREACHABLE; see §9.1                                      | —      |
+| ~~**5**~~ | §6 in full — `freecode eval ab` with interleaving. **Done 2026-08-29.** In-process variants rather than git refs; see §6 for why                                                                                                                           | —      |
 
 ### 9.1 The four categories the harness cannot express
 
@@ -532,12 +532,12 @@ something that does not exist, and writing a case for them today would produce a
 case that fails for infrastructure reasons and reads as an agent failure — the
 most expensive kind of wrong answer this harness can give.
 
-| Category | What it needs first |
-| --- | --- |
-| ~~`compaction-boundary`~~ | **Built 2026-09-08.** Needed `env` *and* `followUps` — see the note below; "a turn long enough to compact" was the wrong diagnosis, since length is not what gates it. |
-| `memory-recall` | A seeded memory dir. `files` paths are sandbox-relative and `assertSafeRelativePath` refuses to escape, which is correct — so a fixture cannot reach `~/.freecode`. |
-| `resume` | A prior session to resume from. One `runEffect` per trial means there is no earlier turn. |
-| `mcp-failure` | A fixture MCP server. `initRunner` calls `initMcpServers()` against the user's real config, so the suite is not hermetic here and could not be made to fail on purpose. |
+| Category                  | What it needs first                                                                                                                                                     |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ~~`compaction-boundary`~~ | **Built 2026-09-08.** Needed `env` _and_ `followUps` — see the note below; "a turn long enough to compact" was the wrong diagnosis, since length is not what gates it.  |
+| `memory-recall`           | A seeded memory dir. `files` paths are sandbox-relative and `assertSafeRelativePath` refuses to escape, which is correct — so a fixture cannot reach `~/.freecode`.     |
+| `resume`                  | A prior session to resume from. One `runEffect` per trial means there is no earlier turn.                                                                               |
+| `mcp-failure`             | A fixture MCP server. `initRunner` calls `initMcpServers()` against the user's real config, so the suite is not hermetic here and could not be made to fail on purpose. |
 
 They stay in `CATEGORIES_WITHOUT_CASES` with that reason recorded next to them.
 `resume` is now the cheapest unlock and most of it already exists: `followUps`
@@ -550,10 +550,10 @@ specified before it is built.
 **`compaction-boundary` is built (2026-09-08). The route below was half right,
 and the half it got wrong is the interesting part.**
 
-The original note said: compacting is an *accident*, an accident cannot carry a
+The original note said: compacting is an _accident_, an accident cannot carry a
 p ≥ 0.99 case, but the threshold is already a knob (`getCompactTarget()` reads
 `FREECODE_COMPACT_TARGET_TOKENS`, `getAutoCompactOverride()` reads
-`FREECODE_AUTO_COMPACT_TOKENS`), so lowering it makes compaction the *point* of
+`FREECODE_AUTO_COMPACT_TOKENS`), so lowering it makes compaction the _point_ of
 the case rather than an accident.
 
 The knob is real and is now exposed as a per-case `env`, allowlisted to those
@@ -562,7 +562,7 @@ two keys (`EVAL_ENV_ALLOWLIST` in `dataset.ts`) and scoped to the trial by
 being measured, which would quietly stop the suite being evidence.
 
 **But the knob alone cannot reach the path, and two calibration runs proved
-it.** `shouldCompact` only decides *when the check fires*.
+it.** `shouldCompact` only decides _when the check fires_.
 `selectForCompaction` then returns `summarize: []` while
 `countUserTurns <= config.preserveRecentTurns` (2) — and the only thing that
 creates a user turn is the prompt itself (`loop.ts` calls
@@ -572,7 +572,7 @@ so **a single-prompt case cannot compact at any token count.** Lowering the
 threshold on such a case just fires a check that finds nothing to do.
 
 > **Superseded 2026-09-16.** `selectForCompaction` now falls back to preserving
-> the last `preserveRecentTurns` *messages* when there are fewer user turns
+> the last `preserveRecentTurns` _messages_ when there are fewer user turns
 > than that, so a single-prompt run compacts like any other. Found via
 > `/bench`: every headless bench trial averaged ~200K input/turn at a 99%
 > cache-hit rate — context size, not cache misses. `followUps` stays useful
@@ -589,15 +589,17 @@ minimax/MiniMax-M3:
 - **The transcript does not grow the way you would expect.** History pruning
   caps tool results in old turns, so a six-file read-and-edit task settles
   near 19K measured input tokens instead of climbing. Sizing a fixture up made
-  the peak go *down*. A `compaction-boundary` case wants more user turns, not
+  the peak go _down_. A `compaction-boundary` case wants more user turns, not
   bigger files.
 - **The trigger and the thing compacted are measured on different scales.**
   `shouldCompact` judges the provider's measured input (16K on the shipped
   case); `selectForCompaction` works over `MemoryService`'s estimated
-  transcript (872 tokens). `compact.occurred` records the latter, so both
-  `freecode trace` and `Trace.compactedTokens` understate compaction heavily.
-  Recorded in `TODO.md`; it does not affect the case, which asserts that a
-  compaction happened and that the task still finished.
+  transcript (872 tokens). `compact.occurred` now records both scales under
+  explicit names plus the exact message boundary. `Trace.compactedTokens`
+  remains a deprecated compatibility alias for
+  `compactedEstimatedTranscriptTokens`, the difference between comparable
+  transcript estimates; neither claims the measured request shrank by that
+  amount.
 
 The shipped case asserts both halves: `expectCompaction: 1` and a `verify` that
 only passes if ground rules stated in the FIRST prompt — do not modify

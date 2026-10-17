@@ -66,6 +66,7 @@ const trace = (over: Partial<Trace> = {}): Trace => ({
   auxiliarySpans: [],
   toolSpans: [],
   deniedSpans: [],
+  compactionSpans: [],
   model_ms: 500,
   memory_ms: 0,
   tool_ms: 0,
@@ -79,6 +80,9 @@ const trace = (over: Partial<Trace> = {}): Trace => ({
   inFlight: false,
   redirects: 0,
   redirectsSkipped: 0,
+  compactions: 0,
+  compactedEstimatedTranscriptTokens: 0,
+  compactedTokens: 0,
   ...over,
 });
 
@@ -232,4 +236,47 @@ test("denied spans do not collide with tool span ids", () => {
   ) as unknown as Array<{ spanId: string }>;
   const ids = spans.map((s) => s.spanId);
   assert.equal(new Set(ids).size, ids.length, "every span id is distinct");
+});
+
+test("compaction boundaries export distinct token scales, counts, and ids", () => {
+  const spans = spansOf(
+    trace({
+      compactions: 1,
+      compactedEstimatedTranscriptTokens: 9_000,
+      compactedTokens: 9_000,
+      compactionSpans: [
+        {
+          at: 1500,
+          estimatedTranscriptTokensBefore: 12_000,
+          estimatedTranscriptTokensAfter: 3_000,
+          providerRequestTokensBefore: 98_000,
+          messagesBefore: 14,
+          messagesAfter: 4,
+          compactedMessageIds: ["m1", "m2"],
+          preservedMessageIds: ["m3", "m4"],
+        },
+      ],
+    }),
+  );
+  const root = spans[0]!;
+  const compact = spans.find((span) => span.name === "compact transcript")!;
+
+  assert.deepEqual(attr(root, "freecode.compactions"), { intValue: "1" });
+  assert.deepEqual(attr(root, "freecode.compacted_estimated_tokens"), {
+    intValue: "9000",
+  });
+  assert.deepEqual(
+    attr(compact, "freecode.compaction.estimated_transcript_tokens_before"),
+    { intValue: "12000" },
+  );
+  assert.deepEqual(
+    attr(compact, "freecode.compaction.provider_request_tokens_before"),
+    { intValue: "98000" },
+  );
+  assert.deepEqual(attr(compact, "freecode.compaction.compacted_message_ids"), {
+    stringValue: "m1,m2",
+  });
+  assert.deepEqual(attr(compact, "freecode.compaction.preserved_message_ids"), {
+    stringValue: "m3,m4",
+  });
 });

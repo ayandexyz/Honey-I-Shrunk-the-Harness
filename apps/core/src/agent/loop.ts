@@ -1753,6 +1753,13 @@ export class AgentLoop {
       trigger,
     });
     const compactOptions = this.compactOptions(provider, model);
+    // This is the provider's inclusive input-token count for the last request.
+    // It is a different scale from MemoryService's transcript estimate and is
+    // therefore recorded separately rather than substituted for tokensBefore.
+    const providerRequestTokensBefore =
+      this.lastMeasuredContextTokens > 0
+        ? this.lastMeasuredContextTokens
+        : undefined;
 
     let outcome: ApplyCompactionResult;
     if (this.sessionStore) {
@@ -1775,10 +1782,20 @@ export class AgentLoop {
       // No store (e.g. tests): memory-only compaction, slice native history.
       const result = await this.memory.compact(compactOptions);
       const compacted = result.success && !!result.summary;
+      const messagesBefore = this.history;
+      const preserveCount = result.preservedMessageIds.length;
+      const preservedMessages = compacted
+        ? preserveCount > 0
+          ? messagesBefore.slice(-preserveCount)
+          : []
+        : messagesBefore;
       if (compacted) {
-        this.history = this.history.slice(-result.preservedMessageIds.length);
+        this.history = preservedMessages;
         markAllReadsCompacted(this.state.sessionId);
       }
+      const preservedIds = new Set(
+        preservedMessages.map((message) => message.id),
+      );
       outcome = {
         compacted,
         // Same vocabulary as applyCompaction: a success with no summary means
@@ -1792,8 +1809,14 @@ export class AgentLoop {
             : (result.reason ?? "blocked by a PreCompact hook"),
         tokensBefore: result.tokenCountBefore,
         tokensAfter: result.tokenCountAfter,
-        messagesBefore: 0,
-        messagesAfter: 0,
+        messagesBefore: messagesBefore.length,
+        messagesAfter: preservedMessages.length,
+        compactedMessageIds: compacted
+          ? messagesBefore
+              .filter((message) => !preservedIds.has(message.id))
+              .map((message) => message.id)
+          : [],
+        preservedMessageIds: preservedMessages.map((message) => message.id),
       };
     }
 
@@ -1807,10 +1830,15 @@ export class AgentLoop {
         `${trigger} compaction: ${outcome.tokensBefore} → ${outcome.tokensAfter} tokens`,
       );
       bumpCacheGeneration(this.state.sessionId);
-      this.recorder.recordCompactOccurred(
-        outcome.tokensBefore,
-        outcome.tokensAfter,
-      );
+      this.recorder.recordCompactOccurred({
+        estimatedTranscriptTokensBefore: outcome.tokensBefore,
+        estimatedTranscriptTokensAfter: outcome.tokensAfter,
+        providerRequestTokensBefore,
+        messagesBefore: outcome.messagesBefore,
+        messagesAfter: outcome.messagesAfter,
+        compactedMessageIds: outcome.compactedMessageIds,
+        preservedMessageIds: outcome.preservedMessageIds,
+      });
       this.restoreRecentFiles();
     } else if (outcome.reason === "nothing to compact") {
       // Routine: the threshold check is a prediction and often fires with

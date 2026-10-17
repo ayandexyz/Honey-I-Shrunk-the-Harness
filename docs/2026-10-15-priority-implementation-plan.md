@@ -2,8 +2,8 @@
 
 > **Status:** Proposed
 > **Date:** 2026-10-15
-> **Scope:** Runtime integrity, memory fidelity, subagent permission
-> scoping, performance and cost measurement, and instruction hierarchy.
+> **Scope:** Memory fidelity, subagent permission scoping, performance and cost
+> measurement, and instruction hierarchy.
 > **Explicitly excluded:** Web/Tauri incremental response rendering.
 
 ## 1. Objective
@@ -21,13 +21,12 @@ the next extensibility feature after those foundations are trustworthy.
 
 | Order | Workstream                            | Why it is here                                                                                                         |
 | ----- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| 1     | Close runtime integrity gaps          | Compaction trace fidelity affects correctness and trust.                                                               |
-| 2     | Build measurement foundations         | Performance and cost changes cannot be evaluated credibly without complete accounting and repeatable fixtures.         |
-| 3     | Diagnose and prevent memory fact loss | Existing long-horizon evidence shows missing and lost facts; new memory features should not be layered on top of that. |
-| 4     | Scope writable subagents              | Read-only subagents are confined, but writable subagents lack path and network boundaries.                             |
-| 5     | Add an instruction hierarchy          | This is the roadmap's highest-value remaining extensibility item and benefits from the measurement foundation.         |
+| 1     | Build measurement foundations         | Performance and cost changes cannot be evaluated credibly without complete accounting and repeatable fixtures.         |
+| 2     | Diagnose and prevent memory fact loss | Existing long-horizon evidence shows missing and lost facts; new memory features should not be layered on top of that. |
+| 3     | Scope writable subagents              | Read-only subagents are confined, but writable subagents lack path and network boundaries.                             |
+| 4     | Add an instruction hierarchy          | This is the roadmap's highest-value remaining extensibility item and benefits from the measurement foundation.         |
 
-Workstream 2 should begin before any optimization experiment. Workstreams 3–5
+Workstream 1 should begin before any optimization experiment. Workstreams 2–4
 each require their own design or spec amendment and should not be combined into
 one implementation PR.
 
@@ -50,39 +49,12 @@ one implementation PR.
 - Rollout and OTLP events remain body- and path-free. Better observability means
   safe counts, identifiers, and attribution, not logging user content.
 
-## 4. Workstream 1 — runtime integrity
-
-This item can make a successful-looking run less trustworthy than it appears.
-
-### 4.1 Make compaction traces describe the real transition
-
-`compact.occurred` still carries only estimated `beforeTokens` and
-`afterTokens`. The apply path already knows message counts and compacted message
-IDs, but the event cannot show how many messages left the active view or explain
-long-session drift. Existing measurements found the token magnitude could be
-wrong by an order of magnitude.
-
-Implementation requirements:
-
-- Record estimated transcript tokens and measured provider-request tokens as
-  different fields; never compare unlike quantities under one name.
-- Record counts and body-free entry IDs for compacted and preserved messages so
-  a trace can identify the boundary without exposing content.
-- Carry `messagesBefore` and `messagesAfter` from the apply result.
-- Update the trace fold, JSON output, OTLP attributes, and eval scorers together.
-- Preserve backwards compatibility for older rollout logs.
-
-### Acceptance gate
-
-- Compaction traces expose comparable token measures and the body-free message
-  transition.
-
-## 5. Workstream 2 — measurement foundations
+## 4. Workstream 1 — measurement foundations
 
 This workstream blocks claims that an optimization is faster or cheaper. It
 does not block independent correctness fixes.
 
-### 5.1 Local performance harness
+### 4.1 Local performance harness
 
 Build deterministic, network-free fixtures for:
 
@@ -97,7 +69,7 @@ Report p50, p75, and p95 plus work counts such as bytes parsed, entries
 converted, Markdown parses, renders, and files statted. Separate backend time,
 frontend rendering, and provider time so one cannot be mistaken for another.
 
-### 5.2 Complete cost accounting
+### 4.2 Complete cost accounting
 
 Define one ledger entry per provider attempt, linked to:
 
@@ -117,7 +89,7 @@ Acceptance requires a synthetic task containing a main turn, child agent,
 compaction, memory operation, and cache refresh to reconcile with a known call
 ledger.
 
-### 5.3 Experiment ledger
+### 4.3 Experiment ledger
 
 Add an append-only record for each performance or cost experiment with:
 
@@ -130,14 +102,14 @@ Add an append-only record for each performance or cost experiment with:
 Reuse the existing eval experiment format where it fits instead of inventing a
 second incompatible result model.
 
-### 5.4 Re-establish the long-task baseline
+### 4.4 Re-establish the long-task baseline
 
 Rebuild the benchmark image containing `rg`, rerun the nine long-task trials,
 and rejudge them with the documented judge configuration. Treat the earlier v2
 numbers as historical evidence, not a valid comparison baseline, because all 88
 of their `grep` calls failed.
 
-### 5.5 Measurement-gated optimization queue
+### 4.5 Measurement-gated optimization queue
 
 Do not implement every candidate at once. Use the harness to admit one change at
 a time:
@@ -179,7 +151,7 @@ metric, correctness result, memory tradeoff, and full task-cost result.
 - The long-task baseline uses a functioning tool image and records its exact
   commit, model, and judge.
 
-## 6. Workstream 3 — memory fidelity before memory expansion
+## 5. Workstream 2 — memory fidelity before memory expansion
 
 ### Current evidence
 
@@ -249,7 +221,7 @@ The first task is diagnosis, not prompt tuning.
 - Recall quality does not regress and injected bytes remain within the existing
   budget.
 
-## 7. Workstream 4 — scoped permissions for writable subagents
+## 6. Workstream 3 — scoped permissions for writable subagents
 
 ### Current state
 
@@ -297,7 +269,7 @@ provide the authoritative operation and target.
 - Read-only defaults and existing definition tool allowlists remain compatible.
 - Unknown dynamic tools fail closed with an actionable denial reason.
 
-## 8. Workstream 5 — instruction hierarchy
+## 7. Workstream 4 — instruction hierarchy
 
 ### Current state
 
@@ -352,29 +324,27 @@ Before implementation, settle:
 - Existing root-only projects see no semantic change unless they opt into new
   files or features.
 
-## 9. Delivery slices
+## 8. Delivery slices
 
 Keep review and rollback simple:
 
-1. **PR A:** Compaction trace fidelity.
-2. **PR B:** Local performance harness and baseline report format.
-3. **PR C:** Complete cost ledger and task-tree aggregation.
-4. **PR D:** Rebuilt long-task baseline and recorded results; no behavioral
+1. **PR A:** Local performance harness and baseline report format.
+2. **PR B:** Complete cost ledger and task-tree aggregation.
+3. **PR C:** Rebuilt long-task baseline and recorded results; no behavioral
    change.
-5. **PR E:** Memory failure instrumentation and deterministic reproductions.
-6. **PR F:** Memory extraction/consolidation safeguards, gated by memory
+4. **PR D:** Memory failure instrumentation and deterministic reproductions.
+5. **PR E:** Memory extraction/consolidation safeguards, gated by memory
    benchmarks.
-7. **PR G:** Subagent capability-envelope spec and implementation.
-8. **PR H:** Instruction hierarchy in separately gated phases.
+6. **PR F:** Subagent capability-envelope spec and implementation.
+7. **PR G:** Instruction hierarchy in separately gated phases.
 
 Do not combine the memory, permissions, and instruction changes. Each changes
 what the model sees or what tools can do and therefore needs isolated evidence.
 
-## 10. Definition of done
+## 9. Definition of done
 
 This plan is complete when:
 
-- compaction traces satisfy Workstream 1's integrity gates;
 - local performance and complete task-cost baselines are reproducible;
 - the repaired long-task benchmark has replaced the broken-tool baseline;
 - memory merges cannot silently discard taught facts;
@@ -385,7 +355,7 @@ This plan is complete when:
 - every behavioral default change has the tests and eval evidence required by
   its governing spec.
 
-## 11. References
+## 10. References
 
 - `docs/specs/2026-05-25-architecture-v4.md`
 - `docs/specs/2026-07-18-permission-rules.md`

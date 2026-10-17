@@ -113,7 +113,13 @@ export interface FunctionOutputEvent extends BaseEvent {
 
 /** Which gate refused the call. Kept distinct so "the mode forbids this" and
  *  "the user said no" do not read as the same event. */
-export type DenySource = "hook" | "mode" | "rule" | "permission-hook" | "user" | "role";
+export type DenySource =
+  | "hook"
+  | "mode"
+  | "rule"
+  | "permission-hook"
+  | "user"
+  | "role";
 
 /**
  * A tool call the model made that never ran.
@@ -141,8 +147,22 @@ export interface FunctionDeniedEvent extends BaseEvent {
 
 export interface CompactOccurredEvent extends BaseEvent {
   type: "compact.occurred";
-  beforeTokens: number;
-  afterTokens: number;
+  /** @deprecated Legacy local transcript estimate. */
+  beforeTokens?: number;
+  /** @deprecated Legacy local transcript estimate. */
+  afterTokens?: number;
+  /** Local MemoryService transcript estimate before compaction. */
+  estimatedTranscriptTokensBefore?: number;
+  /** Local MemoryService transcript estimate after compaction. */
+  estimatedTranscriptTokensAfter?: number;
+  /** Inclusive input-token count reported for the last provider request. */
+  providerRequestTokensBefore?: number;
+  messagesBefore?: number;
+  messagesAfter?: number;
+  /** Body-free session-store entry ids removed from the active transcript. */
+  compactedMessageIds?: string[];
+  /** Body-free session-store entry ids retained in the active transcript. */
+  preservedMessageIds?: string[];
 }
 
 /**
@@ -331,7 +351,13 @@ export interface MemoryExposureEvent extends BaseEvent {
    * `unjudged`: retrieval's candidates, sent before the judge's verdict landed
    * (cold path only). `disabled`: automatic recall is off for this request.
    */
-  preparation: "fresh" | "carried" | "pending" | "empty" | "unjudged" | "disabled";
+  preparation:
+    | "fresh"
+    | "carried"
+    | "pending"
+    | "empty"
+    | "unjudged"
+    | "disabled";
   judgeDecision:
     | "judge_ran"
     | "disabled"

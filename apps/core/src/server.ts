@@ -566,9 +566,16 @@ async function navigateSession(
 }
 
 /** Persist a `!cmd` result where the next turn's loop will load it. */
-async function recordUserBash(session: SessionInfo, text: string): Promise<void> {
+async function recordUserBash(
+  session: SessionInfo,
+  text: string,
+): Promise<void> {
   const store = await getSessionStore();
-  await store.appendMessage(session.id, userBashMessage(text), session.projectPath);
+  await store.appendMessage(
+    session.id,
+    userBashMessage(text),
+    session.projectPath,
+  );
   // The compaction transcript must carry it too, or a summary forgets it.
   new MemoryService(session.id).addMessage("user", text);
 }
@@ -706,7 +713,11 @@ export const methodHandlers: Record<
   // nothing. A result arriving mid-turn is held until the turn ends.
   "session.bash": async (
     params: Record<string, unknown>,
-  ): Promise<{ output: string; exitCode: number | null; deferred: boolean }> => {
+  ): Promise<{
+    output: string;
+    exitCode: number | null;
+    deferred: boolean;
+  }> => {
     const { sessionId, command, exclude } = params as {
       sessionId: string;
       command: string;
@@ -975,6 +986,16 @@ export const methodHandlers: Record<
       projectPath: session.projectPath,
       compactOptions,
     });
+    if (outcome.compacted) {
+      createRecorder(sessionId).recordCompactOccurred({
+        estimatedTranscriptTokensBefore: outcome.tokensBefore,
+        estimatedTranscriptTokensAfter: outcome.tokensAfter,
+        messagesBefore: outcome.messagesBefore,
+        messagesAfter: outcome.messagesAfter,
+        compactedMessageIds: outcome.compactedMessageIds,
+        preservedMessageIds: outcome.preservedMessageIds,
+      });
+    }
     BusEvents.stream(sessionId, {
       type: "compaction_complete",
       trigger: "manual",
@@ -1243,12 +1264,13 @@ export const methodHandlers: Record<
 
   "night.report": async (params: Record<string, unknown>): Promise<unknown> => {
     const { runId } = params as { runId?: string };
-    const { findNightRun, regenerateReport } = await import(
-      "./autonomous/night-ops.js"
-    );
+    const { findNightRun, regenerateReport } =
+      await import("./autonomous/night-ops.js");
     const run = findNightRun(runId);
     if (!run?.night) {
-      throw new Error(runId ? `No night run matching "${runId}"` : "No night runs yet");
+      throw new Error(
+        runId ? `No night run matching "${runId}"` : "No night runs yet",
+      );
     }
     // Regenerated from the logs, so a crashed run has one too.
     return { runId: run.runId, markdown: await regenerateReport(run) };
@@ -1256,9 +1278,8 @@ export const methodHandlers: Record<
 
   "night.stop": async (params: Record<string, unknown>): Promise<unknown> => {
     const { runId } = params as { runId: string };
-    const { findNightRun, requestStop } = await import(
-      "./autonomous/night-ops.js"
-    );
+    const { findNightRun, requestStop } =
+      await import("./autonomous/night-ops.js");
     const run = findNightRun(runId);
     if (!run?.night) throw new Error(`No night run matching "${runId}"`);
     return { stopped: requestStop(run) };
@@ -1481,7 +1502,9 @@ export const methodHandlers: Record<
 
   // The /settings panel. Every reader re-reads settings.json at least once per
   // run, so a change applies from the next turn without a restart.
-  "settings.list": async (params: Record<string, unknown>): Promise<unknown> => {
+  "settings.list": async (
+    params: Record<string, unknown>,
+  ): Promise<unknown> => {
     const { cwd } = params as { cwd: string };
     return listSettings(cwd || process.cwd());
   },

@@ -130,6 +130,26 @@ export function renderTrace(trace: Trace, opts: RenderOptions = {}): string {
       ],
     });
   }
+  for (const span of trace.compactionSpans ?? []) {
+    const facts = [
+      span.estimatedTranscriptTokensBefore !== undefined &&
+      span.estimatedTranscriptTokensAfter !== undefined
+        ? `estimated transcript ${count(span.estimatedTranscriptTokensBefore)}→${count(span.estimatedTranscriptTokensAfter)}`
+        : "estimated transcript unavailable",
+      span.providerRequestTokensBefore !== undefined
+        ? `provider request before=${count(span.providerRequestTokensBefore)}`
+        : "",
+      span.messagesBefore !== undefined && span.messagesAfter !== undefined
+        ? `messages ${span.messagesBefore}→${span.messagesAfter}`
+        : "",
+    ].filter(Boolean);
+    rows.push({
+      at: span.at,
+      lines: [
+        `${dim(clock(span.at))} ${dim("      —")} ${cyan("compact")} ${dim(facts.join("  "))}`,
+      ],
+    });
+  }
   if (opts.showTools && threshold === 0) {
     for (const span of trace.toolSpans) {
       rows.push({
@@ -225,11 +245,15 @@ export function renderTrace(trace: Trace, opts: RenderOptions = {}): string {
     const parts = Object.entries(traceCostByOperation(trace)).map(
       ([op, c]) => `${op}=${c ? formatUsd(c) : "unpriced"}`,
     );
-    const noUsage = trace.auxiliarySpans.filter(auxiliaryUsageUnavailable).length;
+    const noUsage = trace.auxiliarySpans.filter(
+      auxiliaryUsageUnavailable,
+    ).length;
     out.push(
       dim(
         `  by op   ${parts.join(" ")}` +
-          (noUsage > 0 ? ` ${yellow(`(${noUsage} memory call(s) reported no usage)`)}` : ""),
+          (noUsage > 0
+            ? ` ${yellow(`(${noUsage} memory call(s) reported no usage)`)}`
+            : ""),
       ),
     );
   }
@@ -239,6 +263,15 @@ export function renderTrace(trace: Trace, opts: RenderOptions = {}): string {
     out.push(
       dim(
         `  redirect  fired=${trace.redirects} skipped=${trace.redirectsSkipped}`,
+      ),
+    );
+  }
+  if (trace.compactions > 0) {
+    const estimatedRemoved =
+      trace.compactedEstimatedTranscriptTokens ?? trace.compactedTokens;
+    out.push(
+      dim(
+        `  compact  ${trace.compactions} run(s), ~${count(estimatedRemoved)} estimated transcript tokens removed`,
       ),
     );
   }

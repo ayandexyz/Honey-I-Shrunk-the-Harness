@@ -277,11 +277,18 @@ export class RolloutRecorder {
   // ===========================================================================
   // PUBLIC: recordCompactOccurred()
   // ===========================================================================
-  recordCompactOccurred(beforeTokens: number, afterTokens: number): void {
+  recordCompactOccurred(details: {
+    estimatedTranscriptTokensBefore: number;
+    estimatedTranscriptTokensAfter: number;
+    providerRequestTokensBefore?: number;
+    messagesBefore: number;
+    messagesAfter: number;
+    compactedMessageIds: string[];
+    preservedMessageIds: string[];
+  }): void {
     const event = this.makeEvent("compact.occurred", {
       aggregateID: this.sessionId,
-      beforeTokens,
-      afterTokens,
+      fields: details,
     });
     this.write(event);
   }
@@ -635,19 +642,49 @@ export class RolloutRecorder {
     );
   }
 
-  recordVerifyRan(kind: "typecheck" | "tests", ok: boolean, ms: number, failing: number, script?: string): void {
-    this.write(this.makeEvent("verify.ran", { aggregateID: this.sessionId, fields: { kind, ok, ms, failing, script } }));
+  recordVerifyRan(
+    kind: "typecheck" | "tests",
+    ok: boolean,
+    ms: number,
+    failing: number,
+    script?: string,
+  ): void {
+    this.write(
+      this.makeEvent("verify.ran", {
+        aggregateID: this.sessionId,
+        fields: { kind, ok, ms, failing, script },
+      }),
+    );
   }
 
-  recordDiagnosticsDelivered(files: number, errors: number, waitedMs: number): void {
-    this.write(this.makeEvent("diagnostics.delivered", { aggregateID: this.sessionId, fields: { files, errors, waitedMs } }));
+  recordDiagnosticsDelivered(
+    files: number,
+    errors: number,
+    waitedMs: number,
+  ): void {
+    this.write(
+      this.makeEvent("diagnostics.delivered", {
+        aggregateID: this.sessionId,
+        fields: { files, errors, waitedMs },
+      }),
+    );
   }
 
   recordUnwiredFlagged(count: number): void {
-    this.write(this.makeEvent("unwired.flagged", { aggregateID: this.sessionId, fields: { count } }));
+    this.write(
+      this.makeEvent("unwired.flagged", {
+        aggregateID: this.sessionId,
+        fields: { count },
+      }),
+    );
   }
 
-  recordLoopWarned(turnId: string, reason: string, count: number, reminded: boolean): void {
+  recordLoopWarned(
+    turnId: string,
+    reason: string,
+    count: number,
+    reminded: boolean,
+  ): void {
     this.write(
       this.makeEvent("loop.warned", {
         aggregateID: this.sessionId,

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RolloutRecorder } from "./recorder.js";
 import type {
+  CompactOccurredEvent,
   FunctionDeniedEvent,
   FunctionOutputEvent,
   RolloutEvent,
@@ -95,6 +96,36 @@ test("model events round-trip every field through the JSONL log", () => {
     assert.deepEqual(response.toolCalls, ["bash", "read"]);
     // Sequence numbers keep the three lines orderable after the fact.
     assert.deepEqual([request.seq, firstToken.seq, response.seq], [1, 2, 3]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("compaction records distinct token scales and the body-free boundary", () => {
+  const dir = mkdtempSync(join(tmpdir(), "freecode-rollout-"));
+  try {
+    const recorder = new RolloutRecorder("s1", { rolloutDir: dir });
+    recorder.recordCompactOccurred({
+      estimatedTranscriptTokensBefore: 12_000,
+      estimatedTranscriptTokensAfter: 3_000,
+      providerRequestTokensBefore: 98_000,
+      messagesBefore: 14,
+      messagesAfter: 4,
+      compactedMessageIds: ["m1", "m2"],
+      preservedMessageIds: ["m3", "m4"],
+    });
+
+    const [event] = readEvents(dir) as CompactOccurredEvent[];
+    assert.equal(event.type, "compact.occurred");
+    assert.equal(event.estimatedTranscriptTokensBefore, 12_000);
+    assert.equal(event.estimatedTranscriptTokensAfter, 3_000);
+    assert.equal(event.providerRequestTokensBefore, 98_000);
+    assert.equal(event.messagesBefore, 14);
+    assert.equal(event.messagesAfter, 4);
+    assert.deepEqual(event.compactedMessageIds, ["m1", "m2"]);
+    assert.deepEqual(event.preservedMessageIds, ["m3", "m4"]);
+    assert.equal(event.beforeTokens, undefined);
+    assert.equal(event.afterTokens, undefined);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -207,9 +238,15 @@ test("verify.ran and unwired.flagged carry counts only", () => {
     const recorder = new RolloutRecorder("s1", { rolloutDir: dir });
     recorder.recordVerifyRan("tests", false, 1234, 2);
     recorder.recordUnwiredFlagged(3);
-    const [ran, flagged] = readEvents(dir) as unknown as Record<string, unknown>[];
+    const [ran, flagged] = readEvents(dir) as unknown as Record<
+      string,
+      unknown
+    >[];
     assert.equal(ran.type, "verify.ran");
-    assert.deepEqual([ran.kind, ran.ok, ran.ms, ran.failing], ["tests", false, 1234, 2]);
+    assert.deepEqual(
+      [ran.kind, ran.ok, ran.ms, ran.failing],
+      ["tests", false, 1234, 2],
+    );
     assert.equal(flagged.type, "unwired.flagged");
     assert.equal(flagged.count, 3);
   } finally {
