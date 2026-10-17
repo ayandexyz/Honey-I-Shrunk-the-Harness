@@ -61,7 +61,7 @@ Deliberately **not** in this slice: showing the envelope in `freecode agents lis
 - Produces: `export type FrontmatterValue = string | string[] | Record<string, string | string[]>`
 - Produces: `parseFrontmatter(text: string): { fields: Record<string, FrontmatterValue>; body: string } | null` (signature unchanged, value type widened)
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `apps/core/src/agent/definitions/definitions.test.ts`:
 
@@ -101,12 +101,12 @@ test("frontmatter: an inline list splits on commas, so a glob containing one nee
 });
 ```
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `cd apps/core && FREECODE_EDIT_DIAGNOSTICS=0 npx tsx --test src/agent/definitions/definitions.test.ts`
 Expected: FAIL on the three map cases — an indented `key: value` line matches nothing today, so `envelope` comes back as `[]` instead of a map. The other two (list stays a list, comma split) are regression guards and already pass.
 
-- [ ] **Step 3: Rewrite the parser loop**
+- [x] **Step 3: Rewrite the parser loop**
 
 In `parseFrontmatter`, keep the existing `FRONTMATTER` split, comment stripping and `unquote`, and replace the body loop with two pieces of state — the open top-level key and, inside it, the open child key — and this decision table:
 
@@ -137,17 +137,17 @@ function asList(v: FrontmatterValue | undefined): string[] | undefined {
 
 `asString`'s body already returns `undefined` for a non-string, so widening its parameter is the whole change there. Let the type errors on `v.split` drive this rather than casting them away.
 
-- [ ] **Step 4: Run them to verify they pass**
+- [x] **Step 4: Run them to verify they pass**
 
 Run: `cd apps/core && FREECODE_EDIT_DIAGNOSTICS=0 npx tsx --test src/agent/definitions/definitions.test.ts`
 Expected: PASS, including the file's existing frontmatter and roster tests.
 
-- [ ] **Step 5: Typecheck**
+- [x] **Step 5: Typecheck**
 
 Run: `cd apps/core && npx tsc --noEmit`
 Expected: no errors.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add apps/core/src/agent/definitions/loader.ts apps/core/src/agent/definitions/definitions.test.ts
@@ -182,7 +182,7 @@ git commit -m "feat(agents): read one level of nesting in agent definition front
 - Produces: `AgentDefinition.envelope?: AgentEnvelope`
 - Produces: `parseEnvelope(value: FrontmatterValue, knownTools: ReadonlySet<string>): AgentEnvelope | { error: string }`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `apps/core/src/agent/definitions/envelope.test.ts`:
 
@@ -288,12 +288,12 @@ test("envelope: a definition that declares one keeps it", () => {
 });
 ```
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `cd apps/core && FREECODE_EDIT_DIAGNOSTICS=0 npx tsx --test src/agent/definitions/envelope.test.ts`
 Expected: FAIL — `./envelope.js` does not exist.
 
-- [ ] **Step 3: Add the runtime operation list**
+- [x] **Step 3: Add the runtime operation list**
 
 In `apps/core/src/tools/tool.types.ts`, replace the hand-written union with a list and derive the type from it, so validation and the type cannot drift:
 
@@ -312,11 +312,11 @@ export const PERMISSION_OPERATIONS = [
 export type PermissionOperation = (typeof PERMISSION_OPERATIONS)[number];
 ```
 
-- [ ] **Step 4: Add the type**
+- [x] **Step 4: Add the type**
 
 In `apps/core/src/agent/definitions/types.ts`, add `AgentEnvelope` (above) importing `PermissionOperation` from `../../tools/tool.types.js`, and `envelope?: AgentEnvelope` on `AgentDefinition` with a comment pointing at the spec (§5.3: closed — what it does not name is denied).
 
-- [ ] **Step 5: Write `parseEnvelope`**
+- [x] **Step 5: Write `parseEnvelope`**
 
 Create `apps/core/src/agent/definitions/envelope.ts` with the header comment style of its neighbours and this order of checks, first failure winning:
 
@@ -331,7 +331,7 @@ Create `apps/core/src/agent/definitions/envelope.ts` with the header comment sty
 
 Return the assembled object with only the keys the definition actually declared. Note in a comment why step 8 defers MCP existence: the registry is empty at load time.
 
-- [ ] **Step 6: Call it from `parseAgentFile`**
+- [x] **Step 6: Call it from `parseAgentFile`**
 
 After the `mode` block, before the return:
 
@@ -350,17 +350,17 @@ if (rawEnvelope !== undefined) {
 
 Import `AgentEnvelope` from `./types.js`, add `envelope` to the returned definition (`{ name, description, prompt: body, tools, model, mode, scope, location: file, envelope }` — `undefined` when the file declares none, which keeps "no key ⇒ unchanged" true), and document the key in the file's header comment (a fourth frontmatter example line, with the spec reference).
 
-- [ ] **Step 7: Run them to verify they pass**
+- [x] **Step 7: Run them to verify they pass**
 
 Run: `cd apps/core && FREECODE_EDIT_DIAGNOSTICS=0 npx tsx --test src/agent/definitions/envelope.test.ts`
 Expected: PASS (13 refusal cases + 3 others).
 
-- [ ] **Step 8: Typecheck and run the neighbours**
+- [x] **Step 8: Typecheck and run the neighbours**
 
 Run: `cd apps/core && npx tsc --noEmit && FREECODE_EDIT_DIAGNOSTICS=0 npx tsx --test src/agent/definitions/definitions.test.ts src/agent/definitions/envelope.test.ts`
 Expected: no errors, all pass. The union's *shape* is unchanged, so the `tsc` run is what proves no tool that declares operations changed meaning; the full `pnpm -C apps/core test` is the branch's final gate, not this step's.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add apps/core/src/tools/tool.types.ts apps/core/src/agent/definitions/{types.ts,envelope.ts,envelope.test.ts,loader.ts}
@@ -380,7 +380,7 @@ git commit -m "feat(agents): parse and validate an agent definition's capability
 - Consumes: `AgentEnvelope`, `AgentDefinition.envelope` (Task 2)
 - Produces: `AgentRole.envelope?: AgentEnvelope`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `apps/core/src/agent/definitions/definitions.test.ts`:
 
@@ -444,12 +444,12 @@ test("scopes: a definition refused for its envelope does not shadow a lower one"
 });
 ```
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `cd apps/core && FREECODE_EDIT_DIAGNOSTICS=0 npx tsx --test src/agent/definitions/definitions.test.ts`
 Expected: FAIL on the first two (`role.envelope` is `undefined`; `bare` has no role) and PASS on the third (the loader already skips).
 
-- [ ] **Step 3: Carry it**
+- [x] **Step 3: Carry it**
 
 Add `envelope?: AgentEnvelope` to `AgentRole` in `types.ts`, and in `resolve.ts` include the envelope in the role **and** count it as a reason to have one:
 
@@ -460,17 +460,17 @@ const role = has
   : undefined;
 ```
 
-- [ ] **Step 4: Run them to verify they pass**
+- [x] **Step 4: Run them to verify they pass**
 
 Run: `cd apps/core && FREECODE_EDIT_DIAGNOSTICS=0 npx tsx --test src/agent/definitions/definitions.test.ts`
 Expected: PASS, including the file's existing resolve and loop tests.
 
-- [ ] **Step 5: Typecheck**
+- [x] **Step 5: Typecheck**
 
 Run: `cd apps/core && npx tsc --noEmit`
 Expected: no errors.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add apps/core/src/agent/definitions/{types.ts,resolve.ts,definitions.test.ts}
@@ -485,20 +485,20 @@ git commit -m "feat(agents): carry the envelope onto a spawn's role"
 - Modify: `docs/specs/2026-09-27-agent-control-and-definitions.md` (§5.3)
 - Modify: `docs/2026-10-15-priority-implementation-plan.md` (§6)
 
-- [ ] **Step 1: Record the refusal the code now makes**
+- [x] **Step 1: Record the refusal the code now makes**
 
 In §5.3's roots bullet, add one sentence: a root beginning with a single `/` is refused with a hint to write `//`, because the path matcher reads a bare leading slash as project-relative and the rule would silently match nothing.
 
-- [ ] **Step 2: Delete the delivered phase**
+- [x] **Step 2: Delete the delivered phase**
 
 In `docs/2026-10-15-priority-implementation-plan.md` §6, delete phase 1 ("Add the envelope to user-defined agent types and validation without changing defaults") and renumber the remaining three. Completed items are removed, not ticked.
 
-- [ ] **Step 3: Run the branch gate**
+- [x] **Step 3: Run the branch gate**
 
 Run: `cd apps/core && npx tsc --noEmit && pnpm test`
 Expected: no type errors; every `apps/core` test passes (this is the slice's final gate, and the only place the whole suite runs).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/specs/2026-09-27-agent-control-and-definitions.md docs/2026-10-15-priority-implementation-plan.md
