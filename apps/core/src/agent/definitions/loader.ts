@@ -33,51 +33,105 @@ const NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 /** Claude Code's model aliases; they name no provider, so they mean "inherit". */
 const CLAUDE_CODE_MODEL_ALIASES = new Set(["sonnet", "opus", "haiku", "fable", "inherit"]);
 
+/** A frontmatter value: a scalar, an inline/block list, or one nested block. */
+export type FrontmatterValue = string | string[] | Record<string, string | string[]>;
+
+/** What the open top-level key turned out to be, decided by its first child. */
+type Block = "undecided" | "set" | "list" | "map";
+
 /**
- * `key: value`, `key: [a, b]` and `key:` followed by `- item` lines — the
- * three shapes Claude Code's agent files use. Nothing else of YAML.
+ * `key: value`, `key: [a, b]`, `key:` followed by `- item` lines, and — FreeCode's
+ * addition, for a definition's `envelope:` — one level of `key:` followed by
+ * indented `child: value` lines. Nothing else of YAML.
  */
 export function parseFrontmatter(
   text: string,
-): { fields: Record<string, string | string[]>; body: string } | null {
+): { fields: Record<string, FrontmatterValue>; body: string } | null {
   const match = text.match(FRONTMATTER);
   if (!match) return null;
-  const fields: Record<string, string | string[]> = {};
-  let listKey: string | undefined;
+  const fields: Record<string, FrontmatterValue> = {};
+  // A bare `key:` is a list in Claude Code's agent files and a map in ours, and
+  // only the next indented line says which — so the kind stays undecided until
+  // one arrives.
+  let open: string | undefined;
+  let block: Block = "undecided";
+  let child: string | undefined;
+
   for (const raw of match[1]!.split(/\r?\n/)) {
     const line = raw.replace(/\s+#.*$/, "");
+    if (!line.trim()) continue; // a blank line never closes a block
     const item = line.match(/^\s*-\s+(.+)$/);
-    if (item && listKey) {
-      (fields[listKey] as string[]).push(unquote(item[1]!));
+    const kv = line.match(/^\s*([A-Za-z_][\w-]*)\s*:\s*(.*)$/);
+
+    if (/^\s/.test(line)) {
+      if (item) {
+        if (open === undefined) continue;
+        if (child !== undefined) {
+          (fields[open] as Record<string, string[]>)[child]!.push(unquote(item[1]!));
+        } else if (block === "undecided" || block === "list") {
+          // A block list keeps taking items: "skills:" then "- x", "- y".
+          block = "list";
+          (fields[open] as string[]).push(unquote(item[1]!));
+        }
+        continue;
+      }
+      if (!kv) continue;
+      const [, key, value] = kv as unknown as [string, string, string];
+      if (open === undefined || child !== undefined) continue; // one level, no deeper
+      if (block === "undecided") {
+        block = "map";
+        fields[open] = {};
+      }
+      if (block !== "map") continue; // an item list cannot take `key: value` lines
+      const map = fields[open] as Record<string, string | string[]>;
+      if (value === "") {
+        map[key] = [];
+        child = key;
+      } else {
+        map[key] = inlineList(value) ?? unquote(value);
+      }
       continue;
     }
-    const kv = line.match(/^([A-Za-z_][\w-]*)\s*:\s*(.*)$/);
+
     if (!kv) continue;
     const [, key, value] = kv as unknown as [string, string, string];
-    listKey = undefined;
+    open = key;
+    child = undefined;
     if (value === "") {
       fields[key] = [];
-      listKey = key;
-    } else if (value.startsWith("[") && value.endsWith("]")) {
-      fields[key] = value.slice(1, -1).split(",").map(unquote).filter(Boolean);
+      block = "undecided";
     } else {
-      fields[key] = unquote(value);
+      const list = inlineList(value);
+      fields[key] = list ?? unquote(value);
+      // A value already read takes no indented children, as before.
+      block = "set";
     }
   }
   return { fields, body: match[2]!.trim() };
+}
+
+/** `[a, b]` → a list, a scalar → undefined. Split on commas, as before. */
+function inlineList(value: string): string[] | undefined {
+  return value.startsWith("[") && value.endsWith("]")
+    ? value
+        .slice(1, -1)
+        .split(",")
+        .map(unquote)
+        .filter(Boolean)
+    : undefined;
 }
 
 function unquote(s: string): string {
   return s.trim().replace(/^["']|["']$/g, "");
 }
 
-function asList(v: string | string[] | undefined): string[] | undefined {
+function asList(v: FrontmatterValue | undefined): string[] | undefined {
   if (v === undefined) return undefined;
-  const list = Array.isArray(v) ? v : v.split(",");
-  return list.map((t) => t.trim()).filter(Boolean);
+  const list = Array.isArray(v) ? v : typeof v === "string" ? v.split(",") : undefined;
+  return list?.map((t) => t.trim()).filter(Boolean);
 }
 
-function asString(v: string | string[] | undefined): string | undefined {
+function asString(v: FrontmatterValue | undefined): string | undefined {
   return typeof v === "string" && v.trim() ? v.trim() : undefined;
 }
 

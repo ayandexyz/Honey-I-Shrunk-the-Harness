@@ -160,3 +160,37 @@ test("a spawn from a definition gets its role prompt and only its tools; any oth
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("frontmatter: a bare key followed by indented key: lines is a map", () => {
+  const p = parseFrontmatter(
+    "---\nname: a\nenvelope:\n  operations: [file.read]\n  network: false\n---\nBody.",
+  );
+  assert.deepEqual(p?.fields, {
+    name: "a",
+    envelope: { operations: ["file.read"], network: "false" },
+  });
+});
+
+test("frontmatter: a nested key carries an inline list or a block list", () => {
+  const inline = parseFrontmatter('---\nenvelope:\n  read: ["**", README.md]\n---\n');
+  assert.deepEqual(inline?.fields.envelope, { read: ["**", "README.md"] });
+  const block = parseFrontmatter('---\nenvelope:\n  read:\n    - "**"\n    - README.md\n---\n');
+  assert.deepEqual(block?.fields.envelope, { read: ["**", "README.md"] });
+});
+
+test("frontmatter: an indented list under a bare key stays a list", () => {
+  const p = parseFrontmatter("---\nname: a\nskills:\n  - x\n  - y\n---\nBody.");
+  assert.deepEqual(p?.fields, { name: "a", skills: ["x", "y"] });
+});
+
+test("frontmatter: indentation deeper than one level is ignored, not fatal", () => {
+  const p = parseFrontmatter("---\nname: a\nenvelope:\n  read:\n    deep: x\n---\nBody.");
+  assert.deepEqual(p?.fields, { name: "a", envelope: { read: [] } });
+});
+
+test("frontmatter: an inline list splits on commas, so a glob containing one needs the block form", () => {
+  const inline = parseFrontmatter("---\nwrite: [docs/a,b.md]\n---\n");
+  assert.deepEqual(inline?.fields, { write: ["docs/a", "b.md"] });
+  const block = parseFrontmatter("---\nwrite:\n  - docs/a,b.md\n---\n");
+  assert.deepEqual(block?.fields, { write: ["docs/a,b.md"] });
+});
