@@ -61,7 +61,12 @@ export interface JudgeSpec {
  */
 export const JUDGES: JudgeSpec[] = [
   { id: "judge-haiku", provider: "claude", model: "claude-haiku-4-5" },
-  { id: "judge-gpt", provider: "codex", model: "gpt-5.5" },
+  // `gpt-5.5` retired for this account on 2026-10-17: every call came back 400
+  // "not supported when using Codex with a ChatGPT account", which the panel
+  // reports as DEGRADED rather than as a bad score — the guard held, but the
+  // run stops being publishable, so the id is pinned to what `~/.codex/config.toml`
+  // is actually set to.
+  { id: "judge-gpt", provider: "codex", model: "gpt-5.6-luna" },
 ];
 
 /** Theirs: 20 minutes per judge. */
