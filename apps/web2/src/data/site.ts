@@ -1,5 +1,5 @@
 export const githubUrl = "https://github.com/ayandexyz/Honey-I-Shrunk-the-Harness";
-export const docsUrl = "https://docs.freecode.website/";
+export const docsUrl = "https://docs.honeyishrunktheharness.website/";
 
 export const installCommands = [
 	{ id: "curl", label: "curl", command: "curl -fsSL https://freecode.website/install | bash" },
