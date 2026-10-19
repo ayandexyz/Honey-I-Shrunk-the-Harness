@@ -50,6 +50,8 @@ export const KNOWN_SETTINGS: Readonly<
   cache: ["warming"],
   // `agent/verify-tests.ts` — the finish-time test run (≥3 changed files).
   verify: ["tests", "testCommand"],
+  // `harness/settings.ts` — continual harness, off by default.
+  harness: ["enabled", "autoDistill"],
 };
 
 /**

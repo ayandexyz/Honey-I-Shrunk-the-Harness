@@ -1944,6 +1944,30 @@ export class AgentLoop {
     return { text: lines.join("\n\n"), turns: lines.length };
   }
 
+  // Distillation's input. Unlike buildTranscript it keeps tool calls and
+  // (truncated) results: a lesson like "the test command is X" is only ever
+  // in a read or bash result, so a text-only transcript gave the planner
+  // nothing to ground an entry in. The planner keeps the newest 16K chars.
+  private buildTrajectory(): string {
+    const clip = (s: string, n: number) =>
+      s.length > n ? `${s.slice(0, n)}… [${s.length - n} chars cut]` : s;
+    const lines: string[] = [];
+    for (const msg of this.history) {
+      if (msg.role !== "user" && msg.role !== "assistant") continue;
+      for (const part of msg.parts) {
+        if (part.type === "text") {
+          const text = part.content.trim();
+          if (text) lines.push(`${msg.role}: ${text}`);
+        } else if (part.type === "tool") {
+          const args = clip(JSON.stringify(part.tool.args ?? {}), 300);
+          const result = clip((part.result ?? "").trim(), 1_500);
+          lines.push(`tool ${part.tool.tool}(${args}) →\n${result}`);
+        }
+      }
+    }
+    return lines.join("\n\n");
+  }
+
   // Fire-and-forget memory extraction. Deliberately not awaited and deliberately
   // non-throwing: the run's result has already been decided, and a memory
   // failure must never surface as a task failure.
@@ -2092,112 +2116,118 @@ export class AgentLoop {
             this.state.sessionId,
           );
 
-    void (async () => {
-      try {
-        const { text: transcript, turns } = this.buildTranscript();
-        let instructions = requested ? requested.instructions : undefined;
+    // Tracked like memory extraction so `endSession` drains it — a one-shot
+    // `freecode run` otherwise exits before the distillation call returns.
+    void trackMemoryJob(
+      this.state.sessionId,
+      (async () => {
+        try {
+          const { turns } = this.buildTranscript();
+          const transcript = this.buildTrajectory();
+          let instructions = requested ? requested.instructions : undefined;
 
-        if (!requested) {
-          const decision = shouldConsiderDistill({
-            sessionId: this.state.sessionId,
-            projectRoot: this.state.projectPath,
-            transcript,
-            turns,
-            compacted: this.compactedSinceDistill,
-          });
-          if (!decision.consider) {
-            logger.debug(`[Distill] auto skipped: ${decision.reason}`);
+          if (!requested) {
+            const decision = shouldConsiderDistill({
+              sessionId: this.state.sessionId,
+              projectRoot: this.state.projectPath,
+              transcript,
+              turns,
+              compacted: this.compactedSinceDistill,
+            });
+            if (!decision.consider) {
+              logger.debug(`[Distill] auto skipped: ${decision.reason}`);
+              return;
+            }
+            const review = await reviewAutoDistill({
+              transcript,
+              state: loadHarnessState(harnessDir, scope),
+              provider,
+              model,
+            });
+            // Arm the throttle on the review, not on the verdict: the call has
+            // been paid for either way, and re-reviewing the same transcript on
+            // the very next turn would pay for it again to reach the same "no".
+            markDistilled(this.state.sessionId, turns);
+            this.compactedSinceDistill = false;
+            if (!review.shouldDistill) {
+              logger.debug(`[Distill] gate said no: ${review.rationale}`);
+              return;
+            }
+            instructions = review.instructions;
+          } else {
+            // An explicit call has just mined this transcript; letting the
+            // interval fire right behind it would pay twice for the same one.
+            markDistilled(this.state.sessionId, turns);
+            this.compactedSinceDistill = false;
+          }
+
+          // Baseline snapshot taken now, before the (possibly slow) LLM call —
+          // apply() re-reads fresh and checks against this, so a write that
+          // lands while planning is in flight is detected, not clobbered.
+          const baselineState = loadHarnessState(harnessDir, scope);
+
+          const rollbackId = requested ? requested.rollback_id : undefined;
+          if (rollbackId) {
+            const target = baselineState.distillations.find(
+              (d) => d.id === rollbackId,
+            );
+            if (!target) {
+              logger.debug(
+                `[Distill] rollback target not found: ${rollbackId}`,
+              );
+              return;
+            }
+            const proposal = rollbackProposal(target);
+            const state = loadHarnessState(harnessDir, scope);
+            const rolled = applyDistillationProposal(state, proposal, {
+              id: newDistillationId(),
+              scope,
+              rollbackOf: target.id,
+              baselineState,
+            });
+            // A rollback that restores or removes a bridged entry has to reach
+            // the real memory/skill store too, or the harness would say the
+            // entry is gone while the file it wrote is still being retrieved.
+            bridgeHarnessState(state, rolled, {
+              projectPath: this.state.projectPath,
+            });
+            saveHarnessState(harnessDir, state);
             return;
           }
-          const review = await reviewAutoDistill({
+
+          const proposal = await planDistillation({
             transcript,
-            state: loadHarnessState(harnessDir, scope),
+            state: baselineState,
+            scope,
             provider,
             model,
+            instructions,
           });
-          // Arm the throttle on the review, not on the verdict: the call has
-          // been paid for either way, and re-reviewing the same transcript on
-          // the very next turn would pay for it again to reach the same "no".
-          markDistilled(this.state.sessionId, turns);
-          this.compactedSinceDistill = false;
-          if (!review.shouldDistill) {
-            logger.debug(`[Distill] gate said no: ${review.rationale}`);
+          if (proposal.edits.length === 0) {
+            logger.debug(`[Distill] nothing to apply: ${proposal.summary}`);
             return;
           }
-          instructions = review.instructions;
-        } else {
-          // An explicit call has just mined this transcript; letting the
-          // interval fire right behind it would pay twice for the same one.
-          markDistilled(this.state.sessionId, turns);
-          this.compactedSinceDistill = false;
-        }
 
-        // Baseline snapshot taken now, before the (possibly slow) LLM call —
-        // apply() re-reads fresh and checks against this, so a write that
-        // lands while planning is in flight is detected, not clobbered.
-        const baselineState = loadHarnessState(harnessDir, scope);
-
-        const rollbackId = requested ? requested.rollback_id : undefined;
-        if (rollbackId) {
-          const target = baselineState.distillations.find(
-            (d) => d.id === rollbackId,
-          );
-          if (!target) {
-            logger.debug(
-              `[Distill] rollback target not found: ${rollbackId}`,
-            );
-            return;
-          }
-          const proposal = rollbackProposal(target);
           const state = loadHarnessState(harnessDir, scope);
-          const rolled = applyDistillationProposal(state, proposal, {
+          const applied = applyDistillationProposal(state, proposal, {
             id: newDistillationId(),
             scope,
-            rollbackOf: target.id,
             baselineState,
           });
-          // A rollback that restores or removes a bridged entry has to reach
-          // the real memory/skill store too, or the harness would say the
-          // entry is gone while the file it wrote is still being retrieved.
-          bridgeHarnessState(state, rolled, {
+          // Memory and skill entries write through the real stores (spec
+          // §4.4b), which is also where entries from Phases 2-4 get migrated —
+          // the sweep re-bridges anything still unmarked.
+          bridgeHarnessState(state, applied, {
             projectPath: this.state.projectPath,
           });
           saveHarnessState(harnessDir, state);
-          return;
+        } catch (error) {
+          // Never let a distillation failure surface as a task failure — same
+          // contract as kickMemoryExtraction.
+          logger.debug("[Distill] kick failed", { error });
         }
-
-        const proposal = await planDistillation({
-          transcript,
-          state: baselineState,
-          scope,
-          provider,
-          model,
-          instructions,
-        });
-        if (proposal.edits.length === 0) {
-          logger.debug(`[Distill] nothing to apply: ${proposal.summary}`);
-          return;
-        }
-
-        const state = loadHarnessState(harnessDir, scope);
-        const applied = applyDistillationProposal(state, proposal, {
-          id: newDistillationId(),
-          scope,
-          baselineState,
-        });
-        // Memory and skill entries write through the real stores (spec
-        // §4.4b), which is also where entries from Phases 2-4 get migrated —
-        // the sweep re-bridges anything still unmarked.
-        bridgeHarnessState(state, applied, {
-          projectPath: this.state.projectPath,
-        });
-        saveHarnessState(harnessDir, state);
-      } catch (error) {
-        // Never let a distillation failure surface as a task failure — same
-        // contract as kickMemoryExtraction.
-        logger.debug("[Distill] kick failed", { error });
-      }
-    })();
+      })(),
+    );
   }
 
   private async executeTurn(

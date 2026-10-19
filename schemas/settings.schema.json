@@ -256,6 +256,44 @@
           "description": "Run this instead of discovering each changed file's package `test` script."
         }
       }
+    },
+    "harness": {
+      "description": "Continual harness: the agent distills durable notes about this project into its own prompt. See specs/2026-08-08-continual-harness-design.md.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Inject harness entries and allow the distill tool to write them."
+        },
+        "autoDistill": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Automatic distillation (Phase 4). Off by default.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "turnInterval": {
+              "type": "number",
+              "default": 25,
+              "description": "Transcript turns between automatic distillations."
+            },
+            "compact": {
+              "type": "boolean",
+              "default": true,
+              "description": "Also consider distilling at a compaction boundary."
+            },
+            "cooldownMs": {
+              "type": "number",
+              "default": 1200000,
+              "description": "Minimum wall-clock time between distillations."
+            }
+          }
+        }
+      }
     }
   },
   "$defs": {
