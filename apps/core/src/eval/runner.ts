@@ -215,6 +215,7 @@ async function runTrialIn(
   const { SessionStoreTag } = await import("../effect/context.js");
   const { getAgentRegistry } = await import("../agent/registry/index.js");
   const { disposeShellRegistry } = await import("../tools/shells/index.js");
+  const { disposeCacheWarmer } = await import("../providers/cache-warmer.js");
 
   const projectPath = sandbox?.dir ?? config.projectPath;
 
@@ -316,6 +317,10 @@ async function runTrialIn(
     for (const id of [sessionId, ...earlierSessionIds]) {
       getAgentRegistry().disposeRoot(id);
       disposeShellRegistry(id);
+      // Only endSession disposed it, and the scored session never gets one:
+      // each warmer's onWarmed closure held its whole AgentLoop, so every
+      // trial's conversation stayed live and a 190-trial `eval ab` OOM'd at 4GB.
+      disposeCacheWarmer(id);
     }
   };
 
@@ -504,20 +509,28 @@ async function runTrialIn(
         });
       }
     })();
-    await Promise.race([
-      turns,
-      // The backstop for anything that blocks without a timeout of its own.
-      // Deliberately spans the WHOLE trial rather than each turn: the budget is
-      // what a case may cost, and a three-turn case that takes three times as
-      // long is not three times as informative.
-      new Promise<never>((_, reject) => {
-        const timer = setTimeout(
-          () => reject(new Error(`trial exceeded ${TRIAL_TIMEOUT_MS}ms`)),
-          TRIAL_TIMEOUT_MS,
-        );
-        timer.unref?.();
-      }),
-    ]);
+    let trialTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        turns,
+        // The backstop for anything that blocks without a timeout of its own.
+        // Deliberately spans the WHOLE trial rather than each turn: the budget is
+        // what a case may cost, and a three-turn case that takes three times as
+        // long is not three times as informative.
+        new Promise<never>((_, reject) => {
+          trialTimer = setTimeout(
+            () => reject(new Error(`trial exceeded ${TRIAL_TIMEOUT_MS}ms`)),
+            TRIAL_TIMEOUT_MS,
+          );
+          trialTimer.unref?.();
+        }),
+      ]);
+    } finally {
+      // Left pending, the timer's closure kept this trial's whole AgentLoop
+      // alive for 5 minutes after it finished — dozens of conversations at
+      // once in a fast `eval ab`, which OOM'd at 4GB.
+      clearTimeout(trialTimer);
+    }
     memoryJobsPending += (
       await drainMemoryJobs(sessionId, MEMORY_DRAIN_TIMEOUT_MS)
     ).pending;
