@@ -3408,7 +3408,7 @@ export class AgentLoop {
 
     // Permission pipeline (spec: 2026-07-18-permission-rules.md §5)
     // envelope ceiling → danger bypass → mode enforcement + rules →
-    // PermissionRequest hooks (which may override ask→allow or anything→deny) →
+    // PermissionRequest hooks (ask only; they may turn it into allow or deny) →
     // interactive ask.
     let permResult: PermissionRequestResult = {
       decision: "allow",
@@ -3468,7 +3468,16 @@ export class AgentLoop {
     }
 
     if (this.state.agentMode !== "danger") {
-      permResult = await this.hooks.runPermissionRequest(toolCall, hookContext);
+      // Only when a prompt would show (Claude Code's contract): a call the
+      // rules already allow is not a request, and a hook that blocks for human
+      // approval (agent-fold: up to 305s) stalled every read of a read-only
+      // subagent. Deny was returned above and stays absolute.
+      if (evaluation.decision === "ask") {
+        permResult = await this.hooks.runPermissionRequest(
+          toolCall,
+          hookContext,
+        );
+      }
       // No hook matched: the rules-engine decision stands
       const decision =
         permResult.decision === "passthrough"

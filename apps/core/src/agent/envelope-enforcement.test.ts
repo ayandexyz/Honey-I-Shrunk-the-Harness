@@ -356,3 +356,36 @@ test("a permission hook cannot rewrite a call out of the envelope", async () => 
   );
   assert.equal(denials(rolloutDir)[0]?.source, "envelope");
 });
+
+test("a PermissionRequest hook is not consulted for a call the rules already allow", async () => {
+  const projectPath = mkdtempSync(join(tmpdir(), "freecode-permhook-allow-"));
+  writeFileSync(join(projectPath, "a.txt"), "hello\n");
+  const rolloutDir = mkdtempSync(join(tmpdir(), "freecode-permhook-allow-log-"));
+  let asked = 0;
+  registerHook("PermissionRequest", "counter", {
+    type: "callback",
+    callback: async () => {
+      asked += 1;
+      return { action: "continue" };
+    },
+  });
+  try {
+    // A read in explore mode is allowed outright — the verifier's whole job.
+    await runOnce({
+      sessionId: "permhook-allow",
+      provider: "permhook-allow",
+      projectPath,
+      rolloutDir,
+      call: { name: "read", args: { filePath: "a.txt" } },
+      tools: ["read"],
+      mode: "explore",
+    });
+  } finally {
+    unregisterAllHooks("settings");
+  }
+  assert.equal(asked, 0, "an allowed call is not a permission request");
+  assert.equal(
+    readEvents(rolloutDir).filter((e) => e.type === "function.call").length,
+    1,
+  );
+});
