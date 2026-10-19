@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.47.1
+
+ChatGPT-subscription sessions now keep their prompt cache across a whole task instead of re-sending the conversation every step, a permission-approval hook no longer stalls read-only subagents, and two out-of-memory crashes are gone. Per-turn context (recalled memories, the todo list, reminders) is now appended to the conversation once when it changes — the way Claude Code and opencode deliver it — instead of being rebuilt at the end of every request.
+
+### Changed
+
+- **Append-only context delivery, on by default** (`d916d928`, `8597167a`). Memory recall, the todo list and `<system-reminder>`s are appended once, as a persisted `synthetic: "context"` message, only when new; compaction re-delivers them. The old per-request tail froze the ChatGPT backend's cache at the first request of every turn. `eval ab` (tail vs append): memory suite on gpt-5.6-luna cached 84% → 93%, uncached input −62%, model time −18%; coding suites pass unchanged on luna and MiniMax-M3 at ~5% more tokens when there is no memory to deliver. `FREECODE_APPEND_CONTEXT=0` restores the tail.
+
+### Fixed
+
+- **ChatGPT (Codex OAuth) prompt cache** (`e7f8afc4`). The backend routes its cache on a `session-id` header, which is now sent; without it requests landed on arbitrary cache shards.
+- **PermissionRequest hooks run only when a prompt would show** (`a879ed72`). They fired on calls the rules already allowed, so a hook that waits for human approval stalled every read of the read-only finish-time verifier for up to 5 minutes. Matches Claude Code.
+- **`grep` output capped at 20MB, long lines at 500 columns** (`e8e883f6`). An unbounded search over worktrees and minified bundles grew past V8's string limit and crashed the process.
+- **Compaction summarizer no longer sends `temperature: 0`** (`585fdbf8`), which reasoning models reject (an AI SDK warning on every compaction).
+- **Eval runner no longer keeps every trial's agent loop in memory** (`da45edce`). An uncleared trial timer and an undisposed cache warmer pinned each trial's conversation; a long `eval ab` grew to 4GB and crashed.
+- **Read-only bash calls are not treated as file mutations** (`89696ec6`).
+- **Docs site link and button styling** (`01188328`, `f955eccb`).
+
+### Notes
+
+Released as a patch ahead of the release gate, at the maintainer's call; `pnpm eval:gate` on MiniMax-M3 was still running at tag time.
+
 ## v0.47.0
 
 Subagents that write files are now actually contained: an agent definition can declare a capability envelope (path, network, shell, subprocess), it narrows rather than replaces the existing permission rules, and a granted shell is jailed to the envelope's write roots with a real bwrap sandbox. Project instructions grow a real hierarchy — global, then repository ancestors, explicit `@import`s, and glob-scoped `.freecode/rules/*.md` — all visible in `/context`. Memory's two long-horizon bugs are fixed: a fact taught in the last session of a run no longer goes missing, and consolidation can no longer merge-and-lose an earlier fact. Also: a cost ledger, a local performance benchmark, and a batch of core/rollout/eval correctness fixes.
