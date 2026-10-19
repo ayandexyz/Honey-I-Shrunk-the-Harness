@@ -19,6 +19,7 @@ import { registerProvider } from "../providers/registry.js";
 import type { ProviderId } from "../providers/config.js";
 import type { AIProvider, ExecuteResult, SystemBlock } from "../providers/types.js";
 import { wrapUpReminder } from "./reminders.js";
+import { newlyDelivered } from "./context-inject.js";
 
 function info(id: string) {
   return {
@@ -46,10 +47,10 @@ test("a run that never stops calling tools gets a graceful wrap-up, not a bare c
     info: info(provider),
     create: (): AIProvider => ({
       info: info(provider),
-      execute: async ({ system, ephemeralTail }): Promise<ExecuteResult> => {
+      execute: async (opts): Promise<ExecuteResult> => {
         calls.push({
-          system: Array.isArray(system) ? system : [],
-          ephemeralTail,
+          system: Array.isArray(opts.system) ? opts.system : [],
+          ephemeralTail: newlyDelivered(opts),
         });
         // Always emits a (bogus) tool call, so the loop never stops itself —
         // the only thing that can end this run is the iteration cap.

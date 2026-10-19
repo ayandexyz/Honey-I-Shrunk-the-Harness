@@ -15,6 +15,8 @@
 // `DeliveredContext` after compaction, which may have trimmed the earlier copies.
 // =============================================================================
 
+import type { Message } from "./types.js";
+
 const OPEN = "<system-reminder>";
 const CLOSE = "</system-reminder>";
 
@@ -38,9 +40,14 @@ export interface ContextToAppend {
   delivered: DeliveredContext;
 }
 
-/** `FREECODE_APPEND_CONTEXT=1` — read per request so `eval ab` can flip it. */
+/**
+ * On by default since 2026-10-20; `FREECODE_APPEND_CONTEXT=0` restores the
+ * per-request tail. Read per request so `eval ab` can flip it. Measured (luna,
+ * memory suite): cached 84% → 93%, uncached −62%, model time −18%; coding
+ * suites with an empty store pass unchanged at ~5% more tokens (both models).
+ */
 export function appendContextEnabled(): boolean {
-  return process.env.FREECODE_APPEND_CONTEXT === "1";
+  return process.env.FREECODE_APPEND_CONTEXT !== "0";
 }
 
 function wrap(block: string): string {
@@ -78,4 +85,29 @@ export function contextToAppend(
  */
 export function isContextText(text: string): boolean {
   return text.startsWith(OPEN);
+}
+
+/**
+ * The context one provider request newly delivers, in either mode: the tail,
+ * or the context messages appended since the last turn (they trail the
+ * request). For observers — tests and traces assert on what the model was
+ * told, not on which mechanism told it.
+ */
+export function newlyDelivered(request: {
+  messages?: Message[];
+  ephemeralTail?: string;
+}): string {
+  if (request.ephemeralTail) return request.ephemeralTail;
+  const appended: string[] = [];
+  const messages = request.messages ?? [];
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role !== "user") break;
+    const text = m.parts
+      .map((p) => (p.type === "text" ? p.content : ""))
+      .join("");
+    if (!isContextText(text)) break;
+    appended.unshift(text);
+  }
+  return appended.join("\n\n");
 }

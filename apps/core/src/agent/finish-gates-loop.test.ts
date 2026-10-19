@@ -20,6 +20,7 @@ import { registerProvider } from "../providers/registry.js";
 import type { ProviderId } from "../providers/config.js";
 import type { AIProvider, ExecuteOptions, ProviderChunk } from "../providers/types.js";
 import type { AgentEnvelope } from "./definitions/types.js";
+import { newlyDelivered } from "./context-inject.js";
 
 type Step = { write?: [string, string]; bash?: string; say?: string };
 let script: Step[] = [];
@@ -41,7 +42,7 @@ registerProvider("finish-fake" as ProviderId, {
         yield { type: "usage", usage: { inputTokens: 1, outputTokens: 1 } };
         return;
       }
-      tails.push(opts.ephemeralTail ?? "");
+      tails.push(newlyDelivered(opts));
       const step = script.shift() ?? { say: "done" };
       if (step.write) {
         yield { type: "tool_call", id: `c${tails.length}`, name: "write", args: { filePath: step.write[0], content: step.write[1] } };

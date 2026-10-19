@@ -64,7 +64,8 @@ async function run(sessionId: string, append: boolean): Promise<Seen[]> {
   writeFileSync(file, "hello\n");
   const seen = registerScripted(sessionId, file);
   const prev = process.env.FREECODE_APPEND_CONTEXT;
-  process.env.FREECODE_APPEND_CONTEXT = append ? "1" : "0";
+  if (append) delete process.env.FREECODE_APPEND_CONTEXT; // the default
+  else process.env.FREECODE_APPEND_CONTEXT = "0";
   const runtime = makeRuntime(
     makeTestLayer({
       memoryFactory: {
@@ -117,7 +118,7 @@ test("append mode: the todo list is appended once and every request extends the 
   }
 });
 
-test("tail mode (default) still rides the list as a per-request tail", async () => {
+test("FREECODE_APPEND_CONTEXT=0 restores the per-request tail", async () => {
   const seen = await run("ctx-append-off", false);
   assert.ok(seen[1].tail?.includes("Current Task List"));
   assert.ok(seen[2].tail?.includes("Current Task List"), "re-sent on every request");
