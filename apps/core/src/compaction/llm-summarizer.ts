@@ -54,7 +54,8 @@ export function createLlmSummarizer(
         system: SYSTEM_PROMPT,
         prompt: parts.join("\n\n---\n\n"),
         model,
-        temperature: 0,
+        // No temperature: reasoning models reject it (the AI SDK drops it with
+        // a warning on every compaction), and opencode leaves it unset too.
         maxTokens: 1_024,
         abortSignal,
       });
