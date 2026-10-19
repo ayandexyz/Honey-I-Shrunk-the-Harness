@@ -217,6 +217,9 @@ export function loadSessionMessages(messages: SerializedMessage[]): void {
       createSystemMessage("*A background task finished and was reported to the agent.*");
       continue;
     }
+    // Memory / todos / reminders appended for the model; live it was never
+    // shown either.
+    if (msg.synthetic === "context") continue;
     // A `!cmd` the user ran. The text is already "I ran `cmd`" + a fenced
     // block, which reads fine as-is.
     if (msg.synthetic === "user_bash") {

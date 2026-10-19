@@ -85,6 +85,23 @@ request's full input near token-exact, 83% cached across the trajectory
 suite. `FREECODE_EPHEMERAL_TAIL=0` reverts to the old placement — it
 exists only so `eval ab` can price the two placements side by side.
 
+**Append-only context** (`FREECODE_APPEND_CONTEXT=1`, `agent/context-inject.ts`,
+2026-10-20) supersedes the tail where a provider punishes it. "Costs only its
+own tokens" held for explicit-breakpoint caches, not for the ChatGPT (Codex)
+backend: there a per-request tail froze the cache at the first request's size
+for the rest of the turn. Cold replays of real bodies, 2026-10-19: with the
+tail 36,608 / 36,608 / 36,608 cached; with no tail 36,608 / 37,632 / 39,808.
+Folding the tail into the last tool output, or sending it as a `developer`
+message, froze it the same way. Append mode does what Claude Code
+(attachments pushed into the conversation) and opencode (persisted synthetic
+messages) do: the state is appended ONCE as a persisted `synthetic: "context"`
+message, only when it is new (memory and todos when changed, reminders
+always), and compaction resets the ledger so trimmed copies are re-sent. The
+prefix then only grows — live on gpt-5.6-luna: 36,608 / 39,296 / 40,448 /
+44,032 cached against 39–45K input. Context messages start with
+`<system-reminder>` and are skipped as "the last user request", by memory
+extraction, by compaction's user-turn count, and by the TUI on resume.
+
 ### 1.2 Multi-provider `providerOptions` table — `utils.ts:115`
 
 One marker, five providers:

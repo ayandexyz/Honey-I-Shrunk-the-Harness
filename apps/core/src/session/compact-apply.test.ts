@@ -144,3 +144,18 @@ test("compaction forgets which reads are in context, so the next read is real", 
     "nothing compacted: the earlier read is still there",
   );
 });
+
+test("keepLastNUserTurns does not count appended context as a user turn", () => {
+  const ctx = (text: string): SerializedMessage => ({ ...msg("user", text), synthetic: "context" });
+  const messages = [
+    msg("user", "u1"),
+    msg("assistant", "a1"),
+    msg("user", "u2"),
+    ctx("todos"),
+    msg("assistant", "a2"),
+    ctx("reminder"),
+    msg("assistant", "a3"),
+  ];
+  // Two real turns are u1 and u2 — both kept; context did not push u1 out.
+  assert.deepEqual(keepLastNUserTurns(messages, 2).map((m) => m.id), messages.map((m) => m.id));
+});

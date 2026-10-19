@@ -214,12 +214,14 @@ export interface SerializedMessage {
   // "task_notification": a background task finished (agent/task-notify.ts);
   // the frontend renders a one-line notice, not the XML.
   // "user_bash": output of a `!cmd` the user ran; context for the next prompt.
+  // "context": memory / todos / reminders appended for the model; not shown.
   synthetic?:
     | "auto_poke"
     | "steer"
     | "branch_summary"
     | "task_notification"
-    | "user_bash";
+    | "user_bash"
+    | "context";
   /** True if the previous turn ended mid-stream; core appends a resume marker. */
   interrupted?: boolean;
 }

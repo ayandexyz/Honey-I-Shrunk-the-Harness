@@ -88,12 +88,15 @@ export interface SerializedMessage {
   // the frontend renders a one-line notice, not the XML.
   // "user_bash": output of a `!cmd` the user ran (session/user-bash.ts);
   // context for their next prompt, never a turn of its own.
+  // "context": memory recall / todo list / <system-reminder>s, appended once
+  // when new (agent/context-inject.ts); for the model only, never a turn.
   synthetic?:
     | "auto_poke"
     | "steer"
     | "branch_summary"
     | "task_notification"
-    | "user_bash";
+    | "user_bash"
+    | "context";
   interrupted?: boolean;
   usage?: MessageUsage;
   /**
@@ -494,7 +497,7 @@ class SessionStoreImpl implements SessionStore {
     // user turns, so advance it once here and keep `lastTurnAt` aligned with
     // the same durable event. Without this, every session stayed at zero and
     // the production consolidation gate was permanently unreachable.
-    if (entry.role === "user") {
+    if (entry.role === "user" && entry.synthetic !== "context") {
       const meta = await this.getMeta(sessionId, projectPath);
       if (meta) {
         await this.updateMeta(

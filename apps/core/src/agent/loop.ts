@@ -237,6 +237,12 @@ import {
   isContextOverflowError,
   type RecoveryManager,
 } from "./recovery/manager.js";
+import {
+  appendContextEnabled,
+  contextToAppend,
+  isContextText,
+  type DeliveredContext,
+} from "./context-inject.js";
 
 // =============================================================================
 // AgentLoop Config
@@ -470,6 +476,11 @@ export class AgentLoop {
   // ---------------------------------------------------------------------------
   private state: SessionState;
   private history: Message[] = [];
+  // Append-only context (context-inject.ts): what is already in the persisted
+  // conversation, reset when compaction may have trimmed it.
+  private deliveredContext: DeliveredContext = {};
+  // Whether the request being sent shows the memory block (memory.exposure).
+  private memoryInRequest = false;
   private config: {
     maxIterations: number;
     heuristics: LoopHeuristics;
@@ -1787,6 +1798,8 @@ export class AgentLoop {
       // Reload so this.history matches the trimmed store.
       if (outcome.compacted) {
         await this.loadHistory();
+        // The trim may have dropped earlier context messages: deliver again.
+        this.deliveredContext = {};
         // The measurement describes the pre-trim request and would re-trigger
         // compaction on the next check. Clear it so the estimate is used until
         // the provider reports a fresh number.
@@ -1805,6 +1818,7 @@ export class AgentLoop {
         : messagesBefore;
       if (compacted) {
         this.history = preservedMessages;
+        this.deliveredContext = {};
         markAllReadsCompacted(this.state.sessionId);
       }
       const preservedIds = new Set(
@@ -1885,11 +1899,14 @@ export class AgentLoop {
     for (let i = this.history.length - 1; i >= 0; i--) {
       const msg = this.history[i];
       if (msg.role !== "user") continue;
-      return msg.parts
+      const text = msg.parts
         .filter((p) => p.type === "text")
         .map((p) => (p as { content?: string }).content ?? "")
         .join("\n")
         .trim();
+      // Injected context is not the request — recall must key on the user's.
+      if (isContextText(text)) continue;
+      return text;
     }
     return "";
   }
@@ -1906,6 +1923,8 @@ export class AgentLoop {
         .map((p) => (p as { content?: string }).content ?? "")
         .join("\n")
         .trim();
+      // Recalled memories mined back into memories would feed on themselves.
+      if (msg.role === "user" && isContextText(text)) continue;
       if (text.length > 0) lines.push(`${msg.role}: ${text}`);
     }
     return { text: lines.join("\n\n"), turns: lines.length };
@@ -2241,11 +2260,29 @@ export class AgentLoop {
           ? [{ text: reminderText, cache: false }]
           : []),
       ];
-      const ephemeralTail = tailEnabled
-        ? [memoryBlock, todoBlock, reminderText]
-            .filter((s) => s && s.length > 0)
-            .join("\n\n")
-        : "";
+      // FREECODE_APPEND_CONTEXT=1: append only what is new, once, as a
+      // persisted message (Claude Code / opencode), instead of a tail rebuilt
+      // per request — see context-inject.ts for the cache measurement.
+      const append = tailEnabled && appendContextEnabled();
+      let ephemeralTail = "";
+      if (append) {
+        const next = contextToAppend(this.deliveredContext, {
+          memoryBlock,
+          todoBlock,
+          reminderText,
+        });
+        this.deliveredContext = next.delivered;
+        this.memoryInRequest = next.memory;
+        if (next.text) await this.appendContextMessage(next.text);
+      } else if (tailEnabled) {
+        ephemeralTail = [memoryBlock, todoBlock, reminderText]
+          .filter((s) => s && s.length > 0)
+          .join("\n\n");
+        this.memoryInRequest =
+          memoryBlock.length > 0 && ephemeralTail.includes(memoryBlock);
+      } else {
+        this.memoryInRequest = false;
+      }
       const blocks = [...systemBlocks, ...sessionBlocks];
 
       // UserPromptSubmit Hook — can modify the joined system before send.
@@ -2799,8 +2836,7 @@ export class AgentLoop {
     const resolvedModel = model ?? "(provider default)";
     const startedAt = Date.now();
     const memoryBlock = this.lastMemoryBlock ?? "";
-    const injected =
-      memoryBlock.length > 0 && ephemeralTail.includes(memoryBlock);
+    const injected = this.memoryInRequest;
     const blockBytes = injected ? Buffer.byteLength(memoryBlock, "utf-8") : 0;
     this.recorder.recordMemoryExposure(turnId, {
       blockBytes,
@@ -4505,6 +4541,20 @@ export class AgentLoop {
         error: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+
+  // Context (memory / todos / reminders) as a persisted message: history +
+  // store like an auto-poke, never the compaction transcript, so it is not a
+  // user turn. Append-only — the cached prefix only ever grows.
+  private async appendContextMessage(text: string): Promise<void> {
+    const id = randomUUID();
+    this.history.push({
+      id,
+      role: "user",
+      parts: [{ type: "text", content: text }],
+      timestamp: Date.now(),
+    });
+    await this.appendUserMessage(text, [], { synthetic: "context" }, id);
   }
 
   private async appendUserMessage(

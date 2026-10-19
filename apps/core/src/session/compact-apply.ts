@@ -34,7 +34,8 @@ export function keepLastNUserTurns(
   if (n <= 0) return [];
   let seen = 0;
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === "user") {
+    // Appended context is the harness talking; it is not a user turn.
+    if (messages[i].role === "user" && messages[i].synthetic !== "context") {
       seen++;
       if (seen === n) return messages.slice(i);
     }
