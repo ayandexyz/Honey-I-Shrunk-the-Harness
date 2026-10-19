@@ -11,6 +11,8 @@ export interface RewrittenBody {
   body: string;
   /** Whether the CALLER asked to stream; the wire request always streams. */
   callerStreams: boolean;
+  /** The body's `prompt_cache_key`, which the wrapper repeats as `session-id`. */
+  cacheKey?: string;
 }
 
 /**
@@ -29,7 +31,9 @@ export function rewriteCodexBody(raw: string): RewrittenBody {
   if (!include.includes("reasoning.encrypted_content")) {
     body.include = [...include, "reasoning.encrypted_content"];
   }
-  return { body: JSON.stringify(body), callerStreams };
+  const cacheKey =
+    typeof body.prompt_cache_key === "string" ? body.prompt_cache_key : undefined;
+  return { body: JSON.stringify(body), callerStreams, cacheKey };
 }
 
 type SseEvent = { type?: string; [key: string]: unknown };

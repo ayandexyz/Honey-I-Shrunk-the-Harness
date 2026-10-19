@@ -122,9 +122,11 @@ test("oauth fetch: rewrites URL, headers and body; folds a non-streaming call", 
   const resp = await oauthFetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: { authorization: "Bearer oauth-subscription" },
-    body: JSON.stringify({ model: "gpt-5.5", max_output_tokens: 10 }),
+    body: JSON.stringify({ model: "gpt-5.5", max_output_tokens: 10, prompt_cache_key: "sess-1" }),
   });
   assert.equal(seen!.url, OPENAI_OAUTH.endpoint);
+  // Cache routing: the backend reads the header, not the body field.
+  assert.equal(seen!.headers.get("session-id"), "sess-1");
   assert.equal(seen!.headers.get("authorization"), `Bearer ${ACCESS}`);
   assert.equal(seen!.headers.get("chatgpt-account-id"), "acct-1");
   assert.equal(seen!.headers.get("originator"), "codex_cli_rs");
