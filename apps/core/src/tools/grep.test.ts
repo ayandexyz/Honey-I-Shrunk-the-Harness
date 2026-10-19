@@ -57,3 +57,10 @@ test("match, no match and a bad regex are three different results", { skip: !has
   assert.equal(bad.success, false);
   assert.match(bad.error, /regex/i);
 });
+
+test("endless output is capped and rg killed, not buffered until the heap dies", async () => {
+  // `yes` stands in for rg over a tree of minified bundles: it never stops.
+  const res = await runRipgrep(["x"], "yes");
+  assert.ok(res.stdout.length <= 20_000_000, `stdout ${res.stdout.length}`);
+  assert.match(res.stderr, /output exceeded/);
+});

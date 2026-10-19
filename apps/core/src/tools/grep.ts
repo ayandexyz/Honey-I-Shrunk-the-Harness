@@ -97,6 +97,9 @@ function countMatches(output: string, mode: string): number {
 
 const RIPGREP_TIMEOUT_MS = 30_000;
 const DEFAULT_HEAD_LIMIT = 100;
+const MAX_STDOUT_CHARS = 20_000_000;
+/** Lines longer than this (minified code) print as a preview, as in Claude Code. */
+const MAX_COLUMNS = 500;
 
 // Exit 1 is "no matches"; 2 is a real error (bad regex, …). Missing binary and
 // timeout get their own codes so they can never read as an empty search.
@@ -149,7 +152,19 @@ export function runRipgrep(
     }, RIPGREP_TIMEOUT_MS);
 
     rg.stdout.on("data", (data) => {
+      if (settled) return;
       stdout += data.toString();
+      // `--max-count` is per file, so nothing else bounds the total: a grep
+      // over worktrees of minified bundles grew this past V8's string limit
+      // and OOM'd the eval runner. Claude Code caps at the same 20MB.
+      if (stdout.length >= MAX_STDOUT_CHARS) {
+        rg.kill("SIGKILL");
+        finish({
+          stdout: stdout.slice(0, MAX_STDOUT_CHARS),
+          stderr: `ripgrep output exceeded ${MAX_STDOUT_CHARS / 1_000_000}M chars and was cut; narrow the path or pattern`,
+          exitCode: EXIT_ERROR,
+        });
+      }
     });
 
     rg.stderr.on("data", (data) => {
@@ -215,6 +230,7 @@ async function executeGrep(
     // in a large repo can flood context. Cap matches per file unless the
     // model asked for a specific limit.
     args.push(`--max-count=${params.head_limit ?? DEFAULT_HEAD_LIMIT}`);
+    args.push(`--max-columns=${MAX_COLUMNS}`, "--max-columns-preview");
 
     args.push(params.pattern);
     // Always give rg an explicit path. Without one it reads stdin and blocks
