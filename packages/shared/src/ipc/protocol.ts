@@ -510,6 +510,22 @@ export const METHODS = {
     params: { runId: "" as string },
     result: { stopped: false as boolean },
   },
+  // Continual harness (spec 2026-08-08): read-only views for /harness — the
+  // entries the prompt injection sees, and the distillation audit log.
+  "harness.list": {
+    params: {
+      projectPath: undefined as string | undefined,
+      sessionId: undefined as string | undefined,
+    },
+    result: [] as Record<string, unknown>[],
+  },
+  "harness.history": {
+    params: {
+      projectPath: undefined as string | undefined,
+      sessionId: undefined as string | undefined,
+    },
+    result: [] as Record<string, unknown>[],
+  },
   "skills.list": {
     params: { projectPath: undefined as string | undefined },
     result: [] as {
@@ -895,6 +911,8 @@ export const REQUIRED_PARAMS: Record<
   "night.list": {},
   "night.report": {},
   "night.stop": { runId: "string" },
+  "harness.list": {},
+  "harness.history": {},
   "skills.list": {},
   "plugins.list": {},
   "mcp.status": {},

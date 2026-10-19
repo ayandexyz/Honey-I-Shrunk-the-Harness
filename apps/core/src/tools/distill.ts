@@ -6,7 +6,7 @@
 // gets evaluated against a prompt it never saw. agent/loop.ts recognizes a
 // "distill" tool call by name (same mechanism it already uses for "memory")
 // and kicks the real distillation after the turn finishes.
-// Spec: docs/superpowers/specs/2026-08-08-continual-harness-design.md, §4.6
+// Spec: docs/specs/2026-08-08-continual-harness-design.md, §4.6
 // =============================================================================
 
 import type { ToolContext } from "./types.js";

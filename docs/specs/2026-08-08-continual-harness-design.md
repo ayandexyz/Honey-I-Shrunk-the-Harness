@@ -1,6 +1,8 @@
 # Continual Harness — Self-Improving Harness State for FreeCode
 
-> **Status:** Design
+> **Status:** Phases 0–5 built 2026-08-10 on `continual-harness-phase-0`; ported onto
+> current `main` 2026-10-19 on `feat/continual-harness` (harness block moved to
+> `ephemeralTail` per RC8). Off by default (`harness.enabled`). Not yet `eval ab`-measured.
 > **Date:** 2026-08-08
 > **Prior art:** Prime Intellect's Prime Agent (`/refine`), Apache-2.0, TypeScript.
 > Local clone read for this spec: `~/Projects/githubProjects/agents/prime-agent`,

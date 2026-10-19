@@ -3,7 +3,7 @@
 // PRIMARY: the data model for agent-editable harness state (prompt notes,
 // memories, skills, subagent specs) — separate from memory/mem-types.ts
 // because a HarnessEntry carries version/provenance that MemoryEntry does not.
-// Spec: docs/superpowers/specs/2026-08-08-continual-harness-design.md, §3.1/§4.3
+// Spec: docs/specs/2026-08-08-continual-harness-design.md, §3.1/§4.3
 // Phase 0 (measurement), Phase 1 (store + injection), Phase 2 (this file also
 // carries the distillation types — planner/apply/rollback, the `distill` tool).
 // "Distill" is this project's name for what the spec's prior art (prime-agent)

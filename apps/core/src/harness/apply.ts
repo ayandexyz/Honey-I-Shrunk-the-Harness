@@ -5,7 +5,7 @@
 // the LLM call in planning can take seconds, during which another session may
 // have written the same store — apply() re-validates against a baseline
 // snapshot taken before planning rather than trusting it's still current.
-// Spec: docs/superpowers/specs/2026-08-08-continual-harness-design.md, §3.3/§3.5
+// Spec: docs/specs/2026-08-08-continual-harness-design.md, §3.3/§3.5
 // Direct port of prime-agent's applyRefinementProposal/rollbackProposal/
 // validateEdit (refinement.ts:664-836), adapted:
 // - No Python skill reference/arguments requirement — FreeCode skills are

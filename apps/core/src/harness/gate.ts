@@ -6,7 +6,7 @@
 //   2. reviewAutoDistill() — a small LLM call answering one question: is there
 //      anything here worth persisting? Returns rationale + optional focus
 //      instructions for the planner.
-// Spec: docs/superpowers/specs/2026-08-08-continual-harness-design.md §3.4/§4.7
+// Spec: docs/specs/2026-08-08-continual-harness-design.md §3.4/§4.7
 // Why two: distillation is a full planner call over a 16K transcript. Running
 // it every turn would be absurd; running it on a turn counter alone would still
 // pay the planner on the ~most sessions that have nothing durable in them. The

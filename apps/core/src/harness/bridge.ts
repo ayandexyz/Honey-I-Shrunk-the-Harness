@@ -1,7 +1,7 @@
 // =============================================================================
 // Harness bridge — memory/skill entries write through the REAL stores
 // PRIMARY: bridgeHarnessState, called after a distillation is applied.
-// Spec: docs/superpowers/specs/2026-08-08-continual-harness-design.md §4.4(b)
+// Spec: docs/specs/2026-08-08-continual-harness-design.md §4.4(b)
 //
 // Option (b), not (a): a distilled `memory` becomes a file in the project's
 // memory store (so the existing graph/cascade indexes and retrieves it — the

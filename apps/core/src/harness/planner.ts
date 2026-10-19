@@ -1,6 +1,6 @@
 // =============================================================================
 // Distillation Planner — the LLM call that proposes edits. No mutation.
-// Spec: docs/superpowers/specs/2026-08-08-continual-harness-design.md, §3.4
+// Spec: docs/specs/2026-08-08-continual-harness-design.md, §3.4
 // Mirrors memory/extract.ts's shape deliberately: getProvider().execute(),
 // a `complete` test seam so unit tests never need a real provider, never
 // throws out of the top-level call (a failed distillation must be invisible

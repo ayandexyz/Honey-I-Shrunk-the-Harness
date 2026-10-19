@@ -2,7 +2,7 @@
 // Continual Harness Injection — render capped HarnessState into a prompt block
 // PRIMARY: formatHarnessStateForPrompt, injected as a session block (cache:
 // false) in agent/loop.ts, same pattern as renderRetrievedMemories.
-// Spec: docs/superpowers/specs/2026-08-08-continual-harness-design.md, §4.5
+// Spec: docs/specs/2026-08-08-continual-harness-design.md, §4.5
 // Caps exist because harness state is unbounded and this rides on EVERY
 // request once harness.enabled: without a cap it grows into the prompt
 // forever. Defaults mirror prime-agent's (refinement.ts:26-28): 6 entries per

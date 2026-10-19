@@ -1,7 +1,7 @@
 // =============================================================================
 // Continual Harness Store — load / merge / save
 // PRIMARY: read and write harness_state.json, global and per-session-local.
-// Spec: docs/superpowers/specs/2026-08-08-continual-harness-design.md, §3.2/§3.6/§4.2
+// Spec: docs/specs/2026-08-08-continual-harness-design.md, §3.2/§3.6/§4.2
 // Phase 1: load + merge + atomic save, all defensive (never throw — this runs
 // on every system-prompt build, same reasoning as prime-agent's
 // loadHarnessState). Phase 2 adds the local-session directory resolver below
