@@ -459,8 +459,15 @@ spec's §12; these are the parts that are actionable independently of it.
       `2026-08-10-autonomous-runs-design.md` says the "verifier/evaluator decides
       completion when configured gates" are set, and
       `2026-08-08-continual-harness-design.md` lets the agent rewrite its own
-      harness with no way to measure whether the rewrite helped. Both are blocked
-      on the eval spec's Phase 1, and both should say so.
+      harness with no way to measure whether the rewrite helped. The eval harness
+      now exists; for the continual harness what is missing is the multi-session
+      suite (spec §12.3 G8, §12.4 step 3). The autonomous-runs half is
+      superseded by `freecode night`.
+- [ ] **Continual harness: open bugs from the 2026-10-19 live run** (spec §12.2,
+      branch `feat/continual-harness`). (1) At the default 5s
+      `FREECODE_EXIT_FLUSH_BUDGET_MS` a one-shot `freecode run` drops the
+      distillation. (2) One fact was written three times: the bridge plus memory
+      auto-extraction. (3) Subagents auto-distill when `harness.enabled` is on.
 
 ### Docs findings (writing `/internals/eval` — 2026-08-23)
 

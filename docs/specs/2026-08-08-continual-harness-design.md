@@ -3,6 +3,7 @@
 > **Status:** Phases 0–5 built 2026-08-10 on `continual-harness-phase-0`; ported onto
 > current `main` 2026-10-19 on `feat/continual-harness` (harness block moved to
 > `ephemeralTail` per RC8). Off by default (`harness.enabled`). Not yet `eval ab`-measured.
+> Live findings and gaps vs current (Rust) Prime Agent: **§12**.
 > **Date:** 2026-08-08
 > **Prior art:** Prime Intellect's Prime Agent (`/refine`), Apache-2.0, TypeScript.
 > Local clone read for this spec: `~/Projects/githubProjects/agents/prime-agent`,
@@ -960,11 +961,98 @@ the metric's name. Phase 0 of this spec is the beginning of that instrument. The
 audit log in phase 3 is the beginning of that record. Build those, use them for a
 while, and revisit.
 
+## 12. October 2026: port, live findings, and gaps vs current Prime Agent
+
+> Added 2026-10-19. Branch `feat/continual-harness` (from `main`), carrying
+> Phases 0–5 from `continual-harness-phase-0` plus the fixes below.
+
+### 12.1 The port
+
+Phases 0–5 were cherry-picked onto `main` (779 commits newer than the branch
+point). The autonomous-runs commits and the memory-garden commit on the old
+branch were left behind: `freecode night` and memory consolidation superseded
+them. Port-time changes:
+
+- **Harness block rides `ephemeralTail`, not the system param** (RC8). §4.5
+  predates that rule; a distillation changes the block mid-session, and in the
+  system param that re-sent the whole conversation.
+- `pruneState` keeps `main`'s carry-forward semantics (the old branch reset it per run).
+- `harness.list` / `harness.history` declared in shared `METHODS`
+  (`ipc/methods-coverage.test.ts`).
+- Spec references moved from `docs/superpowers/specs/` to `docs/specs/`.
+
+### 12.2 Live findings (MiniMax-M3, `--agent danger`, 2026-10-19)
+
+A throwaway git project with `harness.enabled: true` and a `notes.md` holding a
+shell rule and a test command; the prompt asked the model to read, run the
+test, and call `distill`.
+
+| Bug | Symptom | Fix |
+| --- | --- | --- |
+| Distillation lost on a one-shot run | `distill` called, no `harness_state.json` — `kickDistillation` was an untracked fire-and-forget and `freecode run` exited first | Wrapped in `trackMemoryJob`, so `endSession` drains it |
+| Planner saw no evidence | Wrote nothing: "the trajectory contains only the user's instruction and the agent's DONE". It got `buildTranscript`, which is text-only by design (memory extraction) | `buildTrajectory()`: text + tool calls (args ≤300 chars) + results (≤1,500 chars). Present in the original branch too |
+| `harness` unknown setting | Warning on every run | Added to `settings/known-keys.ts` and `schemas/settings.schema.json` |
+
+After the fixes: one correct `memory` entry ("prefix `env LC_ALL=C`; test
+command `node check.mjs`"), bridged into `memory/project/`; a fresh session
+answered a codeword planted in a global `prompt` entry, so injection works.
+
+Still open from the run:
+
+- **Exit flush budget.** The live runs used `FREECODE_EXIT_FLUSH_BUDGET_MS=120000`.
+  At the default 5s a one-shot `freecode run` will usually still drop the
+  distillation. The daemon (TUI) is unaffected.
+- **Triple write of one fact.** The bridge wrote the memory, and memory
+  auto-extraction independently wrote the same fact twice more. One of the two
+  paths should skip what the other just wrote.
+- **Subagents auto-distill** when `harness.enabled` is on; memory extraction
+  skips them (`memoryExtraction: false`). §5.6 does not decide this either way.
+
+### 12.3 Gaps vs current Prime Agent
+
+Prime Agent was ported to Rust (2026-09-29, #2524) after this spec was written;
+refinement now lives in `crates/pa-core/src/refinement/{mod,planner,ranking,executor}.rs`
+(~3,450 lines) and `crates/pa-cli/src/print_boundary/autorefine.rs`. Their
+`[RSI]` commits since 2026-08-08 add the following. Effort: S = days, M = a week, L = needs its own spec.
+
+| # | Prime Agent now | FreeCode | Effort | Source |
+| --- | --- | --- | --- | --- |
+| G1 | **User-visible notice per applied refinement**, labelled `[auto-refinement]` / `[user-refinement]` / `[self-refinement]`, edits in digest notation; zero-edit refinements emit nothing | `logger.debug` only — self-edits are silent | S | #447, #2098, #2179 |
+| G2 | **Relevance-ranked digest** (IDF-weighted term overlap over title/content/path/id, recency tie-break) + a `harness.search` query API for what overflowed | First N per kind, alphabetical — breaks as the store grows | M | #2241, #2392 |
+| G3 | Planner sees **80K chars** of serialized conversation (the compaction serializer), sized against the model's context with a token bound and 32K output budget | 16K chars of `buildTrajectory()` | S | `executor.rs` `conversation_text`, `planner.rs` `refinement_request` |
+| G4 | **`auxiliaryModel`** for review and planning passes, so they do not evict the session's provider prefix cache, and can be cheaper | Session model (`planner.ts`, `gate.ts`) | S | #2220 |
+| G5 | **Digest delivered in-context once**: a durable message at boundaries, skipped while a state fingerprint is unchanged, only the newest kept (compaction keeps the fingerprint snapshot) | Re-sent in `ephemeralTail` on every request — cache-safe, but pays its tokens every turn | M | #2098, #2394, #2400 |
+| G6 | **When-to-refine guidance in the digest**: after a repeated failure, a user correction, an entry proven wrong, a reusable procedure or delegation role emerging | Only the `distill` tool description | S | `ranking.rs` `format_harness_state_for_prompt` |
+| G7 | **Lock directory** around harness writes (several sessions writing global) | Optimistic re-read before apply only (§3.3) | S | `update_harness_state`, `platform/lock_dir.rs`, #3649 |
+| G8 | **Capability evals scored from on-disk artifacts**, not agent claims (swarm-fanout, swe-fix-loop) | None — cannot yet show distillation helps (§11) | M | #2283 |
+| G9 | Pending auto-refine **drained at session disposal** | Tracked (12.2) but capped by the 5s exit budget | S | `autorefine.rs` `drain_compact_auto_refine_at_disposal` |
+| G10 | `session_before_refine` extension hook | None (would be a `PreDistill` hook) | S | #1558 |
+| G11 | **`factory` kind**: declarative state-machine workflows of subagent states (DAG sugar compiles to machine form), validated at write time, run/status/stop/resume, live TUI page | None. Theirs runs on the RLM Python kernel; ours would compile to the `agent` tool | L | #3199, #3290, #3462 |
+
+Not worth porting: Python-REPL skills with a `reference`/`arguments` call
+contract (FreeCode skills are markdown); persistent goals, heartbeats and
+schedules (overlap with `freecode night`).
+
+### 12.4 Plan
+
+1. **Trustworthy** — G1, G3, G4, G6, G7, G9, plus the triple write and the
+   subagent guard. All small; afterwards every self-edit is visible and safe
+   under concurrency.
+2. **Scales** — G2 and G5. Both change what the request carries, so `eval ab`
+   with cache numbers before merging.
+3. **Proven** — G8: a multi-session suite (session 1 teaches a lesson,
+   session 2 must use it, scored from files), modelled on `memory-sessions`.
+   This is also the `eval ab` that decides whether `harness.enabled` or
+   `autoDistill` ever default on (§9).
+4. **Later** — G11 behind its own spec.
+
 ---
 
 ## References
 
-- Prime Agent `/refine`: `packages/coding-agent/src/core/refinement/refinement.ts`,
+- Prime Agent (Rust, current): `crates/pa-core/src/refinement/{mod,planner,ranking,executor}.rs`,
+  `crates/pa-cli/src/print_boundary/autorefine.rs` — see §12.3
+- Prime Agent `/refine` (TypeScript, as of 2026-08-08): `packages/coding-agent/src/core/refinement/refinement.ts`,
   `src/core/agent-session.ts` (wiring, ~L2181-2400), `src/core/settings-manager.ts`
   (L23-28, L883), `skills/refine/SKILL.md`
 - Continual Harness paper: arXiv 2605.09998 (referenced from their README)
