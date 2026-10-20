@@ -66,7 +66,7 @@ const agentSchema: JsonSchema = {
     model: {
       type: "string",
       description:
-        "Optional: run it on another model, as provider or provider/model (e.g. anthropic/claude-opus-5). Default: this session's model.",
+        "NEVER set this unless the user explicitly asks for a particular model. Leave it out to use this session's model. Written as provider or provider/model (e.g. anthropic/claude-opus-5), never a bare model id.",
     },
     forkContext: {
       type: "boolean",
