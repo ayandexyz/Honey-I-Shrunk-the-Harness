@@ -187,3 +187,13 @@ test("openai-shaped: ephemeralTail is appended as the final user message", () =>
     content: "reminder text",
   });
 });
+
+test("toolChoice: none rides along only with tools, on every request shape", () => {
+  const tools = [{ name: "read", description: "r", parameters: { type: "object", properties: {} } }] as any;
+  const messages = [{ role: "user", parts: [{ type: "text", text: "hi" }] }] as any;
+  for (const e of [anthropicEntry, openaiEntry, minimaxEntry]) {
+    assert.equal(buildGenerateOptions(e, modelHandle, { messages, tools, toolChoice: "none" }).toolChoice, "none");
+    assert.equal(buildGenerateOptions(e, modelHandle, { messages, tools }).toolChoice, undefined);
+    assert.equal(buildGenerateOptions(e, modelHandle, { messages, toolChoice: "none" }).toolChoice, undefined);
+  }
+});

@@ -42,7 +42,7 @@ test("a run that never stops calling tools gets a graceful wrap-up, not a bare c
   const provider = "maxiter-fake";
   const FINAL_TEXT = "Finished the parser; wiring is still outstanding.";
 
-  const calls: Array<{ system: SystemBlock[]; ephemeralTail?: string }> = [];
+  const calls: Array<{ system: SystemBlock[]; ephemeralTail?: string; toolChoice?: string }> = [];
   registerProvider(provider as ProviderId, {
     info: info(provider),
     create: (): AIProvider => ({
@@ -51,6 +51,7 @@ test("a run that never stops calling tools gets a graceful wrap-up, not a bare c
         calls.push({
           system: Array.isArray(opts.system) ? opts.system : [],
           ephemeralTail: newlyDelivered(opts),
+          toolChoice: opts.toolChoice,
         });
         // Always emits a (bogus) tool call, so the loop never stops itself —
         // the only thing that can end this run is the iteration cap.
@@ -96,6 +97,11 @@ test("a run that never stops calling tools gets a graceful wrap-up, not a bare c
     assert.match(calls[2].ephemeralTail ?? "", /Do not call any more tools/);
     const lastSystem = calls[2].system.map((b) => b.text).join("\n");
     assert.doesNotMatch(lastSystem, /Do not call any more tools/);
+    // The last turn forbids tool calls outright (opencode's final-step
+    // `toolChoice: "none"`); the reminder alone is ignorable.
+    assert.equal(calls[2].toolChoice, "none");
+    assert.equal(calls[0].toolChoice, undefined);
+    assert.equal(calls[1].toolChoice, undefined);
     // Earlier turns were not nudged yet.
     assert.doesNotMatch(calls[0].ephemeralTail ?? "", /Do not call any more tools/);
   } finally {

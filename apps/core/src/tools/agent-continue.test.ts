@@ -118,3 +118,13 @@ test("refused: someone else's agent, a running one, one the caller stopped, or a
     rmSync(project, { recursive: true, force: true });
   }
 });
+
+test("subagentStatus: a capped, stuck or timed-out run is not reported as SUCCESS", async () => {
+  const { subagentStatus } = await import("./agent.js");
+  assert.equal(subagentStatus(true), "SUCCESS");
+  assert.equal(subagentStatus(true, { kind: "interrupted" }), "SUCCESS");
+  assert.equal(subagentStatus(false, { kind: "turn_cap" }), "FAILED");
+  for (const kind of ["turn_cap", "stuck", "timeout"] as const) {
+    assert.match(subagentStatus(true, { kind }), /^INCOMPLETE \(/);
+  }
+});

@@ -1082,7 +1082,8 @@ export class AgentLoop {
         // valve (loop-health and the todo/verify gates are what normally end
         // a run) — hand back whatever the model last said rather than a bare
         // status string, since it may have already produced a useful wrap-up
-        // on the previous, reminder-primed turn.
+        // on the previous, reminder-primed turn. With no text to hand back
+        // the note still goes alone: the caller must not get an empty result.
         if (this.state.iterationCount >= this.config.maxIterations) {
           await this.stop("max_iterations_reached");
           const note =
@@ -1091,7 +1092,7 @@ export class AgentLoop {
             `last turn's response — some planned work may be incomplete._`;
           return await this.complete(
             "Max iterations reached",
-            this.lastResponseText ? this.lastResponseText + note : undefined,
+            this.lastResponseText ? this.lastResponseText + note : note.trimStart(),
             undefined,
             usageSoFar(),
             { kind: "turn_cap" },
@@ -2892,6 +2893,10 @@ export class AgentLoop {
       // Prefer streaming when the provider supports it AND we have a listener.
       // If either is missing, fall back to the one-shot execute() path so callers
       // and downstream code paths are unchanged.
+      // The turn before the iteration cap trips (see the wrap-up reminder):
+      // tools stay defined but cannot be called, so the run ends on a summary.
+      const finalTurn =
+        this.state.iterationCount === this.config.maxIterations - 1;
       if (aiProvider.stream) {
         let content = "";
         let thinking = "";
@@ -2919,6 +2924,7 @@ export class AgentLoop {
           abortSignal: this.abort.signal,
           sessionId: this.state.sessionId,
           ephemeralTail: ephemeralTail || undefined,
+          toolChoice: finalTurn ? "none" : undefined,
         };
         for await (const chunk of aiProvider.stream(requestOptions)) {
           if (ttft_ms === undefined) {
@@ -3043,6 +3049,7 @@ export class AgentLoop {
         abortSignal: this.abort.signal,
         sessionId: this.state.sessionId,
         ephemeralTail: ephemeralTail || undefined,
+        toolChoice: finalTurn ? "none" : undefined,
       };
       const result = await aiProvider.execute(requestOptions);
 
