@@ -300,7 +300,7 @@ const HELP_SESSION_PROMPT: &str = r#"Act as the in-app Jcode guide. Use the bund
 The jcode-desktop shortcuts are:
 - Super+H/J/K/L: navigate panels
 - Super+Shift+H/J/K/L: move panels
-- Super+Enter: open a session to the right
+- Super+Enter: open a session to the right (use Ctrl+Alt+Enter instead if the window manager already reserves Super+Enter for a terminal, e.g. Omarchy/Hyprland, i3, sway, bspwm)
 - Ctrl+O: choose a folder and open a session there
 - Super+Tab: return to the previous panel
 - Super+R: cycle panel width
@@ -4275,7 +4275,10 @@ impl Workspace {
                 .child(
                     div()
                         .debug_selector(|| "empty-strip-shortcut".into())
-                        .child("Press Super+Enter to start a new session here"),
+                        .child(format!(
+                            "Press {} to start a new session here",
+                            default_directory::spawn_shortcut()
+                        )),
                 )
                 .child(div().text_size(px(12.0)).child(self.status.clone()))
                 .into_any_element()
@@ -13267,7 +13270,15 @@ mod tests {
             ("width_presets", "super-4", Box::new(WidthPreset4)),
             (
                 "new_panel",
-                "super-enter",
+                // The catalog teaches ctrl-alt-enter on Linux instead of
+                // super-enter: most tiling WMs (Omarchy/Hyprland, i3, sway,
+                // bspwm) bind Super+Enter to a terminal at the compositor
+                // level, so this app's window never receives it there.
+                if cfg!(target_os = "linux") {
+                    "ctrl-alt-enter"
+                } else {
+                    "super-enter"
+                },
                 Box::new(NewPanelInPinnedDirectory),
             ),
             ("close_panel", CLOSE_PANEL_CHORD, Box::new(ClosePanel)),
@@ -14498,7 +14509,13 @@ mod tests {
             "super-r",
             "super-f",
             "super-1 .. super-4",
-            "super-enter",
+            // Taught as ctrl-alt-enter on Linux instead; see the keymap
+            // catalog's new_panel entry.
+            if cfg!(target_os = "linux") {
+                "ctrl-alt-enter"
+            } else {
+                "super-enter"
+            },
             CLOSE_PANEL_CHORD,
         ] {
             assert!(taught.contains(&keys), "{keys} is bound but never taught");
