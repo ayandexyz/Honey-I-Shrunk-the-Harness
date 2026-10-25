@@ -321,6 +321,25 @@ Composer shortcuts ported from the TUI:
 - Escape: clear the draft
 
 Start with a concise orientation, then invite me to ask how to use Jcode."#;
+
+/// [`HELP_SESSION_PROMPT`] plus a line naming Omarchy specifically when it is
+/// confirmed running, rather than the generic hedge the base prompt carries
+/// for window managers in general.
+fn help_session_prompt() -> String {
+    help_session_prompt_for(crate::omarchy::detected())
+}
+
+fn help_session_prompt_for(omarchy_detected: bool) -> String {
+    if omarchy_detected {
+        format!(
+            "{HELP_SESSION_PROMPT}\n\nThis machine is running Omarchy, which binds Super+Enter \
+             to opening a terminal, so Ctrl+Alt+Enter is the shortcut that actually opens a new \
+             session here."
+        )
+    } else {
+        HELP_SESSION_PROMPT.to_string()
+    }
+}
 const SIDEBAR_WIDTH: f32 = 224.0;
 // With no connector gap the gutter stays inside the sidebar in every layout.
 const SIDEBAR_SCROLLBAR_OUTSET: f32 = 0.0;
@@ -2256,7 +2275,7 @@ impl Workspace {
                         {
                             self.bridge.send(Command::Send {
                                 session_id,
-                                content: HELP_SESSION_PROMPT.into(),
+                                content: help_session_prompt(),
                                 images: Vec::new(),
                             });
                         }
@@ -13083,6 +13102,15 @@ mod tests {
         assert!(HELP_SESSION_PROMPT.contains("Super+H/J/K/L"));
         assert!(HELP_SESSION_PROMPT.contains("Super+/ or F1"));
         assert!(HELP_SESSION_PROMPT.contains("Super+Shift+/"));
+    }
+
+    #[test]
+    fn help_session_prompt_names_omarchy_specifically_only_when_detected() {
+        assert_eq!(help_session_prompt_for(false), HELP_SESSION_PROMPT);
+        let detected = help_session_prompt_for(true);
+        assert!(detected.starts_with(HELP_SESSION_PROMPT));
+        assert!(detected.contains("running Omarchy"));
+        assert!(detected.contains("Ctrl+Alt+Enter"));
     }
 
     /// Drive real keystrokes through the real keymap and confirm the coach
