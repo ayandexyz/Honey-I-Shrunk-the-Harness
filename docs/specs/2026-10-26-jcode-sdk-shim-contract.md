@@ -58,9 +58,21 @@ never comes from upstream is this `jcode-sdk` shim.
 
 ## Phased plan
 
-1. **Done 2026-10-26** — Read `jcode-sdk/src/client.rs` fully; map each
+1. **✅ COMPLETE 2026-10-26 — the contract is fully listed.** Every
+   `JcodeClient` method, `ApiEvent` variant and jcode crate `apps/desktop`
+   uses is in the tables below, with desktop call counts. Rows marked
+   "decide" are scope decisions for Phases 4–6, not unknowns. Hand-off to
+   Phase 2: stub every row (including "signature only" ones) and re-export
+   the `jcode_sdk` types unchanged. Next: Phase 2.
+
+   How it was done — read `jcode-sdk/src/client.rs` fully; map each
    method/event to freecode's `METHODS`/`StreamEvent`, flag gaps both
-   directions. Produced the contract tables below.
+   directions. Produced the contract tables below. **Second pass, same day**:
+   the first pass mapped what `client.rs` *offers*; the contract is what
+   `apps/desktop` *uses*. Re-derived from desktop call sites — see
+   "Phase 1 findings" below. It added 10 used methods and 13 consumed events
+   the first pass missed, reversed one `cut` (`MessageAccepted`), and found
+   coupling outside `jcode-sdk` entirely (`jcode_base`, disk session reads).
 2. Stub `jcode-sdk` shim crate (`[patch]`'d in over the path dep) with real
    signatures, `todo!()` bodies — gets the harness + UI compiling against it
    and surfaces exactly how leaky the abstraction really is before
@@ -105,6 +117,59 @@ never comes from upstream is this `jcode-sdk` shim.
   created a new one against Jcode's backend). Don't treat a working launch
   as proof freecode's backend is wired — it isn't yet.
 
+## Phase 1 findings (call-site audit)
+
+Method: every `JcodeClient` method and `ApiEvent` variant counted at its
+call/match sites in `apps/desktop/{crates,src}`, test files excluded
+(`*_test(s).rs`, `tests/`, fixtures). Numbers are production sites.
+
+1. **The client seam is one file.** Every production `JcodeClient` call is
+   in `jcode-desktop-harness/src/harness.rs` (plus `notify_auth_changed` /
+   `set_reasoning_effort` in `managed_cloud_parity.rs`). The ~70 UI files
+   that import `jcode_sdk` use its **types** (`SessionInfo`,
+   `HistoryMessage`, `ApiEvent`, `ModelRouteInfo`, `RenderedImage`,
+   `TurnStopReason`, …), never the client. So the shim must reproduce those
+   types byte-compatibly (re-export them, don't redefine them), and its
+   behaviour only has to satisfy `harness.rs`.
+2. **The desktop never answers a permission prompt.** `PermissionRequest` is
+   matched only to route it to a session and to play a sound
+   (`sound_events.rs`); `respond_to_permission` has zero callers. Jcode runs
+   tools without asking. Against `apps/core` a `permission_asked` would
+   block the turn until core's 30-minute prompt timeout (treated as DENY).
+   Decision needed before Phase 4: run desktop sessions in a mode that
+   never asks, auto-answer in the shim, or add an approve/deny UI (a change
+   to upstream files — conflicts on every `subtree pull`).
+3. **`MessageAccepted` is not cuttable** — 14 production matches. The
+   harness's submit flow waits on it. The shim must synthesize it as soon
+   as core accepts `session.send`, before any stream event.
+4. **The desktop reads Jcode's session store off disk**, bypassing the
+   client entirely, through `jcode_base::session`:
+   `persisted_history.rs` (`Session::load_from_path`,
+   `render_messages_and_images`), `workspace_resume.rs`
+   (`Session::create_with_id`, `render_messages`, `session_presence`),
+   `resume_content_search.rs` (journal path), `workspace.rs`
+   (`streaming_session_ids`), `panel.rs` (`session_path`). A shim over
+   `JcodeClient` cannot reach these; with it in place, resume/history/search
+   would show Jcode's sessions under `~/.jcode`, not freecode's under
+   `~/.freecode/sessions`. These need their own replacement (see "Beyond
+   jcode-sdk").
+5. **The first pass got these rows wrong**: `MessageAccepted` (cut → needed);
+   `list_models`, `list_sessions`, `get_history`, `archive_session`,
+   `send_message`, `create_session_with_options`, `respond_to_permission`
+   have **zero** production callers (the used forms are
+   `list_sessions_limited`, `get_history_with_images`,
+   `send_message_with_reminder`, `create_session`); `TextReplace`/`TextDone`
+   are never matched, so text needs only delta translation; `Compacted` is
+   never consumed (only routed). Events that appear only in `harness.rs`'s
+   `event_session_id` routing match (`Files`, `FileContent`, `FileStatus`,
+   `TextMatches`, `History`, `Models`, `Sessions`, `TodoState`, …) are not
+   consumed and need not be emitted.
+6. **Harness tests speak Jcode's wire protocol** (`ClientFrame`/
+   `ServerFrame`/`read_frame`/`write_frame` in six `harness_*_tests.rs`, 77
+   sites). They fake a Jcode server, so they will test the shim's old
+   transport, not freecode's. Phase 2 should expect them to fail to build or
+   to test nothing real; decide to cut or port them, don't chase them.
+
 ## Contract tables
 
 Tracks the exact surface the `jcode-sdk` shim crate needs to implement so
@@ -131,37 +196,78 @@ Not a method-by-method mapping — the whole transport layer is a rewrite.
 
 ## Session + turn methods
 
-| jcode_sdk | freecode | Shape | Status |
-|---|---|---|---|
-| `connect`/`connect_with` | spawn `apps/core` + open stdio | new transport | todo |
-| `create_session`/`create_session_with_options` | `session.start` | `working_dir`→`projectPath`; no `system_prompt` override param on freecode's side — needs adding or dropping | todo |
-| `attach_session` | `session.resume` | close | todo |
-| `list_sessions`/`list_sessions_limited` | `session.list` | no `limit` param on freecode | todo |
-| `archive_session` | `session.archive` | close | todo |
-| `fork_session` | `session.fork` | close | todo |
-| `send_message`/`send_message_with_reminder` | `session.send` | different control flow: jcode fires + separately awaits `MessageAccepted`; freecode resolves with full `TurnResult` directly (or `{queued:true}`) — real translation needed | todo |
-| `cancel` | `session.stop` | close | todo |
-| `compact` | `session.compact` | close | todo |
-| `rename_session` | — | **gap**, no freecode method | todo — decide: add IPC method, or cut |
-| `set_model` | `config.setCurrentModel` | per-process not per-session in freecode | todo |
-| `list_models` | `models.list` | close | todo |
-| `get_history` | `session.tree` (previews only, not full messages) | real translation needed | todo |
-| `rewind` | `session.rewind` | `message_index` vs `entryId` shape differs | todo |
+"Desktop" = production call sites, all in `harness.rs` unless noted. A row
+with 0 is still part of `JcodeClient`'s public surface, so the Phase 2 stub
+needs its signature to compile; it never needs a real body.
+
+| jcode_sdk | Desktop | freecode | Shape | Status |
+|---|---|---|---|---|
+| `connect` | 5 | spawn `apps/core` + open stdio | new transport | todo |
+| `connect_with` | 0 | — | — | todo — signature only |
+| `create_session` | 2 | `session.start` | `working_dir`→`projectPath` | todo |
+| `create_session_with_options` | 0 | `session.start` | no `system_prompt` override in freecode | todo — signature only |
+| `attach_session` | 3 | `session.resume` | close | todo |
+| `detach_session` | 2 | — | freecode has no attach state; no-op | todo |
+| `list_sessions_limited` | 1 | `session.list` | no `limit` param on freecode — truncate in shim | todo |
+| `list_sessions` | 0 | `session.list` | — | todo — signature only |
+| `archive_session` | 0 | `session.archive` | — | todo — signature only |
+| `fork_session` | 2 | `session.fork` | close | todo |
+| `transfer_session` | 1 | — | **gap** (move a session between daemons) | todo — decide: error or cut |
+| `send_message_with_reminder` | 1 | `session.send` | jcode fires, then the harness waits for `MessageAccepted` on the event stream; freecode's `session.send` streams and resolves with the turn. Shim emits a synthetic `MessageAccepted` first | todo |
+| `send_message` | 0 (tests only) | `session.send` | — | todo — signature only |
+| `send_system_reminder` | 2 | — | **gap**; closest is a `synthetic: "context"` message, not exposed over IPC | todo — decide |
+| `soft_interrupt_with_images` | 1 | `session.send` `streamingBehavior: "steer"` | images not supported in freecode's steer | todo |
+| `cancel` | 14* | `session.stop` | close | todo |
+| `compact` | 1 | `session.compact` | close | todo |
+| `rename_session` | 2 | — | **gap**, no freecode method | todo — decide: add IPC method, or cut |
+| `set_session_saved` | 2 | — | **gap** (pin/save a session) | todo — decide |
+| `set_model` | 2 | `config.setCurrentModel` | per-process not per-session in freecode | todo |
+| `set_reasoning_effort` | 2 (+1 `managed_cloud_parity.rs`) | — | **gap**, no per-session effort IPC | todo — decide |
+| `list_models` | 0 | `models.list` | models reach desktop through `RuntimeInfo.routes`, not this | todo — signature only |
+| `get_runtime_info` | 2 | `config.get` + `models.list` | must assemble `RuntimeInfo { provider, model, reasoning_effort, auth_method, routes: Vec<ModelRouteInfo> }` | todo |
+| `get_history_with_images` | 1 | `session.tree` (previews only) | needs full messages as `HistoryMessage` + `RenderedImage` — likely a new IPC method | todo |
+| `get_history` | 0 | — | — | todo — signature only |
+| `rewind` | 1 | `session.rewind` | `message_index` vs `entryId` | todo |
+| `rewind_undo` | 1 | — | **gap** | todo — decide |
+| `events` / `next_timeout` / `is_closed` | 1 / 1 / 3* | the `session.send` stream | event-stream plumbing | todo |
+| `supports` | 2 | — | stub to "everything the shim implements" | todo |
+| `launch` / `ensure_runtime` | 6* | spawn `apps/core` | jcode launches its own daemon; shim spawns core instead | todo |
+
+\* generic method name; count may include unrelated calls.
 
 ## Streaming events (jcode `ApiEvent` → freecode `StreamEvent`)
 
-| jcode_sdk | freecode | Shape | Status |
-|---|---|---|---|
-| `TextDelta`/`TextReplace`/`TextDone` | `text_delta` / `text` | jcode replaces-by-message_id; freecode is pure delta+final — translation logic needed | todo |
-| `ReasoningDelta`/`ReasoningDone` | `thinking_delta` / `thinking` | close | todo |
-| `ToolStart`/`ToolInputDelta`/`ToolExec`/`ToolDone` | `tool_start`/`tool_output`/`tool_complete` | freecode has no `ToolInputDelta` equivalent — drop or batch | todo |
-| `TokenUsage` | `usage_totals` | field rename only | todo |
-| `TurnDone`/`TurnStopped` | `done` | `stop_reason`/`stop_message` have no direct freecode fields | todo |
-| `PermissionRequest` | `permission_asked` | close | todo |
-| `Error` | `error` / `session.error` | close | todo |
-| `MessageAccepted` | — | no equivalent — freecode's `session.send` just resolves; drop this wait-for-accept pattern in the shim | cut |
-| `Compacted` | `compaction_complete` | close | todo |
-| `SessionRenamed` | — | **gap** | todo — tied to `rename_session` decision above |
+"Desktop" = production match sites outside the `event_session_id` routing
+match. Ordered by use.
+
+| jcode_sdk | Desktop | freecode | Shape | Status |
+|---|---|---|---|---|
+| `SessionStatus` | 39 | — (turn state is implicit in the stream) | shim derives it: `status` is one of `idle`/`running`/`streaming`/`thinking`/`busy`/`compacting`/`stopped`/`error` from the event flow | todo |
+| `TextDelta` | 34 | `text_delta` | close | todo |
+| `TurnDone` | 22 | `done` | close | todo |
+| `RuntimeInfo` | 17 | `config.get` + `models.list` | assembled by the shim (see `get_runtime_info`) | todo |
+| `Error` | 17 | `error` / `session.error` | close | todo |
+| `ReasoningDelta` | 16 | `thinking_delta` | close | todo |
+| `ToolStart` | 13 | `tool_start` | close | todo |
+| `MessageAccepted` | 12 | — | **synthesized by the shim** when `session.send` is accepted; the harness's submit flow waits on it (`harness.rs`, `harness_recovery.rs`). Was wrongly `cut` | todo |
+| `ToolDone` | 11 | `tool_complete` | close | todo |
+| `TurnStopped` | 10 | `done` / `session.stop` | `TurnStopReason` (`Interrupted`/`Failure`/`Crash`/`LimitReached`/`ProviderGuardrail`/`Unknown`) needs mapping from freecode's stop paths | todo |
+| `ToolInputDelta` | 9 | — | freecode does not stream tool input; emit nothing | todo |
+| `ModelInfo` | 8 | `config.get` | sent after attach and on model change | todo |
+| `TokenUsage` | 6 | `usage_totals` | field rename | todo |
+| `ConnectionPhase` | 6 | — | `connecting`/`connected`/`disconnected`, from the shim's own child-process state | todo |
+| `SidePanelState` | 4 | — | **gap** (jcode side panel pages) | todo — decide: cut |
+| `ReasoningDone` | 4 | `thinking` | close | todo |
+| `SessionRenamed` | 3 | — | **gap** | todo — tied to `rename_session` |
+| `KvCacheMiss` | 3 | `cache_status` (miss attribution) | real translation | todo |
+| `BackgroundProgress` | 3 | `shell_start`/`shell_output`/`shell_exit`, `agent_*` | different model (per task bar) | todo — decide |
+| `ToolExec` | 2 | `tool_output` | close | todo |
+| `SidePaneImages` | 2 | — | **gap** | todo — decide: cut |
+| `RuntimeCommandResult` | 2 | — | built by the harness from `runtime_command`'s reply | todo — follows `runtime_command` |
+| `SessionRecovery`, `SessionForked`, `Attached`, `AppletState` | 1 each | — | | todo — decide |
+| `PermissionRequest` | 1 (sound only) | `permission_asked` | **nobody answers it** — see Phase 1 finding 2 | todo — decide |
+| `Compacted` | 0 | `compaction_complete` | routed, never consumed | cut |
+| `TextReplace` / `TextDone` | 0 | — | never matched | cut |
 
 ## No freecode equivalent — explicit scope decision required (Phase 5 of parent plan)
 
@@ -171,17 +277,50 @@ assumption until decided: **cut for v1**.
 
 | jcode_sdk surface | What it does | Status |
 |---|---|---|
-| `connect_ssh`/`SharedSshTransport`/`shared_ssh_transport` | SSH remote machines | cut |
-| `global_events`/`GlobalEventStream`/`GlobalEventsOptions` | fan-in across all sessions, background discovery | cut |
-| `launch`/`LaunchOptions`/`LaunchedInstance`/`ensure_runtime` | jcode's self-managed daemon launch/instance ownership | cut |
-| `set_api_key`/`clear_api_key`/`notify_auth_changed`/`invalidate_usage` | OAuth-reload, usage-reset invalidation (partial overlap: freecode has `config.setApiKey`) | todo — partial |
-| `configure_tools`/`list_tools`/`submit_tool_result`/custom `ToolCall` event | client-supplied custom tools | cut — freecode's tool system is entirely server-side |
-| `applet_action`/`close_applet` | jcode's agent-applet UI primitive | cut |
-| `todo_state`/`ack_todo_follow_up` | freecode has `TodoItem`/`todowrite` internally but no IPC exposing it to a frontend | todo — needs new IPC method if wanted |
-| `background_tool`/`background_tool_result` | freecode's background shells (`shells.*`) are a different model (named shells, not move-current-call-to-background) | cut — or UI adapts to freecode's shell model |
-| `runtime_command`/`get_runtime_info` | closest is `config.get`/`context.stats`, not a real match | cut |
-| `read_file`/`find_files`/`search_text`/`file_status` | freecode's `read`/`glob`/`grep` are agent tools, not IPC methods a frontend calls directly | todo — add IPC methods, or route through `tools.call` |
-| `soft_interrupt*`/`cancel_soft_interrupt*` | related to freecode's steering (`streamingBehavior: "steer"`) but not the same shape (queued+cancelable-by-id vs fire-and-forget) | todo — translation, not a gap |
+Desktop call counts from the Phase 1 audit. A `cut` row with callers still
+needs a stub that returns a clean error, so the harness compiles and its
+UI path fails visibly instead of hanging.
+
+| jcode_sdk surface | Desktop | What it does | Status |
+|---|---|---|---|
+| `connect_ssh`/`SharedSshTransport`/`shared_ssh_transport` | referenced in `harness_transport.rs`, `managed_cloud.rs` | SSH remote machines, managed cloud | cut — stub returns error |
+| `global_events`/`GlobalEventStream`/`GlobalEventsOptions` | 0 | fan-in across all sessions, background discovery | cut |
+| `launch`/`LaunchOptions`/`LaunchedInstance`/`ensure_runtime` | see session table | jcode's self-managed daemon launch/instance ownership | todo — becomes "spawn `apps/core`" |
+| `set_api_key` / `notify_auth_changed` / `invalidate_usage` | 1 / 2 / 1 | OAuth-reload, usage-reset invalidation (partial overlap: freecode has `config.setApiKey`) | todo — partial |
+| `clear_api_key` | 0 | | cut |
+| `configure_tools`/`list_tools`/`submit_tool_result`/custom `ToolCall` event | 0 | client-supplied custom tools | cut — freecode's tool system is entirely server-side |
+| `applet_action` / `close_applet` | 1 / 1 | jcode's agent-applet UI primitive | cut — stub returns error |
+| `todo_state` / `ack_todo_follow_up` | 1 / 1 | freecode has `TodoItem`/`todowrite` internally but no IPC exposing it to a frontend | todo — needs new IPC method if wanted |
+| `background_tool` | 1 | move the running tool call to the background | cut — freecode's background shells (`shells.*`) are a different model |
+| `background_tool_result` | 0 | | cut |
+| `runtime_command` | 1 | slash-style commands run by the daemon (`RuntimeCommand::ServerReload`, `Remote`, …) | cut — stub returns error |
+| `read_file`/`find_files`/`search_text`/`file_status` | 0 | | cut — no desktop callers; their reply events are only routed |
+| `soft_interrupt_with_images` | 1 | | see session table |
+| other `soft_interrupt*`/`cancel_soft_interrupt*` | 0 | | cut |
+| `restore_session`, `peek_session`, `set_retention_policy`, `ping`, `respond_to_permission`, `get_history`, `send_message` | 0 | missing from the first pass; no production callers | todo — signature only |
+
+## Beyond jcode-sdk — coupling a `JcodeClient` shim cannot reach
+
+The first pass assumed every desktop crate depends only on `jcode-sdk`. The
+`Cargo.toml`s path-depend on **nine** crates in the sibling `jcode`
+checkout. Files counted are production `.rs` files that import the crate.
+
+| Crate | Desktop files | What desktop uses it for | Keep as path dep? |
+|---|---|---|---|
+| `jcode-sdk` | 81 (70 UI, 10 harness, 1 accounts) | client + types; UI uses types only | replaced by the shim |
+| `jcode-base` | 27 (24 UI, 3 harness) | **Jcode's on-disk session store** (`session::{Session, session_path, render_messages*, session_presence, streaming_session_ids}`), Jcode config/storage dirs, auth & account pools (`auth::*`, `account_login`, `subscription_api`), usage resets, pricing, telemetry, todo types, voice intents | **No** for sessions/config/auth — these read Jcode's state, not freecode's. The session reads are the biggest gap after the client: resume, persisted history and content search need a freecode-backed replacement |
+| `jcode-applet-types` | 10 | applet schema/types | yes (types only; applets are `cut`) |
+| `jcode-provider-core` | — | model display names, default model ids, reasoning-effort inference | yes (pure helpers) |
+| `jcode-render-core` | — | reasoning-line markup | yes (pure) |
+| `jcode-fuzzy` | — | fuzzy matching | yes (pure) |
+| `jcode-core` | — | session name/icon from id | yes (pure) |
+| `jcode-selfdev-types` | — | `desktop_repo_root` | yes |
+| `jcode-voice` | — | dictation | yes, separate feature |
+
+A further dependency (not a crate): **`sdk::todo` / `jcode_todo_policy`**
+(auto-poke messages, todo gate digests) mirrors freecode's own auto-poke
+(`agent/signals/`). The desktop renders Jcode's poke messages; freecode's
+`synthetic: "auto_poke"` messages will look different. Fold into Phase 6.
 
 ## How to use this doc
 
