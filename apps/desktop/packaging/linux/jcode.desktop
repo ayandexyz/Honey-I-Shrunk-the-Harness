@@ -1,9 +1,10 @@
 [Desktop Entry]
 Type=Application
-Name=Jcode
-Comment=Native desktop client for Jcode
+Name=Honey
+Comment=Native desktop client for freecode
 Exec=jcode-desktop
 Icon=jcode
 Terminal=false
 Categories=Development;Utility;
 StartupNotify=true
+StartupWMClass=honey

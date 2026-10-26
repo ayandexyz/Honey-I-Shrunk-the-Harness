@@ -222,7 +222,8 @@ impl Render for HostFallback {
 /// Windows behavior while the tab row shares the caption row (#5).
 fn titlebar_options() -> TitlebarOptions {
     TitlebarOptions {
-        title: Some("Jcode".into()),
+        // freecode: the desktop frontend is branded Honey.
+        title: Some("Honey".into()),
         appears_transparent: true,
         traffic_light_position: Some(Point {
             x: px(16.0),

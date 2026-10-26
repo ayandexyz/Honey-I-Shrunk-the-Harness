@@ -274,9 +274,24 @@ never comes from upstream is this `jcode-sdk` shim.
 - **Pulling an unmerged upstream PR** (done once already for PR #12): add
   the contributor's fork as a remote, `git subtree pull
   --prefix=apps/desktop <remote> <branch>`.
-- **Don't rename/rebrand** the binary, bundle id, or window title away from
-  "Jcode" casually — product decision, not a refactor; keep upstream's
-  LICENSE/copyright notice regardless (MIT requires it).
+- **Branding — the desktop is "Honey" (user decision 2026-10-26), identity
+  only.** Renamed: window title (`src/main.rs` `titlebar_options`), the
+  Wayland/X11 app id (`jcode-desktop-ui/src/lib.rs` `APP_ID` = `honey`, so
+  launchers and window rules see `honey`), the Linux launcher entry
+  (`packaging/linux/jcode.desktop`: `Name`, `Comment`, `StartupWMClass`),
+  and the macOS `CFBundleName`/`CFBundleDisplayName`. Deliberately **not**
+  renamed: the ~200 other "Jcode" string literals in 43 upstream files
+  (a find-and-replace would conflict with most `subtree pull`s that touch
+  UI text; about a quarter are Jcode-account/runtime wording Phase 5 will
+  replace anyway), the binary/package name `jcode-desktop`, internal paths
+  and state dirs, the icon (no Honey asset yet), and the macOS bundle
+  identifier `dev.solosystems.jcode.desktop` (upstream's domain — a real
+  Honey build should use one the owner controls). If full rebranding is
+  wanted later, prefer a build-time rewrite (like the `apps/jcode`
+  overlay) over editing the subtree. Upstream's own acceptance scripts
+  (`scripts/accept-*.py`) find the window by class `^jcode-desktop$` and
+  no longer match. Keep upstream's LICENSE/copyright notice regardless
+  (MIT requires it).
 - **Build + run**: `pnpm desktop` from the repo root (`scripts/desktop.sh`)
   — regenerates the `apps/jcode` overlay (`scripts/desktop-overlay.sh`; needs
   `apps/jcode-upstream` → your jcode checkout, gitignored and

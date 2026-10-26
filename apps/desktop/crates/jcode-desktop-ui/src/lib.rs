@@ -78,7 +78,9 @@ pub(crate) fn init_harness() {
     jcode_desktop_harness::set_client_version(build_info::VERSION);
 }
 
-pub const APP_ID: &str = "jcode-desktop";
+// freecode: the desktop frontend is branded Honey; window managers and
+// launchers group and label its windows by this id.
+pub const APP_ID: &str = "honey";
 
 /// `jcode-desktop --restart-all-worker`: the detached process behind
 /// `/restart-all`. Returns `None` for every other launch.

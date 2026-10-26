@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
   <key>CFBundleDevelopmentRegion</key><string>en</string>
-  <key>CFBundleDisplayName</key><string>Jcode</string>
+  <key>CFBundleDisplayName</key><string>Honey</string>
   <key>CFBundleExecutable</key><string>jcode-desktop</string>
   <key>CFBundleIconFile</key><string>Jcode</string>
   <key>CFBundleIconName</key><string>Jcode</string>
   <key>CFBundleIdentifier</key><string>dev.solosystems.jcode.desktop</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-  <key>CFBundleName</key><string>Jcode</string>
+  <key>CFBundleName</key><string>Honey</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>__VERSION__</string>
   <key>CFBundleVersion</key><string>__BUILD__</string>
