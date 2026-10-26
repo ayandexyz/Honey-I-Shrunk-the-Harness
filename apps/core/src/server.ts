@@ -2059,7 +2059,9 @@ export async function startServer() {
   });
 
   let shuttingDown = false;
-  const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
+  const shutdown = async (
+    signal: NodeJS.Signals | "stdin-closed",
+  ): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
     markProcessExiting();
@@ -2078,7 +2080,7 @@ export async function startServer() {
     hookSettings.dispose();
     disposeAllShellRegistries();
     disposeLspServers();
-    process.exit(signal === "SIGINT" ? 130 : 143);
+    process.exit(signal === "SIGINT" ? 130 : signal === "SIGTERM" ? 143 : 0);
   };
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
@@ -2116,15 +2118,20 @@ export async function startServer() {
 
   process.stdin.setEncoding("utf-8");
 
+  // Requests still being answered, so stdin EOF can let them finish first.
+  const inFlight = new Set<Promise<void>>();
+
   const dispatchRequest = (request: JsonRpcRequest): void => {
-    void handleRequest(request)
+    const done = handleRequest(request)
       .then((response) => {
         process.stdout.write(JSON.stringify(response) + "\n");
       })
       .catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
         process.stderr.write(`Request error: ${message}\n`);
-      });
+      })
+      .finally(() => inFlight.delete(done));
+    inFlight.add(done);
   };
 
   process.stdin.on("data", (chunk: string) => {
@@ -2152,6 +2159,13 @@ export async function startServer() {
         process.stderr.write(`Final parse error: ${e}\n`);
       }
     }
+    // stdin is the only channel a client has to this process, so EOF means
+    // no client is left: the frontend exited, crashed, or was killed. Signals
+    // are not enough on their own — a parent killed with SIGKILL sends none,
+    // and an orphaned core otherwise runs forever, holding its parent's
+    // inherited stderr pipe open. Requests already sent (a piped one-shot
+    // `echo '{…}' | freecode serve`) are answered before exiting.
+    void Promise.allSettled([...inFlight]).then(() => shutdown("stdin-closed"));
   });
 }
 

@@ -133,12 +133,12 @@ pub struct EventStream {
 impl EventStream {
     /// Block for the next event. `None` once the connection closes.
     pub fn next(&self) -> Option<ApiEvent> {
-        todo!("jcode-sdk shim: next")
+        self.rx.recv().ok()
     }
 
     /// Block for the next event, up to `timeout`.
     pub fn next_timeout(&self, timeout: Duration) -> Option<ApiEvent> {
-        todo!("jcode-sdk shim: next_timeout")
+        self.rx.recv_timeout(timeout).ok()
     }
 }
 
@@ -234,24 +234,24 @@ fn stop_global_stream(control: &GlobalEventControl, error: Option<Error>) {
     }
 
 /// A live subscription: (id, session filter, sink).
-type Subscriber = (u64, Option<String>, Sender<ApiEvent>);
+pub(crate) type Subscriber = (u64, Option<String>, Sender<ApiEvent>);
 
-struct Inner {
-    writer: Mutex<Box<dyn Write + Send>>,
-    /// Requests waiting for their `reply_to` frame.
-    pending: Mutex<HashMap<u64, Sender<ServerFrame>>>,
+pub(crate) struct Inner {
+    pub(crate) writer: Mutex<Box<dyn Write + Send>>,
+    /// Requests waiting for their JSON-RPC reply, by id.
+    pub(crate) pending: Mutex<HashMap<u64, Sender<crate::freecode::Reply>>>,
     /// Live subscriptions: (id, session filter, sink).
-    subscribers: Mutex<Vec<Subscriber>>,
-    next_id: AtomicU64,
-    next_sub: AtomicU64,
-    closed: AtomicBool,
-    request_timeout: Option<Duration>,
-    socket_path: std::path::PathBuf,
-    client_name: String,
-    native_socket: bool,
-    ssh_process: Option<Arc<SshProcess>>,
-    shutdown: Option<Arc<dyn Fn() + Send + Sync>>,
-    client_handles: AtomicUsize,
+    pub(crate) subscribers: Mutex<Vec<Subscriber>>,
+    pub(crate) next_id: AtomicU64,
+    pub(crate) next_sub: AtomicU64,
+    pub(crate) closed: AtomicBool,
+    pub(crate) request_timeout: Option<Duration>,
+    pub(crate) socket_path: std::path::PathBuf,
+    pub(crate) client_name: String,
+    pub(crate) native_socket: bool,
+    pub(crate) ssh_process: Option<Arc<SshProcess>>,
+    pub(crate) shutdown: Option<Arc<dyn Fn() + Send + Sync>>,
+    pub(crate) client_handles: AtomicUsize,
 }
 
 /// Connected harness client.
@@ -320,7 +320,8 @@ impl JcodeClient {
     /// Its state and sockets are isolated from the user's interactive jcode.
     /// The last clone of this client shuts the instance down through Drop.
     pub fn launch(options: LaunchOptions) -> Result<Self> {
-        todo!("jcode-sdk shim: launch")
+        // freecode: there is no private instance to own; use the shared core.
+        Self::connect(ConnectOptions::default())
     }
 
     /// Connect to the jcode running on this machine.
@@ -328,7 +329,16 @@ impl JcodeClient {
     /// Use this to automate the user's own jcode: a desktop app, an editor
     /// plugin, a status dashboard. It shares the user's live sessions.
     pub fn connect(options: ConnectOptions) -> Result<Self> {
-        todo!("jcode-sdk shim: connect")
+        let inner = crate::freecode::shared_core(options.request_timeout)?;
+        inner.client_handles.fetch_add(1, Ordering::Relaxed);
+        Ok(Self {
+            inner,
+            ssh_options: None,
+            instance: None,
+            instance_home: None,
+            server: "freecode-core".to_string(),
+            capabilities: Vec::new(),
+        })
     }
 
     /// Connect over a caller-supplied transport. The seam tests use.
@@ -348,7 +358,7 @@ impl JcodeClient {
 
     /// The socket this client is talking to. Empty for SSH connections.
     pub fn socket_path(&self) -> &std::path::Path {
-        todo!("jcode-sdk shim: socket_path")
+        &self.inner.socket_path
     }
 
     /// Whether the server advertises a capability.
@@ -358,7 +368,8 @@ impl JcodeClient {
     /// current bridge: it never issues permission prompts, so a client that
     /// waits for one waits forever. Check rather than assume.
     pub fn supports(&self, capability: &str) -> bool {
-        todo!("jcode-sdk shim: supports")
+        // freecode advertises no Jcode capabilities; gated features stay off.
+        self.capabilities.iter().any(|c| c == capability)
     }
 
     /// Send a raw request and wait for its reply frame.
@@ -397,7 +408,16 @@ impl JcodeClient {
     /// Frames that arrive between reads are buffered, so a consumer that does
     /// slow work in the loop body does not silently drop deltas.
     pub fn events(&self, session_id: Option<&str>) -> EventStream {
-        todo!("jcode-sdk shim: events")
+        let (tx, rx) = channel();
+        let id = self.inner.next_sub.fetch_add(1, Ordering::Relaxed);
+        if let Ok(mut subs) = self.inner.subscribers.lock() {
+            subs.push((id, session_id.map(str::to_string), tx));
+        }
+        EventStream {
+            rx,
+            id,
+            inner: Arc::clone(&self.inner),
+        }
     }
 
     /// Stream events from all persisted and newly-created sessions.
@@ -413,12 +433,12 @@ impl JcodeClient {
     // --- Curated surface -----------------------------------------------------
 
     pub fn list_sessions(&self) -> Result<Vec<SessionInfo>> {
-        todo!("jcode-sdk shim: list_sessions")
+        crate::freecode::list_sessions(&self.inner, None)
     }
 
     /// List only the newest persisted sessions, for bounded dashboard startup.
     pub fn list_sessions_limited(&self, limit: u32) -> Result<Vec<SessionInfo>> {
-        todo!("jcode-sdk shim: list_sessions_limited")
+        crate::freecode::list_sessions(&self.inner, Some(limit))
     }
 
     /// Reversibly hide a session from the default list. Its transcript remains
@@ -796,7 +816,7 @@ impl JcodeClient {
     }
 
     pub fn ping(&self) -> Result<()> {
-        todo!("jcode-sdk shim: ping")
+        crate::freecode::call(&self.inner, "config.get", serde_json::json!({})).map(|_| ())
     }
 
     /// Send a message and collect the assistant reply until the turn ends.
@@ -809,7 +829,7 @@ impl JcodeClient {
 
     /// Whether the connection has been closed or lost.
     pub fn is_closed(&self) -> bool {
-        todo!("jcode-sdk shim: is_closed")
+        self.inner.closed.load(Ordering::Acquire)
     }
 }
 
@@ -853,9 +873,42 @@ fn spawn_reader(inner: Arc<Inner>, mut reader: Box<dyn BufRead + Send>) {
     }
 
 /// The session an event belongs to, when it names one.
-fn event_session(event: &ApiEvent) -> Option<&str> {
-        todo!("jcode-sdk shim: event_session")
+pub(crate) fn event_session(event: &ApiEvent) -> Option<&str> {
+    use ApiEvent::*;
+    match event {
+        TextDelta { session_id, .. }
+        | TextDone { session_id, .. }
+        | TextReplace { session_id, .. }
+        | ReasoningDelta { session_id, .. }
+        | ReasoningDone { session_id, .. }
+        | ToolStart { session_id, .. }
+        | ToolInputDelta { session_id, .. }
+        | ToolExec { session_id, .. }
+        | ToolDone { session_id, .. }
+        | ToolCall { session_id, .. }
+        | Tools { session_id, .. }
+        | SidePanelState { session_id, .. }
+        | TokenUsage { session_id, .. }
+        | KvCacheMiss { session_id, .. }
+        | TurnDone { session_id, .. }
+        | SoftInterruptInjected { session_id, .. }
+        | TurnStopped { session_id, .. }
+        | BackgroundProgress { session_id, .. }
+        | MessageAccepted { session_id, .. }
+        | PermissionRequest { session_id, .. }
+        | SessionStatus { session_id, .. }
+        | SessionRecovery { session_id, .. }
+        | ModelInfo { session_id, .. }
+        | RuntimeInfo { session_id, .. }
+        | ConnectionPhase { session_id, .. }
+        | Models { session_id, .. }
+        | Compacted { session_id, .. }
+        | SessionRenamed { session_id, .. }
+        | History { session_id, .. } => Some(session_id.as_str()),
+        Attached { session } => Some(session.session_id.as_str()),
+        _ => None,
     }
+}
 
 fn closed_error() -> Error {
         todo!("jcode-sdk shim: closed_error")

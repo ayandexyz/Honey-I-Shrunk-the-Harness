@@ -140,6 +140,7 @@ left out.
 | `FREECODE_NO_UPDATE` | off | `1` / `true` / `yes` hides the "new version available" notice. |
 | `FREECODE_IDLE_NUDGE_TOKENS` | `100000` | Context size above which the TUI warns that an idle gap let the prompt cache expire. `0` disables. |
 | `FREECODE_INSTALL_DIR` | `~/.local/bin` | Where `install.sh` / `uninstall.sh` put the launcher. |
+| `FREECODE_CORE` | discovered | Desktop app (`apps/desktop` via the `jcode-sdk` shim): which core to spawn. A `.js` path runs under `node`; anything else is run as `<path> serve`. Unset: the repo's `apps/core/dist/server.js` when the desktop binary is inside the monorepo, else `freecode` on `PATH`. |
 | `FREECODE_DEBUG` | off | Any value turns on debug logging (and echoes MCP servers' stderr). |
 
 ## Evals (`pnpm eval`)

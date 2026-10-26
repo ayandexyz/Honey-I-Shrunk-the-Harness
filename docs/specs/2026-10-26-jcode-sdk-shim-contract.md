@@ -105,9 +105,60 @@ never comes from upstream is this `jcode-sdk` shim.
      already found (permission replies, `MessageAccepted`, `jcode_base` disk
      reads); the harness tests still compile, against Jcode's frame protocol
      (finding 6).
-3. Wire the transport: `JcodeClient::connect` spawns/attaches `apps/core`,
-   speaks JSON-RPC over stdio (reuse freecode's existing protocol, not a new
-   one).
+3. **✅ COMPLETE 2026-10-26 (branch `phase-2-desktop`) — the shim speaks
+   freecode JSON-RPC to a real `apps/core`; the desktop sidebar lists
+   freecode's sessions.**
+   - **Transport** `apps/desktop-shim/jcode-sdk/src/freecode.rs`: core is a
+     child process, newline-delimited JSON-RPC 2.0 on its stdio; a reader
+     thread routes replies to callers by `id` and stream events (lines with
+     `type`) to `EventStream` subscribers, filtered by session. The event
+     *translation* (`translate_event`) returns `None` for everything —
+     that table is Phase 4.
+   - **One shared core per desktop process.** The harness opens a fresh
+     `JcodeClient` per session-list refresh (every few seconds), so a core
+     per client would be a Node boot per refresh. Clients are handles on a
+     process-global `Inner`; a dead core is respawned by the next `connect`.
+   - **Finding core** (`locate_core`): `FREECODE_CORE` (`.js` → `node`,
+     else `<bin> serve`) → the repo's `apps/core/dist/server.js` when the
+     desktop binary is inside the monorepo (dev: core and desktop change
+     together, as the TUI does) → `freecode` on `PATH`.
+   - **Done rows**: `connect`, `launch` (= connect to the shared core),
+     `ensure_runtime` (only checks core can be found — core is spawned on
+     first connect), `socket_accepts` (`false`, so the harness never tries
+     to revive a Jcode daemon), `events`/`next`/`next_timeout`,
+     `is_closed`, `supports` (no capabilities advertised), `ping`
+     (`config.get`), `list_sessions`/`list_sessions_limited`
+     (`session.list`, every project, newest first, truncated in the shim).
+     Session mapping: `id`→`session_id`, `projectPath`→`working_dir`,
+     `archived` status→`archived: true`, `updatedAt`/`lastTurnAt`→
+     `updated_at_ms`/`last_active_at_ms`; `status` is always `idle` (freecode's
+     status is lifecycle, jcode's is runtime activity).
+   - **Core lifetime — the one `apps/core` change** (`server.ts`): core now
+     shuts down gracefully (exit 0) when stdin reaches EOF, after answering
+     in-flight requests. `PR_SET_PDEATHSIG` alone was not enough: it fires
+     when the spawning *thread* exits (so core is spawned from its own
+     long-lived thread), and a core whose parent died could still survive —
+     observed: an orphan from a finished test held the test's stderr pipe
+     for 8 minutes. EOF covers every way a client goes away, including
+     SIGKILL. `serve` is stdio-only (web/mobile use `startWebServer`), so
+     EOF really means no client. Jcode never faced this: its daemon is
+     spawned *detached* and meant to outlive the desktop, and private
+     instances are stopped by `Drop` (SIGTERM → 3s → SIGKILL).
+   - **Fixed from Phase 2**: `user_jcode_home`, `home_dir` and
+     `user_app_config_dir` are pure path helpers, not daemon code; their
+     upstream bodies are restored (startup panicked on the first).
+   - **Verified**: shim unit tests (2) + live test
+     `tests/freecode_core.rs` (`--ignored`: connect, ping, list, second client
+     reuses the core); the desktop built and run in an isolated instance
+     (own `XDG_RUNTIME_DIR`) showed freecode sessions grouped by project, one
+     core for the whole run (`jcode-sdk shim: started freecode core pid=…` in
+     the desktop log), and that core exited on its own after the desktop was
+     SIGKILLed; `echo '{…session.list…}' | tsx apps/core/src/server.ts`
+     answers then exits 0.
+   - **Still open, by design**: the "New session" panel sits at "Starting
+     session" — `create_session` and the event translation are Phase 4.
+     The installed release (0.47.1) predates the EOF fix; until the next
+     release, only the repo core shuts down on EOF.
 4. Map session + turn methods (the bulk of the work — tool-call/event
    shapes will need renaming, not just passthrough).
 5. Decide + implement the SSH/managed-cloud/accounts gap (stub vs. hide).
@@ -219,9 +270,9 @@ Not a method-by-method mapping — the whole transport layer is a rewrite.
 
 | Item | jcode-sdk | freecode | Status |
 |---|---|---|---|
-| Connection | `UnixTransport` — Unix domain socket, length-prefixed binary frames, `Hello`/`HelloOk` handshake with capability negotiation | `apps/core` spawned as a child process, newline-delimited JSON over stdin/stdout, no handshake | todo |
-| Request/reply correlation | `reply_to` field on frames | JSON-RPC `id` | todo |
-| Capability checks | `JcodeClient.capabilities`/`.supports()` | no equivalent | todo — stub to "everything supported" or strip call sites |
+| Connection | `UnixTransport` — Unix domain socket, length-prefixed binary frames, `Hello`/`HelloOk` handshake with capability negotiation | `apps/core` spawned as a child process, newline-delimited JSON over stdin/stdout, no handshake | done — child process, JSON-RPC over stdio |
+| Request/reply correlation | `reply_to` field on frames | JSON-RPC `id` | done |
+| Capability checks | `JcodeClient.capabilities`/`.supports()` | no equivalent | done — `supports` returns false (no capabilities advertised), so gated features stay off |
 
 ## Session + turn methods
 
@@ -231,14 +282,14 @@ needs its signature to compile; it never needs a real body.
 
 | jcode_sdk | Desktop | freecode | Shape | Status |
 |---|---|---|---|---|
-| `connect` | 5 | spawn `apps/core` + open stdio | new transport | stub |
+| `connect` | 5 | spawn `apps/core` + open stdio | new transport | done |
 | `connect_with` | 0 | — | — | stub — signature only |
 | `create_session` | 2 | `session.start` | `working_dir`→`projectPath` | stub |
 | `create_session_with_options` | 0 | `session.start` | no `system_prompt` override in freecode | stub — signature only |
 | `attach_session` | 3 | `session.resume` | close | stub |
 | `detach_session` | 2 | — | freecode has no attach state; no-op | stub |
-| `list_sessions_limited` | 1 | `session.list` | no `limit` param on freecode — truncate in shim | stub |
-| `list_sessions` | 0 | `session.list` | — | stub — signature only |
+| `list_sessions_limited` | 1 | `session.list` | no `limit` param on freecode — truncate in shim | done |
+| `list_sessions` | 0 | `session.list` | — | done |
 | `archive_session` | 0 | `session.archive` | — | stub — signature only |
 | `fork_session` | 2 | `session.fork` | close | stub |
 | `transfer_session` | 1 | — | **gap** (move a session between daemons) | stub — decide: error or cut |
@@ -258,9 +309,9 @@ needs its signature to compile; it never needs a real body.
 | `get_history` | 0 | — | — | stub — signature only |
 | `rewind` | 1 | `session.rewind` | `message_index` vs `entryId` | stub |
 | `rewind_undo` | 1 | — | **gap** | stub — decide |
-| `events` / `next_timeout` / `is_closed` | 1 / 1 / 3* | the `session.send` stream | event-stream plumbing | stub |
-| `supports` | 2 | — | stub to "everything the shim implements" | stub |
-| `launch` / `ensure_runtime` | 6* | spawn `apps/core` | jcode launches its own daemon; shim spawns core instead | stub |
+| `events` / `next_timeout` / `is_closed` | 1 / 1 / 3* | the `session.send` stream | event-stream plumbing | done |
+| `supports` | 2 | — | stub to "everything the shim implements" | done |
+| `launch` / `ensure_runtime` | 6* | spawn `apps/core` | jcode launches its own daemon; shim spawns core instead | done |
 
 \* generic method name; count may include unrelated calls.
 

@@ -163,8 +163,10 @@ pub fn launch_instance(options: &LaunchOptions) -> Result<LaunchedInstance> {
 
 /// Resolve the user's normal jcode home before a private instance overrides it.
 pub fn user_jcode_home() -> PathBuf {
-        todo!("jcode-sdk shim: user_jcode_home")
-    }
+    std::env::var_os("JCODE_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home_dir().join(".jcode"))
+}
 
 /// Share rotating login records with an instance and copy mutable config.
 /// Returns the instance-relative paths which were inherited.
@@ -195,7 +197,8 @@ pub type Progress<'a> = dyn Fn(&str) + 'a;
 
 /// Whether anything is listening on a socket path.
 pub fn socket_accepts(path: &Path) -> bool {
-        todo!("jcode-sdk shim: socket_accepts")
+        // No Jcode daemon socket exists; the harness must never try to revive one.
+        false
     }
 
 /// Locate a sibling executable next to our own, falling back to `$PATH`.
@@ -209,7 +212,8 @@ fn sibling_exe_next_to(current: Option<&Path>, name: &str) -> PathBuf {
 
 /// Start the user's shared daemon and API bridge if necessary.
 pub fn ensure_runtime(options: &LaunchOptions, progress: &Progress<'_>) -> Result<()> {
-        todo!("jcode-sdk shim: ensure_runtime")
+        // freecode: core is spawned on first connect; only check it can be found.
+        crate::freecode::locate_core().map(|_| ())
     }
 
 fn spawn_detached(program: &Path, args: &[&str]) -> std::io::Result<()> {
@@ -302,13 +306,32 @@ fn stderr_suffix(stderr: &str) -> String {
     }
 
 fn home_dir() -> PathBuf {
-        todo!("jcode-sdk shim: home_dir")
-    }
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
 
 /// Resolve the user's platform jcode config directory.
 pub fn user_app_config_dir() -> PathBuf {
-        todo!("jcode-sdk shim: user_app_config_dir")
+    #[cfg(target_os = "macos")]
+    {
+        home_dir().join("Library/Application Support/jcode")
     }
+    #[cfg(target_os = "windows")]
+    {
+        std::env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home_dir().join("AppData/Roaming"))
+            .join("jcode")
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home_dir().join(".config"))
+            .join("jcode")
+    }
+}
 
 #[cfg(unix)]
 fn set_owner_only_dir(path: &Path) -> Result<()> {

@@ -144,6 +144,7 @@
 mod auth;
 mod client;
 pub mod collections;
+mod freecode;
 mod diagnostics;
 mod errors;
 mod launch;
