@@ -33,7 +33,9 @@ while [ $# -gt 0 ]; do
 done
 
 git remote get-url "$remote" >/dev/null 2>&1 || git remote add "$remote" "$url"
-git fetch -q "$remote" "$branch"
+# --no-tags: upstream tags share our desktop-v* names and must never be
+# pushed as ours.
+git fetch -q --no-tags "$remote" "$branch"
 
 # Where apps/desktop last synced: the newest subtree merge's split commit.
 last=$(git log --format=%b --grep="git-subtree-dir: apps/desktop" |
