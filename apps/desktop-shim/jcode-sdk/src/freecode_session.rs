@@ -1,0 +1,321 @@
+//! Session + turn methods over freecode core (Phase 4, spec "Session + turn
+//! methods"). `client.rs` keeps upstream's signatures and calls in here.
+
+use crate::client::{Inner, RuntimeInfo};
+use crate::errors::{Error, ErrorKind, Result};
+use crate::freecode::{call, publish, send_request, session_info};
+use crate::freecode_events::{failure, status};
+use jcode_harness_api::{ApiEvent, HistoryMessage, ModelRouteInfo, RenderedImage, SessionInfo};
+use serde_json::{Value, json};
+use std::sync::Arc;
+
+/// A method with no freecode equivalent yet: a clean error the harness
+/// already renders ("Failed to …"), never a panic that kills its worker.
+pub(crate) fn unsupported(what: &str) -> Error {
+    Error::new(
+        ErrorKind::Harness(jcode_harness_api::ErrorCode::UnknownRequest),
+        format!("{what} is not supported by freecode yet"),
+    )
+}
+
+pub(crate) fn create_session(inner: &Inner, working_dir: Option<String>) -> Result<SessionInfo> {
+    let mut params = json!({});
+    if let Some(dir) = &working_dir {
+        params["projectPath"] = json!(dir);
+    }
+    let started = call(inner, "session.start", params)?;
+    let id = started
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::new(ErrorKind::UnexpectedReply, "session.start: no sessionId"))?;
+    // Core's own title for a fresh session is "Session <id>"; leave it unset
+    // so the desktop shows its placeholder until the first turn names it.
+    session_info(&json!({ "id": id, "projectPath": working_dir }))
+}
+
+/// `session.resume` loads the session into core and returns its transcript,
+/// which is kept for the `get_history` call the harness makes right after.
+pub(crate) fn attach_session(inner: &Inner, session_id: &str) -> Result<SessionInfo> {
+    let resumed = call(inner, "session.resume", json!({ "sessionId": session_id }))?;
+    if let Ok(mut history) = inner.history.lock() {
+        history.insert(
+            session_id.to_string(),
+            resumed.get("messages").cloned().unwrap_or(Value::Null),
+        );
+    }
+    session_info(&json!({ "id": session_id }))
+}
+
+pub(crate) fn history(
+    inner: &Inner,
+    session_id: &str,
+) -> Result<(Vec<HistoryMessage>, Vec<RenderedImage>)> {
+    let cached = inner.history.lock().ok().and_then(|mut h| h.remove(session_id));
+    let messages = match cached {
+        Some(messages) => messages,
+        None => call(inner, "session.resume", json!({ "sessionId": session_id }))?
+            .get("messages")
+            .cloned()
+            .unwrap_or(Value::Null),
+    };
+    Ok((history_messages(&messages), Vec::new()))
+}
+
+/// Core's `SerializedMessage[]` → jcode rows. The desktop renders only user
+/// and assistant text, so tool parts are dropped, and harness-written user
+/// messages (auto-poke, notifications) are hidden — except a steer, which the
+/// user typed.
+fn history_messages(messages: &Value) -> Vec<HistoryMessage> {
+    let Some(messages) = messages.as_array() else {
+        return Vec::new();
+    };
+    messages
+        .iter()
+        .filter(|m| {
+            matches!(m.get("synthetic").and_then(Value::as_str), None | Some("steer"))
+        })
+        .filter_map(|m| {
+            let role = m.get("role").and_then(Value::as_str)?;
+            let content = m
+                .get("parts")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter(|p| matches!(p.get("type").and_then(Value::as_str), Some("text" | "code")))
+                .filter_map(|p| p.get("content").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n");
+            Some(HistoryMessage {
+                response_stats: None,
+                role: role.to_string(),
+                content,
+            })
+        })
+        .collect()
+}
+
+/// jcode's send is fire-and-forget: acceptance and the turn arrive as events.
+/// Core's `session.send` instead answers when the turn ends, so the request
+/// is left in flight and its reply only matters if it fails.
+pub(crate) fn send_message(
+    inner: &Arc<Inner>,
+    session_id: &str,
+    content: &str,
+    images: Vec<(String, String)>,
+) -> Result<()> {
+    let params = json!({
+        "sessionId": session_id,
+        "message": content,
+        "images": wire_images(images),
+    });
+    let reply = send_request(inner, "session.send", params)?;
+    if let Ok(mut states) = inner.sessions.lock() {
+        states.entry(session_id.to_string()).or_default().turn_open = true;
+    }
+    publish(
+        inner,
+        ApiEvent::MessageAccepted {
+            session_id: session_id.to_string(),
+        },
+        None,
+    );
+    publish(inner, status(session_id, "running"), None);
+
+    let inner = Arc::clone(inner);
+    let session_id = session_id.to_string();
+    std::thread::Builder::new()
+        .name("freecode-send".into())
+        .spawn(move || {
+            let Ok(Err(error)) = reply.recv() else {
+                return;
+            };
+            // `session.error` normally closed the turn already; only a turn
+            // nothing has closed gets a failure here.
+            let still_open = inner
+                .sessions
+                .lock()
+                .ok()
+                .and_then(|mut s| s.get_mut(&session_id).map(|s| std::mem::take(&mut s.turn_open)))
+                .unwrap_or(false);
+            if still_open {
+                for event in failure(&session_id, error.to_string()) {
+                    publish(&inner, event, Some(&session_id));
+                }
+            }
+        })
+        .map_err(|e| Error::new(ErrorKind::Transport, e.to_string()))?;
+    Ok(())
+}
+
+/// Steering: core delivers it into the running turn and answers at once.
+pub(crate) fn steer(
+    inner: &Inner,
+    session_id: &str,
+    content: &str,
+    images: Vec<(String, String)>,
+) -> Result<()> {
+    call(
+        inner,
+        "session.send",
+        json!({
+            "sessionId": session_id,
+            "message": content,
+            "images": wire_images(images),
+            "streamingBehavior": "steer",
+        }),
+    )
+    .map(|_| ())
+}
+
+/// jcode passes `(media_type, base64)` pairs.
+fn wire_images(images: Vec<(String, String)>) -> Value {
+    images
+        .into_iter()
+        .map(|(media_type, data)| json!({ "data": data, "mediaType": media_type }))
+        .collect()
+}
+
+pub(crate) fn cancel(inner: &Inner, session_id: &str) -> Result<()> {
+    if let Ok(mut states) = inner.sessions.lock() {
+        let state = states.entry(session_id.to_string()).or_default();
+        if state.turn_open {
+            state.cancel_requested = true;
+        }
+    }
+    call(inner, "session.stop", json!({ "sessionId": session_id })).map(|_| ())
+}
+
+pub(crate) fn fork_session(inner: &Inner, session_id: &str) -> Result<SessionInfo> {
+    let forked = call(inner, "session.fork", json!({ "sessionId": session_id }))?;
+    session_info(&forked)
+}
+
+pub(crate) fn compact(inner: &Inner, session_id: &str) -> Result<String> {
+    let result = call(inner, "session.compact", json!({ "sessionId": session_id }))?;
+    Ok(result.as_str().map(str::to_string).unwrap_or_default())
+}
+
+/// `provider:model` (the desktop's explicit-route form) or a bare model id on
+/// the current provider. Core's model is per process, not per session.
+pub(crate) fn set_model(inner: &Inner, model: &str) -> Result<()> {
+    let (provider, model) = match model.split_once(':') {
+        Some((provider, model)) => (provider.to_string(), model.to_string()),
+        None => (current(inner)?.0.unwrap_or_default(), model.to_string()),
+    };
+    call(
+        inner,
+        "config.setCurrentModel",
+        json!({ "provider": provider, "model": model }),
+    )
+    .map(|_| ())
+}
+
+/// (provider, model, auth method) from `config.get`.
+fn current(inner: &Inner) -> Result<(Option<String>, Option<String>, Option<String>)> {
+    let config = call(inner, "config.get", json!({}))?;
+    let get = |key: &str| {
+        config
+            .pointer(&format!("/current/{key}"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    };
+    let provider = get("provider");
+    let auth = provider.as_ref().map(|p| {
+        let oauth = config
+            .pointer(&format!("/providers/{p}/authMode"))
+            .and_then(Value::as_str)
+            == Some("oauth");
+        if oauth { "oauth" } else { "api_key" }.to_string()
+    });
+    Ok((provider, get("model"), auth))
+}
+
+pub(crate) fn runtime_info(inner: &Inner, session_id: &str) -> Result<RuntimeInfo> {
+    let (provider, model, auth_method) = current(inner)?;
+    let routes = match &provider {
+        Some(provider) => call(inner, "models.list", json!({ "providerId": provider }))
+            .map(|models| model_routes(provider, &models))
+            .unwrap_or_default(),
+        None => Vec::new(),
+    };
+    Ok(RuntimeInfo {
+        server: "freecode-core".into(),
+        protocol_version: 0,
+        capabilities: Vec::new(),
+        healthy: true,
+        session_id: session_id.to_string(),
+        providers: provider.iter().cloned().collect(),
+        provider,
+        model,
+        reasoning_effort: None,
+        auth_method,
+        routes,
+    })
+}
+
+fn model_routes(provider: &str, models: &Value) -> Vec<ModelRouteInfo> {
+    models
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|m| {
+            let id = m.get("id").and_then(Value::as_str)?;
+            Some(ModelRouteInfo {
+                model: id.to_string(),
+                provider: provider.to_string(),
+                api_method: "api".into(),
+                available: true,
+                detail: m.get("name").and_then(Value::as_str).unwrap_or(id).to_string(),
+                usage: None,
+            })
+        })
+        .collect()
+}
+
+/// jcode's three decisions onto core's `PermissionAnswer`. "Always" is
+/// core's project-wide rule, its closest match; deny is an answer too.
+pub(crate) fn respond_to_permission(
+    inner: &Inner,
+    request_id: &str,
+    decision: jcode_harness_api::PermissionDecision,
+) -> Result<()> {
+    use jcode_harness_api::PermissionDecision::*;
+    let decision = match decision {
+        Allow => "allow-once",
+        AllowAlways => "allow-always",
+        Deny => "deny",
+    };
+    call(
+        inner,
+        "permission.answer",
+        json!({ "requestId": request_id, "decision": decision }),
+    )
+    .map(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn history_keeps_user_and_assistant_text_and_hides_harness_messages() {
+        let rows = history_messages(&json!([
+            {"role":"user","parts":[{"type":"text","content":"fix it"}]},
+            {"role":"assistant","parts":[{"type":"tool","tool":{"name":"read","args":{}}},{"type":"text","content":"done"}]},
+            {"role":"user","synthetic":"auto_poke","parts":[{"type":"text","content":"continue"}]},
+            {"role":"user","synthetic":"steer","parts":[{"type":"text","content":"also tests"}]},
+        ]));
+        let got: Vec<_> = rows.iter().map(|r| (r.role.as_str(), r.content.as_str())).collect();
+        assert_eq!(
+            got,
+            vec![("user", "fix it"), ("assistant", "done"), ("user", "also tests")]
+        );
+    }
+
+    #[test]
+    fn routes_come_from_models_list() {
+        let routes = model_routes("openai", &json!([{"id":"gpt-x","name":"GPT X"},{"name":"no id"}]));
+        assert_eq!(routes.len(), 1);
+        assert_eq!((routes[0].model.as_str(), routes[0].detail.as_str()), ("gpt-x", "GPT X"));
+    }
+}

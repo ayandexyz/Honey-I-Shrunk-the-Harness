@@ -175,6 +175,8 @@ fn start(
         // The shared core outlives any one client; it ends with the process.
         shutdown: None,
         client_handles: AtomicUsize::new(0),
+        sessions: Mutex::new(crate::freecode_events::States::new()),
+        history: Mutex::new(HashMap::new()),
     });
     Ok((child, stdout, inner))
 }
@@ -211,19 +213,19 @@ fn dispatch(inner: &Inner, value: Value) {
         }
         return;
     }
-    if let Some(event) = translate_event(&value) {
-        publish(inner, event);
+    let events = match inner.sessions.lock() {
+        Ok(mut states) => crate::freecode_events::translate(&mut states, &value),
+        Err(_) => return,
+    };
+    for (event, session) in events {
+        publish(inner, event, Some(&session));
     }
 }
 
-/// core `StreamEvent` → jcode `ApiEvent`. Phase 3 carries the channel only;
-/// the per-event mapping (spec "Streaming events" table) is Phase 4.
-fn translate_event(_event: &Value) -> Option<ApiEvent> {
-    None
-}
-
-fn publish(inner: &Inner, event: ApiEvent) {
-    let session = event_session(&event);
+/// Deliver to every subscriber not scoped to another session. `target` names
+/// the session for events that carry none themselves (`Error`).
+pub(crate) fn publish(inner: &Inner, event: ApiEvent, target: Option<&str>) {
+    let session = event_session(&event).or(target);
     let Ok(mut subs) = inner.subscribers.lock() else {
         return;
     };
@@ -249,8 +251,12 @@ fn close(inner: &Inner, why: &str) {
     }
 }
 
-/// One JSON-RPC call, blocking until its reply or the request timeout.
-pub(crate) fn call(inner: &Inner, method: &str, params: Value) -> Result<Value> {
+/// Write one JSON-RPC request; its reply arrives on the returned receiver.
+pub(crate) fn send_request(
+    inner: &Inner,
+    method: &str,
+    params: Value,
+) -> Result<std::sync::mpsc::Receiver<Reply>> {
     if inner.closed.load(Ordering::Acquire) {
         return Err(Error::new(ErrorKind::Disconnected, "freecode core exited"));
     }
@@ -267,6 +273,12 @@ pub(crate) fn call(inner: &Inner, method: &str, params: Value) -> Result<Value> 
         inner.pending.lock().ok().map(|mut p| p.remove(&id));
         return Err(error);
     }
+    Ok(rx)
+}
+
+/// One JSON-RPC call, blocking until its reply or the request timeout.
+pub(crate) fn call(inner: &Inner, method: &str, params: Value) -> Result<Value> {
+    let rx = send_request(inner, method, params)?;
     let reply = match inner.request_timeout {
         Some(timeout) => rx.recv_timeout(timeout).map_err(|_| {
             Error::new(ErrorKind::Timeout, format!("{method}: no reply from freecode core"))
@@ -275,9 +287,6 @@ pub(crate) fn call(inner: &Inner, method: &str, params: Value) -> Result<Value> 
             .recv()
             .map_err(|_| Error::new(ErrorKind::Disconnected, "freecode core exited")),
     };
-    if reply.is_err() {
-        inner.pending.lock().ok().map(|mut p| p.remove(&id));
-    }
     reply?
 }
 
@@ -292,7 +301,7 @@ pub(crate) fn list_sessions(inner: &Inner, limit: Option<u32>) -> Result<Vec<Ses
     sessions.into_iter().map(session_info).collect()
 }
 
-fn session_info(session: &Value) -> Result<SessionInfo> {
+pub(crate) fn session_info(session: &Value) -> Result<SessionInfo> {
     let status = session.get("status").and_then(Value::as_str).unwrap_or("active");
     // jcode's status is runtime activity; freecode's is lifecycle. A listed
     // freecode session is never mid-turn from this client's view.

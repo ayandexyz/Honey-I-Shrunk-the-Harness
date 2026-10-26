@@ -159,8 +159,62 @@ never comes from upstream is this `jcode-sdk` shim.
      session" — `create_session` and the event translation are Phase 4.
      The installed release (0.47.1) predates the EOF fix; until the next
      release, only the repo core shuts down on EOF.
-4. Map session + turn methods (the bulk of the work — tool-call/event
-   shapes will need renaming, not just passthrough).
+4. **IN PROGRESS (branch `phase-2-desktop`) — shim side done and verified
+   live; the approve/deny UI is what is left.**
+   - **Turns** (`freecode_session.rs`): jcode's send is fire-and-forget,
+     core's `session.send` answers when the turn ends. The shim leaves the
+     request in flight, publishes `MessageAccepted` + `SessionStatus(running)`
+     at once, and a watcher thread turns a failed reply into
+     `TurnStopped(Failure)` + `Error` only if nothing closed the turn first.
+     Steering (`soft_interrupt_with_images`) is `session.send` with
+     `streamingBehavior: "steer"`, answered synchronously as the harness
+     expects. `cancel` = `session.stop`, and the next `done` becomes
+     `TurnStopped(Interrupted)`.
+   - **Events** (`freecode_events.rs`, stateful per session):
+     `text_delta`→`TextDelta`; `thinking_delta`→`ReasoningDelta`, with
+     `ReasoningDone` synthesized at the first non-reasoning event;
+     `tool_start`→`ToolStart`+`ToolExec`; `tool_complete`→`ToolDone`
+     (`error` = result when `success: false`); `usage_totals`→`TokenUsage`
+     (run totals, not jcode's per-call — context-size readouts will run
+     high); `done`→`TurnDone`+`SessionStatus(idle)`;
+     `session.error`→`TurnStopped(Failure)`+`Error`+idle;
+     `turn_started`→running; `compaction_*`→`compacting`/back;
+     `permission_asked`→`PermissionRequest`. `text`/`thinking` snapshots and
+     `tool_output` are dropped (the deltas and `ToolDone` already carry
+     them); core lines without a `sessionId` (`mcp.server.*`) are ignored.
+   - **Scoping**: `Error` has no session id, and one shared core serves
+     every panel, so each client binds its subscriptions to the session it
+     attached to or created (`attach_to`) and session-less events are
+     published with a target session — an error shows in its own panel only.
+   - **History**: `attach_session` = `session.resume`, whose transcript is
+     cached for the `get_history_with_images` call that follows. User and
+     assistant text only (the UI drops tool rows anyway); harness-written
+     user messages are hidden except steers; images not mapped yet.
+   - **Runtime info**: provider/model/auth from `config.get`, routes from
+     `models.list` for the current provider. `set_model` takes
+     `provider:model` (the desktop's explicit-route form) or a bare id on
+     the current provider → `config.setCurrentModel` (per process, not per
+     session).
+   - **Permissions** (decision 2026-10-26: build an approve UI, not
+     auto-allow): `permission_asked` passes through as `PermissionRequest`,
+     and `respond_to_permission` maps jcode's `Allow`/`AllowAlways`/`Deny`
+     to core's `allow-once`/`allow-always`/`deny` via `permission.answer`.
+     **The UI card is not built yet** — until it is, a turn that needs a
+     permission waits (core times out at 30 min and treats it as deny).
+   - **Unsupported, not panicking**: every other `JcodeClient` method the
+     harness can reach (`rename_session`, `set_session_saved`,
+     `set_reasoning_effort`, `send_system_reminder`, `rewind`,
+     `rewind_undo`, `transfer_session`, `clear`, `runtime_command`,
+     `background_tool`, applets, todo, auth notifications) returns a clean
+     `UnknownRequest` error the harness already renders, instead of a
+     `todo!()` that killed the session worker.
+   - **Verified**: 8 shim unit tests; live `tests/freecode_turn.rs` on
+     MiniMax-M3 — events `MessageAccepted → SessionStatus → TextDelta("pong")
+     → TokenUsage → TurnDone`, history `user/assistant` round-trips. The
+     failure path was verified by accident first (expired OpenAI OAuth):
+     `MessageAccepted → SessionStatus → TurnStopped → Error`. **Not yet
+     verified in the GPUI window**: the draft panel creates its session
+     only when a prompt is submitted, which needs a human at the keyboard.
 5. Decide + implement the SSH/managed-cloud/accounts gap (stub vs. hide).
 6. Fix UI fallout file by file.
 7. Smoke test: real session, real streaming reply, through the GPU UI.
@@ -284,31 +338,31 @@ needs its signature to compile; it never needs a real body.
 |---|---|---|---|---|
 | `connect` | 5 | spawn `apps/core` + open stdio | new transport | done |
 | `connect_with` | 0 | — | — | stub — signature only |
-| `create_session` | 2 | `session.start` | `working_dir`→`projectPath` | stub |
+| `create_session` | 2 | `session.start` | `working_dir`→`projectPath` | done |
 | `create_session_with_options` | 0 | `session.start` | no `system_prompt` override in freecode | stub — signature only |
-| `attach_session` | 3 | `session.resume` | close | stub |
-| `detach_session` | 2 | — | freecode has no attach state; no-op | stub |
+| `attach_session` | 3 | `session.resume` | close | done |
+| `detach_session` | 2 | — | freecode has no attach state; no-op | done |
 | `list_sessions_limited` | 1 | `session.list` | no `limit` param on freecode — truncate in shim | done |
 | `list_sessions` | 0 | `session.list` | — | done |
 | `archive_session` | 0 | `session.archive` | — | stub — signature only |
-| `fork_session` | 2 | `session.fork` | close | stub |
-| `transfer_session` | 1 | — | **gap** (move a session between daemons) | stub — decide: error or cut |
-| `send_message_with_reminder` | 1 | `session.send` | jcode fires, then the harness waits for `MessageAccepted` on the event stream; freecode's `session.send` streams and resolves with the turn. Shim emits a synthetic `MessageAccepted` first | stub |
-| `send_message` | 0 (tests only) | `session.send` | — | stub — signature only |
-| `send_system_reminder` | 2 | — | **gap**; closest is a `synthetic: "context"` message, not exposed over IPC | stub — decide |
-| `soft_interrupt_with_images` | 1 | `session.send` `streamingBehavior: "steer"` | images not supported in freecode's steer | stub |
-| `cancel` | 14* | `session.stop` | close | stub |
-| `compact` | 1 | `session.compact` | close | stub |
-| `rename_session` | 2 | — | **gap**, no freecode method | stub — decide: add IPC method, or cut |
-| `set_session_saved` | 2 | — | **gap** (pin/save a session) | stub — decide |
-| `set_model` | 2 | `config.setCurrentModel` | per-process not per-session in freecode | stub |
-| `set_reasoning_effort` | 2 (+1 `managed_cloud_parity.rs`) | — | **gap**, no per-session effort IPC | stub — decide |
+| `fork_session` | 2 | `session.fork` | close | done |
+| `transfer_session` | 1 | — | **gap** (move a session between daemons) | unsupported error — decide: error or cut |
+| `send_message_with_reminder` | 1 | `session.send` | jcode fires, then the harness waits for `MessageAccepted` on the event stream; freecode's `session.send` streams and resolves with the turn. Shim emits a synthetic `MessageAccepted` first | done |
+| `send_message` | 0 (tests only) | `session.send` | — | done |
+| `send_system_reminder` | 2 | — | **gap**; closest is a `synthetic: "context"` message, not exposed over IPC | unsupported error — decide |
+| `soft_interrupt_with_images` | 1 | `session.send` `streamingBehavior: "steer"` | images not supported in freecode's steer | done |
+| `cancel` | 14* | `session.stop` | close | done |
+| `compact` | 1 | `session.compact` | close | done |
+| `rename_session` | 2 | — | **gap**, no freecode method | unsupported error — decide: add IPC method, or cut |
+| `set_session_saved` | 2 | — | **gap** (pin/save a session) | unsupported error — decide |
+| `set_model` | 2 | `config.setCurrentModel` | per-process not per-session in freecode | done |
+| `set_reasoning_effort` | 2 (+1 `managed_cloud_parity.rs`) | — | **gap**, no per-session effort IPC | unsupported error — decide |
 | `list_models` | 0 | `models.list` | models reach desktop through `RuntimeInfo.routes`, not this | stub — signature only |
-| `get_runtime_info` | 2 | `config.get` + `models.list` | must assemble `RuntimeInfo { provider, model, reasoning_effort, auth_method, routes: Vec<ModelRouteInfo> }` | stub |
-| `get_history_with_images` | 1 | `session.tree` (previews only) | needs full messages as `HistoryMessage` + `RenderedImage` — likely a new IPC method | stub |
-| `get_history` | 0 | — | — | stub — signature only |
-| `rewind` | 1 | `session.rewind` | `message_index` vs `entryId` | stub |
-| `rewind_undo` | 1 | — | **gap** | stub — decide |
+| `get_runtime_info` | 2 | `config.get` + `models.list` | must assemble `RuntimeInfo { provider, model, reasoning_effort, auth_method, routes: Vec<ModelRouteInfo> }` | done |
+| `get_history_with_images` | 1 | `session.tree` (previews only) | needs full messages as `HistoryMessage` + `RenderedImage` — likely a new IPC method | done |
+| `get_history` | 0 | — | — | done |
+| `rewind` | 1 | `session.rewind` | `message_index` vs `entryId` | unsupported error |
+| `rewind_undo` | 1 | — | **gap** | unsupported error — decide |
 | `events` / `next_timeout` / `is_closed` | 1 / 1 / 3* | the `session.send` stream | event-stream plumbing | done |
 | `supports` | 2 | — | stub to "everything the shim implements" | done |
 | `launch` / `ensure_runtime` | 6* | spawn `apps/core` | jcode launches its own daemon; shim spawns core instead | done |
@@ -322,30 +376,30 @@ match. Ordered by use.
 
 | jcode_sdk | Desktop | freecode | Shape | Status |
 |---|---|---|---|---|
-| `SessionStatus` | 39 | — (turn state is implicit in the stream) | shim derives it: `status` is one of `idle`/`running`/`streaming`/`thinking`/`busy`/`compacting`/`stopped`/`error` from the event flow | todo |
-| `TextDelta` | 34 | `text_delta` | close | todo |
-| `TurnDone` | 22 | `done` | close | todo |
-| `RuntimeInfo` | 17 | `config.get` + `models.list` | assembled by the shim (see `get_runtime_info`) | todo |
-| `Error` | 17 | `error` / `session.error` | close | todo |
-| `ReasoningDelta` | 16 | `thinking_delta` | close | todo |
-| `ToolStart` | 13 | `tool_start` | close | todo |
-| `MessageAccepted` | 12 | — | **synthesized by the shim** when `session.send` is accepted; the harness's submit flow waits on it (`harness.rs`, `harness_recovery.rs`). Was wrongly `cut` | todo |
-| `ToolDone` | 11 | `tool_complete` | close | todo |
-| `TurnStopped` | 10 | `done` / `session.stop` | `TurnStopReason` (`Interrupted`/`Failure`/`Crash`/`LimitReached`/`ProviderGuardrail`/`Unknown`) needs mapping from freecode's stop paths | todo |
-| `ToolInputDelta` | 9 | — | freecode does not stream tool input; emit nothing | todo |
+| `SessionStatus` | 39 | — (turn state is implicit in the stream) | shim derives it: `status` is one of `idle`/`running`/`streaming`/`thinking`/`busy`/`compacting`/`stopped`/`error` from the event flow | done |
+| `TextDelta` | 34 | `text_delta` | close | done |
+| `TurnDone` | 22 | `done` | close | done |
+| `RuntimeInfo` | 17 | `config.get` + `models.list` | assembled by the shim (see `get_runtime_info`) | done |
+| `Error` | 17 | `error` / `session.error` | close | done |
+| `ReasoningDelta` | 16 | `thinking_delta` | close | done |
+| `ToolStart` | 13 | `tool_start` | close | done |
+| `MessageAccepted` | 12 | — | **synthesized by the shim** when `session.send` is accepted; the harness's submit flow waits on it (`harness.rs`, `harness_recovery.rs`). Was wrongly `cut` | done |
+| `ToolDone` | 11 | `tool_complete` | close | done |
+| `TurnStopped` | 10 | `done` / `session.stop` | `TurnStopReason` (`Interrupted`/`Failure`/`Crash`/`LimitReached`/`ProviderGuardrail`/`Unknown`) needs mapping from freecode's stop paths | done |
+| `ToolInputDelta` | 9 | — | freecode does not stream tool input; emit nothing | done — never emitted |
 | `ModelInfo` | 8 | `config.get` | sent after attach and on model change | todo |
-| `TokenUsage` | 6 | `usage_totals` | field rename | todo |
+| `TokenUsage` | 6 | `usage_totals` | field rename | done |
 | `ConnectionPhase` | 6 | — | `connecting`/`connected`/`disconnected`, from the shim's own child-process state | todo |
 | `SidePanelState` | 4 | — | **gap** (jcode side panel pages) | todo — decide: cut |
-| `ReasoningDone` | 4 | `thinking` | close | todo |
+| `ReasoningDone` | 4 | `thinking` | close | done |
 | `SessionRenamed` | 3 | — | **gap** | todo — tied to `rename_session` |
 | `KvCacheMiss` | 3 | `cache_status` (miss attribution) | real translation | todo |
 | `BackgroundProgress` | 3 | `shell_start`/`shell_output`/`shell_exit`, `agent_*` | different model (per task bar) | todo — decide |
-| `ToolExec` | 2 | `tool_output` | close | todo |
+| `ToolExec` | 2 | `tool_output` | close | done |
 | `SidePaneImages` | 2 | — | **gap** | todo — decide: cut |
 | `RuntimeCommandResult` | 2 | — | built by the harness from `runtime_command`'s reply | todo — follows `runtime_command` |
 | `SessionRecovery`, `SessionForked`, `Attached`, `AppletState` | 1 each | — | | todo — decide |
-| `PermissionRequest` | 1 (sound only) | `permission_asked` | **nobody answers it** — see Phase 1 finding 2 | todo — decide |
+| `PermissionRequest` | 1 (sound only) | `permission_asked` | **nobody answers it** — see Phase 1 finding 2 | done (shim) — approve UI pending |
 | `Compacted` | 0 | `compaction_complete` | routed, never consumed | cut |
 | `TextReplace` / `TextDone` | 0 | — | never matched | cut |
 

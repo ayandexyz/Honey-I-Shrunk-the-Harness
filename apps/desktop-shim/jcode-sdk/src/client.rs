@@ -252,6 +252,10 @@ pub(crate) struct Inner {
     pub(crate) ssh_process: Option<Arc<SshProcess>>,
     pub(crate) shutdown: Option<Arc<dyn Fn() + Send + Sync>>,
     pub(crate) client_handles: AtomicUsize,
+    /// freecode: per-session translation state (reasoning block, cancel).
+    pub(crate) sessions: Mutex<crate::freecode_events::States>,
+    /// freecode: transcript returned by `session.resume`, for `get_history`.
+    pub(crate) history: Mutex<HashMap<String, serde_json::Value>>,
 }
 
 /// Connected harness client.
@@ -260,6 +264,11 @@ pub(crate) struct Inner {
 /// without one is a stream event and goes to every subscriber.
 pub struct JcodeClient {
     inner: Arc<Inner>,
+    /// freecode: the session this client attached to or created. Its event
+    /// subscriptions are scoped to it, so one shared core's events (and
+    /// session-less ones like `Error`) reach only that session's panel.
+    attached: Arc<Mutex<Option<String>>>,
+    subs: Arc<Mutex<Vec<u64>>>,
     ssh_options: Option<SshConnectOptions>,
     instance: Option<Arc<LaunchedInstance>>,
     /// State directory of the private instance this client owns, if any.
@@ -275,6 +284,8 @@ impl Clone for JcodeClient {
         self.inner.client_handles.fetch_add(1, Ordering::Relaxed);
         Self {
             inner: Arc::clone(&self.inner),
+            attached: Arc::clone(&self.attached),
+            subs: Arc::clone(&self.subs),
             ssh_options: self.ssh_options.clone(),
             instance: self.instance.clone(),
             instance_home: self.instance_home.clone(),
@@ -295,6 +306,21 @@ impl Drop for JcodeClient {
 }
 
 impl JcodeClient {
+    /// freecode: bind this client and its existing subscriptions to a session.
+    fn attach_to(&self, session_id: &str) {
+        if let Ok(mut attached) = self.attached.lock() {
+            *attached = Some(session_id.to_string());
+        }
+        let own = self.subs.lock().map(|s| s.clone()).unwrap_or_default();
+        if let Ok(mut subs) = self.inner.subscribers.lock() {
+            for (id, filter, _) in subs.iter_mut() {
+                if own.contains(id) {
+                    *filter = Some(session_id.to_string());
+                }
+            }
+        }
+    }
+
     /// Retain this client's shared SSH master for reconnecting independent API
     /// channels. Returns None for isolated or already closed SSH channels.
     #[cfg(unix)]
@@ -333,6 +359,8 @@ impl JcodeClient {
         inner.client_handles.fetch_add(1, Ordering::Relaxed);
         Ok(Self {
             inner,
+            attached: Arc::new(Mutex::new(None)),
+            subs: Arc::new(Mutex::new(Vec::new())),
             ssh_options: None,
             instance: None,
             instance_home: None,
@@ -410,8 +438,14 @@ impl JcodeClient {
     pub fn events(&self, session_id: Option<&str>) -> EventStream {
         let (tx, rx) = channel();
         let id = self.inner.next_sub.fetch_add(1, Ordering::Relaxed);
+        let filter = session_id
+            .map(str::to_string)
+            .or_else(|| self.attached.lock().ok().and_then(|a| a.clone()));
         if let Ok(mut subs) = self.inner.subscribers.lock() {
-            subs.push((id, session_id.map(str::to_string), tx));
+            subs.push((id, filter, tx));
+        }
+        if let Ok(mut own) = self.subs.lock() {
+            own.push(id);
         }
         EventStream {
             rx,
@@ -460,7 +494,9 @@ impl JcodeClient {
 
     /// Create a session with the normal assembled system prompt.
     pub fn create_session(&self, working_dir: Option<String>) -> Result<SessionInfo> {
-        todo!("jcode-sdk shim: create_session")
+        let info = crate::freecode_session::create_session(&self.inner, working_dir)?;
+        self.attach_to(&info.session_id);
+        Ok(info)
     }
 
     /// Create a session with optional full system prompt replacement.
@@ -473,26 +509,29 @@ impl JcodeClient {
     }
 
     pub fn attach_session(&self, session_id: &str) -> Result<SessionInfo> {
-        todo!("jcode-sdk shim: attach_session")
+        let info = crate::freecode_session::attach_session(&self.inner, session_id)?;
+        self.attach_to(session_id);
+        Ok(info)
     }
 
     /// Clone a session's complete persisted context into a new idle session.
     pub fn transfer_session(&self, session_id: &str) -> Result<SessionInfo> {
-        todo!("jcode-sdk shim: transfer_session")
+        Err(crate::freecode_session::unsupported("transfer_session"))
     }
 
     pub fn fork_session(&self, session_id: &str) -> Result<SessionInfo> {
-        todo!("jcode-sdk shim: fork_session")
+        crate::freecode_session::fork_session(&self.inner, session_id)
     }
 
     pub fn detach_session(&self, session_id: &str) -> Result<()> {
-        todo!("jcode-sdk shim: detach_session")
+        // Core keeps no per-client attachment; nothing to release.
+        Ok(())
     }
 
     /// Submit a hidden continuation without a user transcript row or accept wait.
     /// The caller, not the bridge, decides when recovery is appropriate.
     pub fn send_system_reminder(&self, session_id: &str, reminder: &str) -> Result<()> {
-        todo!("jcode-sdk shim: send_system_reminder")
+        Err(crate::freecode_session::unsupported("send_system_reminder"))
     }
 
     /// Send a user message.
@@ -509,7 +548,7 @@ impl JcodeClient {
         images: Vec<(String, String)>,
         wait_for_accept: Option<Duration>,
     ) -> Result<()> {
-        todo!("jcode-sdk shim: send_message")
+        crate::freecode_session::send_message(&self.inner, session_id, content, images)
     }
 
     /// [`send_message`](Self::send_message) with a hidden system reminder
@@ -523,11 +562,14 @@ impl JcodeClient {
         system_reminder: Option<&str>,
         wait_for_accept: Option<Duration>,
     ) -> Result<()> {
-        todo!("jcode-sdk shim: send_message_with_reminder")
+        // freecode has no hidden per-turn reminder; the desktop sends one only
+        // for collection instructions, which are dropped until it does.
+        let _ = (system_reminder, wait_for_accept);
+        crate::freecode_session::send_message(&self.inner, session_id, content, images)
     }
 
     pub fn cancel(&self, session_id: &str) -> Result<()> {
-        todo!("jcode-sdk shim: cancel")
+        crate::freecode_session::cancel(&self.inner, session_id)
     }
 
     pub fn soft_interrupt(&self, session_id: &str, content: &str, urgent: bool) -> Result<()> {
@@ -542,7 +584,8 @@ impl JcodeClient {
         images: Vec<(String, String)>,
         urgent: bool,
     ) -> Result<()> {
-        todo!("jcode-sdk shim: soft_interrupt_with_images")
+        let _ = urgent;
+        crate::freecode_session::steer(&self.inner, session_id, content, images)
     }
 
     /// Queue a soft interrupt tagged with an opaque `client_id`.
@@ -563,14 +606,14 @@ impl JcodeClient {
     }
 
     pub fn get_history(&self, session_id: &str) -> Result<Vec<HistoryMessage>> {
-        todo!("jcode-sdk shim: get_history")
+        Ok(crate::freecode_session::history(&self.inner, session_id)?.0)
     }
 
     pub fn get_history_with_images(
         &self,
         session_id: &str,
     ) -> Result<(Vec<HistoryMessage>, Vec<jcode_harness_api::RenderedImage>)> {
-        todo!("jcode-sdk shim: get_history_with_images")
+        crate::freecode_session::history(&self.inner, session_id)
     }
 
     pub fn peek_session(
@@ -582,11 +625,11 @@ impl JcodeClient {
     }
 
     pub fn clear(&self, session_id: &str) -> Result<()> {
-        todo!("jcode-sdk shim: clear")
+        Err(crate::freecode_session::unsupported("clear"))
     }
 
     pub fn rewind(&self, session_id: &str, message_index: usize) -> Result<()> {
-        todo!("jcode-sdk shim: rewind")
+        Err(crate::freecode_session::unsupported("rewind"))
     }
 
     pub fn respond_to_permission(
@@ -595,7 +638,8 @@ impl JcodeClient {
         request_id: &str,
         decision: PermissionDecision,
     ) -> Result<()> {
-        todo!("jcode-sdk shim: respond_to_permission")
+        let _ = session_id;
+        crate::freecode_session::respond_to_permission(&self.inner, request_id, decision)
     }
 
     /// Models this session can switch to, and which one is serving it.
@@ -611,30 +655,30 @@ impl JcodeClient {
         command: jcode_harness_api::RuntimeCommand,
         args: Vec<String>,
     ) -> Result<jcode_harness_api::RuntimeCommandOutput> {
-        todo!("jcode-sdk shim: runtime_command")
+        Err(crate::freecode_session::unsupported("runtime_command"))
     }
 
     pub fn get_runtime_info(&self, session_id: &str) -> Result<RuntimeInfo> {
-        todo!("jcode-sdk shim: get_runtime_info")
+        crate::freecode_session::runtime_info(&self.inner, session_id)
     }
 
     /// Persist an API key in jcode's owner-only provider store and hot-reload
     /// provider credentials.
     pub fn set_api_key(&self, provider: &str, api_key: &str) -> Result<()> {
-        todo!("jcode-sdk shim: set_api_key")
+        Err(crate::freecode_session::unsupported("set_api_key"))
     }
 
     /// Reload credentials saved by an out-of-band OAuth login. This does not
     /// send a chat message or transport any credential material.
     pub fn notify_auth_changed(&self, provider: &str) -> Result<()> {
-        todo!("jcode-sdk shim: notify_auth_changed")
+        Err(crate::freecode_session::unsupported("notify_auth_changed"))
     }
 
     /// Tell the daemon a banked usage reset was redeemed for one subscription
     /// login (`claude` or `openai`), so it refetches quota instead of keeping a
     /// pre-reset cooldown. Carries no credentials and never redeems anything.
     pub fn invalidate_usage(&self, provider: &str, account_label: Option<&str>) -> Result<()> {
-        todo!("jcode-sdk shim: invalidate_usage")
+        Err(crate::freecode_session::unsupported("invalidate_usage"))
     }
 
     /// Remove a persisted API-key credential and hot-reload provider
@@ -677,7 +721,7 @@ impl JcodeClient {
     /// The session's persisted todo state for the auto-poke and quality-gate
     /// policy. Requires the `todo_state` capability.
     pub fn todo_state(&self, session_id: &str) -> Result<jcode_todo_policy::TodoSnapshot> {
-        todo!("jcode-sdk shim: todo_state")
+        Err(crate::freecode_session::unsupported("todo_state"))
     }
 
     /// Apply a follow-up decision's persistent effects. A no-op when empty.
@@ -686,7 +730,7 @@ impl JcodeClient {
         session_id: &str,
         effects: jcode_todo_policy::TodoEffects,
     ) -> Result<()> {
-        todo!("jcode-sdk shim: ack_todo_follow_up")
+        Err(crate::freecode_session::unsupported("ack_todo_follow_up"))
     }
 
     pub fn file_status(&self, session_id: &str, path: &str) -> Result<FileStatus> {
@@ -724,25 +768,26 @@ impl JcodeClient {
     /// Switch the session to a different model. `model` is an id from
     /// `list_models`.
     pub fn set_model(&self, session_id: &str, model: &str) -> Result<()> {
-        todo!("jcode-sdk shim: set_model")
+        let _ = session_id;
+        crate::freecode_session::set_model(&self.inner, model)
     }
 
     /// Set how much the model deliberates before answering. The accepted set
     /// is per-provider, so this takes a string rather than a union that would
     /// go stale.
     pub fn set_reasoning_effort(&self, session_id: &str, effort: &str) -> Result<()> {
-        todo!("jcode-sdk shim: set_reasoning_effort")
+        Err(crate::freecode_session::unsupported("set_reasoning_effort"))
     }
 
     /// Schedule compaction of the transcript so far, freeing context. Not
     /// synchronous: returning means the request was accepted.
     pub fn compact(&self, session_id: &str) -> Result<String> {
-        todo!("jcode-sdk shim: compact")
+        crate::freecode_session::compact(&self.inner, session_id)
     }
 
     /// Set a session's title. `None` restores the generated one.
     pub fn rename_session(&self, session_id: &str, title: Option<String>) -> Result<()> {
-        todo!("jcode-sdk shim: rename_session")
+        Err(crate::freecode_session::unsupported("rename_session"))
     }
 
     /// Bookmark or unbookmark a session. A label also becomes its title.
@@ -752,7 +797,7 @@ impl JcodeClient {
         saved: bool,
         label: Option<String>,
     ) -> Result<()> {
-        todo!("jcode-sdk shim: set_session_saved")
+        Err(crate::freecode_session::unsupported("set_session_saved"))
     }
 
     /// Report a user action in an agent applet instance.
@@ -764,17 +809,17 @@ impl JcodeClient {
         state: serde_json::Value,
         source_key: Option<String>,
     ) -> Result<()> {
-        todo!("jcode-sdk shim: applet_action")
+        Err(crate::freecode_session::unsupported("applet_action"))
     }
 
     /// Close an agent applet instance. The agent is not woken.
     pub fn close_applet(&self, session_id: &str, instance: &str) -> Result<()> {
-        todo!("jcode-sdk shim: close_applet")
+        Err(crate::freecode_session::unsupported("close_applet"))
     }
 
     /// Restore the history the last `rewind` removed.
     pub fn rewind_undo(&self, session_id: &str) -> Result<()> {
-        todo!("jcode-sdk shim: rewind_undo")
+        Err(crate::freecode_session::unsupported("rewind_undo"))
     }
 
     /// Drop soft interrupts that are queued but not yet delivered.
@@ -803,7 +848,7 @@ impl JcodeClient {
 
     /// Move the running tool call to the background (the TUI's Alt+B).
     pub fn background_tool(&self, session_id: &str) -> Result<()> {
-        todo!("jcode-sdk shim: background_tool")
+        Err(crate::freecode_session::unsupported("background_tool"))
     }
 
     /// Move the running tool call to the background and report what moved.
