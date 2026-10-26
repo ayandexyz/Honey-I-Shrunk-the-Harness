@@ -6,6 +6,9 @@ is a short pointer to this doc, not a copy — this is where the detail (and
 the per-item Status tracking) lives, kept out of the main agent guide so it
 isn't reloaded every turn.
 
+Shipping it (packages, signing, auto-update, the download page): see
+`2026-10-27-honey-desktop-release.md`.
+
 ## Background
 
 The native desktop frontend is vendored from

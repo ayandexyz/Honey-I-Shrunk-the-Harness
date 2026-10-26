@@ -1,7 +1,7 @@
 # Jcode app icon
 
 > **freecode:** `icon-1024.png` is the Honey logo
-> (`apps/web2/public/logo2.png`, centred on a transparent 1024×1024 square),
+> (`apps/web2/public/logoText.png`, resized to 1024×1024),
 > not the Jcode donut below. `tests/test_brand_assets.py`'s render-from-SVG
 > check therefore fails by design (it only runs when `rsvg-convert` exists).
 

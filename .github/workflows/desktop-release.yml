@@ -1,0 +1,140 @@
+# Honey desktop release (apps/desktop on freecode core).
+# Plan: docs/specs/2026-10-27-honey-desktop-release.md — this is milestone R1
+# (Linux packages on a tag); auto-update (R2), macOS (R4), Windows (R5) follow.
+#
+# Tags are `desktop-v<semver>` (the format the in-app updater parses), so they
+# never collide with the freecode CLI's `v*` releases.
+#
+# Every Honey release is created with --latest=false: scripts/install.sh and
+# the TUI update check read the repo's "latest" release, which must stay the
+# CLI's.
+name: Desktop release
+
+on:
+  push:
+    tags: ["desktop-v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build (e.g. 0.1.0). Manual runs only upload workflow artifacts, never a release."
+        required: true
+        default: "0.1.0"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - id: v
+        name: Resolve version
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/desktop-v* ]]; then
+            version="${GITHUB_REF_NAME#desktop-v}"
+          else
+            version="${{ inputs.version }}"
+          fi
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$ ]] || { echo "bad version: $version"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Create draft release
+        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+              --draft --latest=false --title "Honey ${{ steps.v.outputs.version }}" \
+              --notes "Honey desktop ${{ steps.v.outputs.version }}"
+
+  linux:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            arch: x86_64
+          - os: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read pinned jcode commit
+        id: jcode
+        run: echo "rev=$(cat apps/desktop-shim/JCODE_REV)" >> "$GITHUB_OUTPUT"
+      # apps/desktop path-depends on jcode's crates; the overlay links them
+      # from here (scripts/desktop-overlay.sh), with jcode-sdk swapped for
+      # our shim. Pinned so every release builds the exact tested sources.
+      - uses: actions/checkout@v4
+        with:
+          repository: 1jehuang/jcode
+          ref: ${{ steps.jcode.outputs.rev }}
+          path: apps/jcode-upstream
+          submodules: recursive
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop
+          key: ${{ matrix.arch }}
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev libfontconfig-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libx11-xcb-dev libxcb1-dev libxcb-render0-dev \
+            libxcb-shape0-dev libxcb-xfixes0-dev libgl1-mesa-dri
+      - name: Install JS dependencies
+        run: pnpm install --no-frozen-lockfile
+      - name: Build and package
+        run: bash scripts/package-honey-linux.sh "${{ needs.prepare.outputs.version }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: honey-linux-${{ matrix.arch }}
+          path: |
+            out/honey/*.tar.gz
+            out/honey/*.deb
+            out/honey/SHA256SUMS-*
+          if-no-files-found: error
+      - name: Upload to the draft release
+        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber \
+            out/honey/*.tar.gz out/honey/*.deb out/honey/SHA256SUMS-*
+
+  publish:
+    needs: [prepare, linux]
+    if: startsWith(github.ref, 'refs/tags/desktop-v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      # Promote only once every uploaded asset matches its checksum.
+      - name: Verify assets, then publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir assets && cd assets
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"
+          for sums in SHA256SUMS-*; do sha256sum -c "$sums"; done
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --draft=false --latest=false

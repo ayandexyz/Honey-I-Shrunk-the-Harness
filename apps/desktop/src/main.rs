@@ -554,7 +554,32 @@ fn detach_console() {
 #[cfg(not(windows))]
 fn detach_console() {}
 
+/// freecode: this desktop runs on freecode core, not Jcode's runtime. Upstream
+/// code still reads Jcode's own state off disk under `JCODE_HOME` (sidebar
+/// session merge, history prefetch, transcript search) and reports usage to
+/// Jcode's telemetry service. Point the first at a freecode-owned directory
+/// and opt out of the second, for every launch — a double-clicked package
+/// never runs `scripts/desktop.sh`. `FREECODE_DESKTOP_JCODE_HOME` overrides
+/// the directory. See docs/specs/2026-10-27-honey-desktop-release.md.
+fn apply_freecode_env() {
+    let home = env::var_os("FREECODE_DESKTOP_JCODE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| {
+            env::var_os("HOME")
+                .or_else(|| env::var_os("USERPROFILE"))
+                .map(|home| PathBuf::from(home).join(".freecode/desktop/jcode-home"))
+        });
+    // SAFETY: the first statement of `main`, before any thread exists.
+    unsafe {
+        if let Some(home) = home {
+            env::set_var("JCODE_HOME", home);
+        }
+        env::set_var("JCODE_NO_TELEMETRY", "1");
+    }
+}
+
 fn main() {
+    apply_freecode_env();
     attach_parent_console();
     if let Some(code) = jcode_desktop_ui::run_restart_worker_if_requested() {
         std::process::exit(code);

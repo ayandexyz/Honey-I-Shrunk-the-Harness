@@ -41,9 +41,11 @@ pub(crate) fn shared_core(request_timeout: Option<Duration>) -> Result<Arc<Inner
     Ok(inner)
 }
 
-/// How core is started, in the TUI's order: an explicit override, then the
-/// monorepo's built `apps/core` when this binary lives inside the repo (dev,
-/// so core and desktop change together), then the installed release binary.
+/// How core is started: an explicit override; then the `freecode` binary
+/// shipped next to this executable (a packaged Honey — one release is one
+/// exact core, upgraded together); then the monorepo's built `apps/core` when
+/// this binary lives inside the repo (dev, so core and desktop change
+/// together, as the TUI does); then an installed `freecode` on PATH.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct CoreCommand {
     pub program: PathBuf,
@@ -56,6 +58,9 @@ pub(crate) fn locate_core() -> Result<CoreCommand> {
         return Ok(command_for(PathBuf::from(path), None));
     }
     let exe = std::env::current_exe().ok();
+    if let Some(bundled) = exe.as_deref().and_then(bundled_core) {
+        return Ok(command_for(bundled, None));
+    }
     if let Some(root) = exe.as_deref().and_then(monorepo_root) {
         let dist = root.join("apps/core/dist/server.js");
         if dist.is_file() {
@@ -87,6 +92,12 @@ fn command_for(path: PathBuf, cwd: Option<PathBuf>) -> CoreCommand {
             cwd,
         }
     }
+}
+
+/// `freecode` (`freecode.exe` on Windows) in the same directory as `exe`.
+fn bundled_core(exe: &Path) -> Option<PathBuf> {
+    let name = if cfg!(windows) { "freecode.exe" } else { "freecode" };
+    Some(exe.parent()?.join(name)).filter(|path| path.is_file())
 }
 
 fn find_on_path(name: &str) -> Option<PathBuf> {
@@ -334,6 +345,18 @@ mod tests {
         assert_eq!(js.args, vec!["/r/apps/core/dist/server.js".to_string()]);
         let bin = command_for(PathBuf::from("/usr/bin/freecode"), None);
         assert_eq!(bin.args, vec!["serve".to_string()]);
+    }
+
+    #[test]
+    fn bundled_core_is_the_sibling_freecode_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("jcode-desktop");
+        assert_eq!(bundled_core(&exe), None);
+        let name = if cfg!(windows) { "freecode.exe" } else { "freecode" };
+        std::fs::write(dir.path().join(name), b"").unwrap();
+        assert_eq!(bundled_core(&exe), Some(dir.path().join(name)));
+        // A packaged binary runs as `freecode serve`, not under node.
+        assert_eq!(command_for(dir.path().join(name), None).args, vec!["serve".to_string()]);
     }
 
     #[test]

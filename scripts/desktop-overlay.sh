@@ -26,6 +26,15 @@ if [ ! -d "$upstream/crates/jcode-harness-api" ]; then
 fi
 upstream="$(cd "$upstream" && pwd -P)"
 
+# Releases build against the jcode commit pinned in apps/desktop-shim/JCODE_REV
+# (CI checks out exactly that). A local checkout elsewhere still builds, but
+# say so: it is not what users get.
+pinned="$(cat apps/desktop-shim/JCODE_REV)"
+current="$(git -C "$upstream" rev-parse HEAD 2>/dev/null || echo unknown)"
+if [ "$current" != "$pinned" ]; then
+  echo "note: jcode checkout is at ${current:0:12}, releases pin ${pinned:0:12} (apps/desktop-shim/JCODE_REV)" >&2
+fi
+
 rm -rf apps/jcode
 mkdir -p apps/jcode/crates
 for crate in "$upstream"/crates/*/; do

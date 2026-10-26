@@ -47,8 +47,11 @@ fi
 git log --format='  %h %ad %s' --date=short "${last}..${remote}/${branch}" | head -20
 [ "$dry" -eq 1 ] && exit 0
 
-# apps/desktop/Cargo.lock is re-resolved against the local jcode checkout on
-# every build; it is regenerated, never meaningful local work.
+# apps/desktop/Cargo.lock is committed, resolved against the jcode commit
+# pinned in apps/desktop-shim/JCODE_REV (releases build with --locked). A
+# build against another local checkout rewrites it; that is noise, not work.
+# If the merge below conflicts on it, take either side and rebuild: cargo
+# re-resolves it, then commit the result.
 git checkout -q -- apps/desktop/Cargo.lock 2>/dev/null || true
 if [ -n "$(git status --porcelain)" ]; then
   echo "Working tree is not clean; commit or stash first:" >&2
