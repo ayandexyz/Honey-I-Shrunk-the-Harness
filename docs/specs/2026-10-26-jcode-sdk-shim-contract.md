@@ -233,8 +233,31 @@ never comes from upstream is this `jcode-sdk` shim.
      `MessageAccepted → SessionStatus → TurnStopped → Error`. **Not yet
      verified in the GPUI window**: the draft panel creates its session
      only when a prompt is submitted, which needs a human at the keyboard.
-5. Decide + implement the SSH/managed-cloud/accounts gap (stub vs. hide).
-6. Fix UI fallout file by file.
+5. **DEFERRED 2026-10-26 (user decision: get the desktop running first).**
+   Decide + implement the SSH/managed-cloud/accounts gap (stub vs. hide).
+   Until then their UI stays visible and every action fails with the shim's
+   "not supported by freecode yet" error. Recommendation on record: hide SSH
+   remotes and managed cloud (nothing in freecode backs them); replace the
+   "Sign in to Jcode" footer and login picker with freecode's own provider
+   and auth state (`freecode auth login`). The "decide" rows (rename, save,
+   reasoning effort, rewind, system reminder) are the same kind of extra.
+6. **IN PROGRESS** — fix UI fallout file by file.
+   - **Jcode's on-disk state (Phase 1 finding 4), fixed without upstream
+     edits**: every reader honours `JCODE_HOME` — the harness's
+     `jcode_home()` (sidebar merge of persisted sessions),
+     `jcode_storage::jcode_dir()` (all of `jcode_base`: persisted-history
+     prefetch, transcript search, `Session::create_with_id`), and the shim's
+     `user_jcode_home()` (collections). `scripts/desktop.sh` sets it to
+     `~/.freecode/desktop/jcode-home` (`FREECODE_DESKTOP_JCODE_HOME`
+     overrides), so the sidebar shows only freecode's sessions (log:
+     "local session metadata loaded … (0 sessions)", was 77) and the
+     disk-reading features read an empty dir and do nothing. Running the
+     binary directly, not through `pnpm desktop`, still reads `~/.jcode`.
+   - **Telemetry**: upstream reports usage to Jcode's telemetry service
+     (`jcode-telemetry-core`). `scripts/desktop.sh` sets its documented
+     opt-out, `JCODE_NO_TELEMETRY=1`. Found because the isolated home grew
+     `telemetry_*` files; one test run before the flag did send a version
+     ping (`telemetry_version_sent` = 0.99.1).
 7. Smoke test: real session, real streaming reply, through the GPU UI.
 
 ## Maintenance going forward

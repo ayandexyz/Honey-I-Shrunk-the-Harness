@@ -141,6 +141,7 @@ left out.
 | `FREECODE_IDLE_NUDGE_TOKENS` | `100000` | Context size above which the TUI warns that an idle gap let the prompt cache expire. `0` disables. |
 | `FREECODE_INSTALL_DIR` | `~/.local/bin` | Where `install.sh` / `uninstall.sh` put the launcher. |
 | `FREECODE_CORE` | discovered | Desktop app (`apps/desktop` via the `jcode-sdk` shim): which core to spawn. A `.js` path runs under `node`; anything else is run as `<path> serve`. Unset: the repo's `apps/core/dist/server.js` when the desktop binary is inside the monorepo, else `freecode` on `PATH`. |
+| `FREECODE_DESKTOP_JCODE_HOME` | `~/.freecode/desktop/jcode-home` | `pnpm desktop` sets the desktop's `JCODE_HOME` to this, so upstream code that reads Jcode's own state off disk (sidebar session merge, history prefetch, transcript search) never sees `~/.jcode`. |
 | `FREECODE_DEBUG` | off | Any value turns on debug logging (and echoes MCP servers' stderr). |
 
 ## Evals (`pnpm eval`)
