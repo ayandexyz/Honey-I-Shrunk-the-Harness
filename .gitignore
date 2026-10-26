@@ -69,3 +69,4 @@ temp_interactive_push.bat
 
 # graphify output — regenerable via /graphify, and its cache JSON trips the pre-push scanner.
 docs/graphify-out/
+apps/jcode
