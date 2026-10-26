@@ -113,7 +113,7 @@ impl Portable {
             }
             if !restored {
                 bail!(
-                    "{error:#}. Some files could not be restored. Reinstall Jcode Desktop from https://jcode.sh/desktop"
+                    "{error:#}. Some files could not be restored. Reinstall Honey Desktop from https://github.com/ayandexyz/Honey-I-Shrunk-the-Harness/releases"
                 );
             }
             return Err(error.context("The previous version was kept"));
@@ -211,7 +211,7 @@ mod tests {
                     original_name(entry.as_ref().unwrap().file_name().to_str().unwrap()).is_some()
                 })
                 .count();
-            assert_eq!(aside, 5);
+            assert_eq!(aside, archive::files(&target).len());
 
             // The same process asking again learns the update is already on disk.
             let again = crate::install_with(
@@ -226,7 +226,8 @@ mod tests {
             assert!(matches!(again, crate::Outcome::Installed { fresh: false, .. }));
 
             Portable { dir: dir.to_path_buf() }.cleanup();
-            assert_eq!(fs::read_dir(dir).unwrap().count(), 7); // 5 files, version, lock
+            // Every published file, plus the version record and the lock.
+            assert_eq!(fs::read_dir(dir).unwrap().count(), archive::files(&target).len() + 2);
         }
     }
 
@@ -293,7 +294,7 @@ mod tests {
         for name in archive::files(&target) {
             assert_eq!(fs::read(dir.join(name)).unwrap(), b"old", "{name}");
         }
-        assert_eq!(fs::read_dir(dir).unwrap().count(), 5);
+        assert_eq!(fs::read_dir(dir).unwrap().count(), 7);
     }
 
     #[test]
@@ -303,7 +304,7 @@ mod tests {
         assert!(Portable::detect(&target, &executable).is_ok());
         let renamed = executable.with_file_name(format!("jcode-desktop{OLD_INFIX}123"));
         assert!(Portable::detect(&target, &renamed).is_ok());
-        fs::remove_file(executable.with_file_name("jcode.png")).unwrap();
+        fs::remove_file(executable.with_file_name("honey.png")).unwrap();
         assert!(Portable::detect(&target, &executable).is_err());
         assert!(Portable::detect(&target, Path::new("/usr/bin/jcode-desktop")).is_err());
     }

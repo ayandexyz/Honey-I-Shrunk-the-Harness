@@ -50,9 +50,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Versions with a suffix (0.1.0-beta.1) are pre-releases.
+          prerelease=""
+          [[ "${{ steps.v.outputs.version }}" == *-* ]] && prerelease="--prerelease"
           gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
             gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-              --draft --latest=false --title "Honey ${{ steps.v.outputs.version }}" \
+              --draft --latest=false $prerelease --title "Honey ${{ steps.v.outputs.version }}" \
               --notes "Honey desktop ${{ steps.v.outputs.version }}"
 
   linux:
@@ -101,8 +104,11 @@ jobs:
             libasound2-dev libfontconfig-dev libxkbcommon-dev libxkbcommon-x11-dev \
             libwayland-dev libx11-xcb-dev libxcb1-dev libxcb-render0-dev \
             libxcb-shape0-dev libxcb-xfixes0-dev libgl1-mesa-dri
+      # Frozen: a stale pnpm-lock.yaml must fail here, not get rewritten —
+      # a rewritten lockfile left the tree dirty and stamped the release
+      # "v0.1.0-beta.1 (…, dirty)".
       - name: Install JS dependencies
-        run: pnpm install --no-frozen-lockfile
+        run: pnpm install --frozen-lockfile
       - name: Build and package
         run: bash scripts/package-honey-linux.sh "${{ needs.prepare.outputs.version }}"
       - uses: actions/upload-artifact@v4
@@ -138,3 +144,27 @@ jobs:
           for sums in SHA256SUMS-*; do sha256sum -c "$sums"; done
           gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
             --draft=false --latest=false
+      # The in-app updater reads <releases>/desktop-latest/latest.json
+      # (crates/jcode-desktop-updater/src/release.rs) and only after this step
+      # do installed copies see the new version — so it runs last, once every
+      # asset is public and verified. One channel for now: betas are offered
+      # to every install.
+      - name: Point the update feed at this release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          printf '{"tag_name":"%s"}\n' "$GITHUB_REF_NAME" > latest.json
+          gh release view desktop-latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
+            gh release create desktop-latest --repo "$GITHUB_REPOSITORY" \
+              --prerelease --latest=false --title "Honey update feed" \
+              --notes "Pointer read by Honey's in-app updater. Not a release; download Honey from a desktop-v* release."
+          gh release upload desktop-latest --repo "$GITHUB_REPOSITORY" --clobber latest.json
+          # What installed copies will fetch, anonymously, from the public URL.
+          for attempt in $(seq 1 12); do
+            curl -fsSL "https://github.com/$GITHUB_REPOSITORY/releases/download/desktop-latest/latest.json" |
+              grep -q "\"$GITHUB_REF_NAME\"" && exit 0
+            sleep 5
+          done
+          echo "update feed does not serve $GITHUB_REF_NAME" >&2
+          exit 1

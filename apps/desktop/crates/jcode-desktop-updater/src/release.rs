@@ -3,8 +3,9 @@ use anyhow::{Context, Result, bail, ensure};
 use semver::Version;
 use std::{io::Read, time::Duration};
 
+// freecode: Honey's releases (desktop-v* tags; `desktop-latest` holds latest.json).
 pub const PUBLIC_RELEASES: &str =
-    "https://github.com/1jehuang/jcode-desktop-releases/releases/download";
+    "https://github.com/ayandexyz/Honey-I-Shrunk-the-Harness/releases/download";
 
 pub fn parse_version(text: &str) -> Result<Version> {
     let text = text
@@ -119,7 +120,7 @@ impl Target {
 
     /// The archive's single top-level directory and the asset file name.
     pub fn archive_names(&self, version: &Version) -> (String, String) {
-        let root = format!("Jcode-{version}-{}-{}", self.platform, self.architecture);
+        let root = format!("Honey-{version}-{}-{}", self.platform, self.architecture);
         let asset = format!("{root}.{}", if self.zip { "zip" } else { "tar.gz" });
         (root, asset)
     }
@@ -210,11 +211,11 @@ mod tests {
     fn published_asset_names_match_every_supported_package() {
         let version = Version::parse("0.5.1").unwrap();
         for (os, arch, asset, sums) in [
-            ("linux", "x86_64", "Jcode-0.5.1-linux-x86_64.tar.gz", "SHA256SUMS-linux"),
-            ("linux", "aarch64", "Jcode-0.5.1-linux-aarch64.tar.gz", "SHA256SUMS-linux-aarch64"),
-            ("freebsd", "x86_64", "Jcode-0.5.1-freebsd-x86_64.tar.gz", "SHA256SUMS-freebsd-x86_64"),
-            ("windows", "x86_64", "Jcode-0.5.1-windows-x86_64.zip", "SHA256SUMS-windows"),
-            ("windows", "aarch64", "Jcode-0.5.1-windows-aarch64.zip", "SHA256SUMS-windows-aarch64"),
+            ("linux", "x86_64", "Honey-0.5.1-linux-x86_64.tar.gz", "SHA256SUMS-linux"),
+            ("linux", "aarch64", "Honey-0.5.1-linux-aarch64.tar.gz", "SHA256SUMS-linux-aarch64"),
+            ("freebsd", "x86_64", "Honey-0.5.1-freebsd-x86_64.tar.gz", "SHA256SUMS-freebsd-x86_64"),
+            ("windows", "x86_64", "Honey-0.5.1-windows-x86_64.zip", "SHA256SUMS-windows"),
+            ("windows", "aarch64", "Honey-0.5.1-windows-aarch64.zip", "SHA256SUMS-windows-aarch64"),
         ] {
             let target = Target::for_platform(os, arch).unwrap();
             let (root, name) = target.archive_names(&version);

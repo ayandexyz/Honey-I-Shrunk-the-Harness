@@ -18,13 +18,21 @@ use crate::release::Target;
 pub const MAX_ARCHIVE: u64 = 1024 * 1024 * 1024;
 const MAX_EXTRACTED: u64 = 2 * MAX_ARCHIVE;
 
-/// Files in a Linux or FreeBSD tarball. The first three are executables.
-pub const UNIX_FILES: [&str; 5] = [
+/// Files in a Linux or FreeBSD tarball. The first four are executables.
+///
+/// freecode: Honey's package (scripts/package-honey-linux.sh) — the desktop,
+/// the bundled freecode core with its ripgrep and onnxruntime sidecars, and a
+/// launcher. This list is a contract with every installed copy: an older
+/// updater rejects any archive that differs from it, so changing it strands
+/// users (docs/specs/2026-10-27-honey-desktop-release.md).
+pub const UNIX_FILES: [&str; 7] = [
     "jcode-desktop",
-    "jcode",
-    "jcode-harness-api-bridge",
-    "jcode.desktop",
-    "jcode.png",
+    "freecode",
+    "rg",
+    "honey",
+    "honey.desktop",
+    "honey.png",
+    "libonnxruntime.so.1",
 ];
 /// Files in a Windows zip. The first three are executables.
 pub const WINDOWS_FILES: [&str; 5] = [
@@ -35,7 +43,7 @@ pub const WINDOWS_FILES: [&str; 5] = [
     "Jcode.png",
 ];
 
-pub fn files(target: &Target) -> &'static [&'static str; 5] {
+pub fn files(target: &Target) -> &'static [&'static str] {
     if target.zip {
         &WINDOWS_FILES
     } else {
@@ -44,7 +52,7 @@ pub fn files(target: &Target) -> &'static [&'static str; 5] {
 }
 
 pub fn is_executable(name: &str) -> bool {
-    UNIX_FILES[..3].contains(&name) || WINDOWS_FILES[..3].contains(&name)
+    UNIX_FILES[..4].contains(&name) || WINDOWS_FILES[..3].contains(&name)
 }
 
 pub fn download(

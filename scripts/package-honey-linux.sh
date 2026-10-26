@@ -37,6 +37,10 @@ echo "== freecode core ($bun_target)"
 pnpm --filter @thisisayande/freecode-shared build >/dev/null
 pnpm --filter @thisisayande/freecode-core build >/dev/null
 FREECODE_BUN_TARGET="$bun_target" FREECODE_BUN_OUTFILE="$stage/freecode" node scripts/build-bun.mjs
+# Only the soname core's onnxruntime addon loads. The versioned duplicate and
+# the GPU-provider library vary by release and architecture, and the updater
+# accepts only a fixed file list (see the check below).
+rm -f "$stage"/libonnxruntime.so.1.* "$stage"/libonnxruntime_providers_shared.so
 rg_pkg="ripgrep-$rg_version-$rg_triple"
 curl -fsSL "https://github.com/BurntSushi/ripgrep/releases/download/$rg_version/$rg_pkg.tar.gz" |
   tar -xz -C "$stage" --strip-components=1 "$rg_pkg/rg"
@@ -48,7 +52,13 @@ cargo_dir=$([ "$profile" = release ] && echo release || echo debug)
   JCODE_DESKTOP_VERSION="$version" CARGO_PROFILE_DEV_DEBUG=0 \
     cargo build --locked --profile "$profile" -p jcode-desktop)
 install -m755 "apps/desktop/target/$cargo_dir/jcode-desktop" "$stage/"
-ln -s jcode-desktop "$stage/honey"
+# A script, not a symlink: the updater refuses links inside an archive.
+cat > "$stage/honey" <<'EOF'
+#!/bin/sh
+# Honey launcher: runs the desktop binary that sits next to this script.
+exec "$(dirname "$(readlink -f "$0")")/jcode-desktop" "$@"
+EOF
+chmod 755 "$stage/honey"
 install -m644 apps/desktop/assets/app-icon/icon-1024.png "$stage/honey.png"
 cat > "$stage/honey.desktop" <<'EOF'
 [Desktop Entry]
@@ -62,6 +72,18 @@ Categories=Development;Utility;
 StartupNotify=true
 StartupWMClass=honey
 EOF
+
+# The in-app updater (crates/jcode-desktop-updater/src/archive.rs UNIX_FILES)
+# accepts an archive only if it holds exactly these files. Never ship one it
+# would reject: installed copies could not update past it.
+expected="$(sed -n '/^pub const UNIX_FILES/,/^];/p' \
+  apps/desktop/crates/jcode-desktop-updater/src/archive.rs | grep -o '"[^"]*"' | tr -d '"' | sort)"
+actual="$(ls -A "$stage" | sort)"
+if [ "$expected" != "$actual" ]; then
+  echo "error: package files differ from the updater's UNIX_FILES:" >&2
+  diff <(echo "$expected") <(echo "$actual") >&2 || true
+  exit 1
+fi
 
 # Fail before archiving if the bundle cannot even report its version.
 "$stage/jcode-desktop" --version | grep -q "v$version" ||

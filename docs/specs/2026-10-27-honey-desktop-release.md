@@ -247,3 +247,40 @@ borrow from).
   `SHA256SUMS-*`, then un-drafts, still `--latest=false` so the CLI's
   `install.sh` and TUI update check keep reading the CLI release.
   `workflow_dispatch` builds artifacts only. **Not yet run on GitHub.**
+
+**Fixes after the first CI run (`desktop-v0.1.0-beta.1`, 13½ min, passed)**
+- It printed `v0.1.0-beta.1 (3b7306c, dirty)`: `pnpm-lock.yaml` still listed
+  the deleted `apps/web-app` (984 lines), so `pnpm install` rewrote it and
+  the build saw a modified tree. Lockfile regenerated; the workflow installs
+  with `--frozen-lockfile` so a stale lockfile fails instead. "Dirty" only
+  ever affected the label — `development` is `explicit version is None`
+  (`build_version.rs`), and CI always passes one.
+- `-beta` versions are now created as GitHub pre-releases.
+
+**R2 auto-update (built, not yet proven end to end)**
+- The updater validates an archive against a **fixed file list compiled
+  into the installed copy** (`archive.rs` `UNIX_FILES`), so the list is a
+  contract: an archive with any other file is rejected forever by older
+  installs. Honey's Linux list, the same on every architecture:
+  `jcode-desktop`, `freecode`, `rg`, `honey` (a launcher *script* — the
+  updater forbids links), `honey.desktop`, `honey.png`,
+  `libonnxruntime.so.1`. The versioned `libonnxruntime.so.1.21.0` duplicate
+  and the GPU-provider `libonnxruntime_providers_shared.so` (x86_64 only)
+  are dropped; the bundled core still reports `embedder: available` with
+  only `libonnxruntime.so.1` (load verified, not a full embedding run). An
+  onnxruntime major bump that renames the soname would break this contract
+  and needs a migration release.
+- `package-honey-linux.sh` reads `UNIX_FILES` from the updater source and
+  refuses to archive anything else.
+- Updater edits (freecode hooks): `PUBLIC_RELEASES` → this repo's releases,
+  archive/asset prefix `Honey-`, `UNIX_FILES` (7, first 4 executable),
+  `files()` returns a slice (Windows keeps Jcode's 5 until R5), the
+  reinstall hint URL; tests updated to count per target. 24/24 pass.
+- Workflow publish: after the checksum check, writes
+  `latest.json` = `{"tag_name":"desktop-v…"}`, uploads it to the fixed
+  `desktop-latest` release (pre-release, never "latest"), and re-fetches it
+  anonymously until it serves the new tag. One channel: betas reach every
+  install.
+- Proof still to run: install `0.1.0-beta.2` from its release, publish
+  `0.1.0-beta.3`, run the installed copy's `honey --update` and check every
+  file was swapped and `--version` reports beta.3.
