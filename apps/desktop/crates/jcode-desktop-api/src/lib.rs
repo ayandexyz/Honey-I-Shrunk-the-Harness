@@ -1,0 +1,407 @@
+//! Versioned C ABI between the native GPUI host and reloadable desktop UI.
+//!
+//! This is a development-time ABI. Opaque GPUI pointers still require both
+//! sides to use the exact same Rust toolchain and pinned GPUI revision.
+
+use std::ffi::c_void;
+
+mod image_ids;
+mod launch;
+mod window_launch;
+pub use image_ids::ImageIds;
+pub use launch::{LaunchMode, SHARED_SINGLE_PANEL};
+pub use window_launch::{FORWARDED_ENV, WindowLaunch, WindowLaunches};
+
+pub const ABI_VERSION: u32 = 4;
+pub const STATE_SCHEMA_VERSION: u32 = 1;
+pub const ENTRY_POINT: &[u8] = b"jcode_desktop_ui_plugin\0";
+pub const GPUI_REVISION: [u8; 40] = *b"be875c56343dcbd45127a9805781a9e128057dd7";
+
+pub const ACTIVATE_OK: i32 = 0;
+pub const ACTIVATE_FAILED: i32 = 1;
+pub const ACTIVATE_STATE_INCOMPATIBLE: i32 = 2;
+pub const HOST_OK: i32 = 0;
+pub const HOST_FAILED: i32 = 1;
+
+/// Reply to the reserved `terminal_read(0, 0, empty)` capability probe.
+/// Real resource IDs start at one. Older hosts return a missing-resource reply
+/// with next_cursor=0, so a new UI can reload without restarting live PTYs.
+/// A matching host delegates terminal query replies to the UI engine.
+pub const TERMINAL_ENGINE_REPLIES: u64 = 0x4a43_5445_524d_0001;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TerminalRead {
+    pub copied: usize,
+    pub next_cursor: u64,
+    pub available_from: u64,
+    pub closed: u8,
+}
+
+pub type StoreSnapshotFn = unsafe extern "C-unwind" fn(*mut c_void, *const u8, usize, u32) -> i32;
+pub type TerminalCreateFn = unsafe extern "C-unwind" fn(*mut c_void, u64, *const u8, usize) -> u64;
+pub type TerminalWriteFn = unsafe extern "C-unwind" fn(*mut c_void, u64, *const u8, usize) -> i32;
+pub type TerminalReadFn =
+    unsafe extern "C-unwind" fn(*mut c_void, u64, u64, *mut u8, usize) -> TerminalRead;
+pub type TerminalResizeFn = unsafe extern "C-unwind" fn(*mut c_void, u64, u16, u16) -> i32;
+pub type TerminalReleaseFn = unsafe extern "C-unwind" fn(*mut c_void, u64);
+
+/// Host services whose storage and native resources survive UI generations.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct HostApi {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub context: *mut c_void,
+    pub store_snapshot: StoreSnapshotFn,
+    pub terminal_create: TerminalCreateFn,
+    pub terminal_write: TerminalWriteFn,
+    pub terminal_read: TerminalReadFn,
+    pub terminal_resize: TerminalResizeFn,
+    pub terminal_release: TerminalReleaseFn,
+    /// Canonical host TLS accessors, not a pointer to any particular App.
+    /// Every UI generation must join this context before constructing elements.
+    pub element_arena_context: gpui::ElementArenaContext,
+}
+
+impl HostApi {
+    pub fn is_compatible(self) -> bool {
+        self.abi_version == ABI_VERSION && self.struct_size as usize == size_of::<Self>()
+    }
+}
+
+/// Copyable UI-side wrapper around the host function table.
+#[derive(Clone, Copy)]
+pub struct HostHandle(HostApi);
+
+impl HostHandle {
+    /// # Safety
+    /// A non-null `api` must point to a readable, aligned version/size prefix.
+    /// If that prefix claims the current version and size, the entire table
+    /// must be valid. Its context and callbacks must outlive this handle.
+    pub unsafe fn new(api: *const HostApi) -> Option<Self> {
+        // A previous host owns a shorter table. Check its stable prefix before
+        // creating a reference to, or copying, the current (larger) HostApi.
+        #[repr(C)]
+        struct Header {
+            abi_version: u32,
+            struct_size: u32,
+        }
+        let header = unsafe { api.cast::<Header>().as_ref() }?;
+        if header.abi_version != ABI_VERSION || header.struct_size as usize != size_of::<HostApi>()
+        {
+            return None;
+        }
+        Some(Self(unsafe { api.read() }))
+    }
+
+    /// Join the host's frame allocation context before activating this UI.
+    ///
+    /// # Safety
+    /// All requirements of [`gpui::ElementArenaContext::install`] apply,
+    /// including matching GPUI source, toolchain and layout-affecting build
+    /// configuration, module/TLS lifetimes, and no incompatible rebinding while
+    /// old scopes or allocations remain in use. Install on every thread using
+    /// this plugin's GPUI. Desktop renders and activates on its UI thread, and
+    /// retained generations reinstall the same host context when rolling back.
+    pub unsafe fn install_element_arena_context(self) {
+        unsafe { self.0.element_arena_context.install() };
+    }
+
+    /// Host handle for UI-only tests that do not create native resources.
+    pub fn inert() -> Self {
+        Self(HostApi {
+            abi_version: ABI_VERSION,
+            struct_size: size_of::<HostApi>() as u32,
+            context: std::ptr::null_mut(),
+            store_snapshot: inert_store_snapshot,
+            terminal_create: inert_terminal_create,
+            terminal_write: inert_terminal_write,
+            terminal_read: inert_terminal_read,
+            terminal_resize: inert_terminal_resize,
+            terminal_release: inert_terminal_release,
+            element_arena_context: gpui::ElementArenaContext::current(),
+        })
+    }
+
+    pub fn store_snapshot(self, bytes: &[u8], schema: u32) -> bool {
+        unsafe {
+            (self.0.store_snapshot)(self.0.context, bytes.as_ptr(), bytes.len(), schema) == HOST_OK
+        }
+    }
+
+    pub fn terminal_create(
+        self,
+        requested_id: Option<u64>,
+        working_dir: Option<&str>,
+    ) -> Option<u64> {
+        let working_dir = working_dir.unwrap_or_default().as_bytes();
+        let id = unsafe {
+            (self.0.terminal_create)(
+                self.0.context,
+                requested_id.unwrap_or_default(),
+                working_dir.as_ptr(),
+                working_dir.len(),
+            )
+        };
+        (id != 0).then_some(id)
+    }
+
+    pub fn terminal_write(self, id: u64, bytes: &[u8]) -> bool {
+        unsafe {
+            (self.0.terminal_write)(self.0.context, id, bytes.as_ptr(), bytes.len()) == HOST_OK
+        }
+    }
+
+    pub fn terminal_read(self, id: u64, cursor: u64, output: &mut [u8]) -> TerminalRead {
+        unsafe {
+            (self.0.terminal_read)(
+                self.0.context,
+                id,
+                cursor,
+                output.as_mut_ptr(),
+                output.len(),
+            )
+        }
+    }
+
+    pub fn terminal_engine_replies(self) -> bool {
+        self.terminal_read(0, 0, &mut []).next_cursor == TERMINAL_ENGINE_REPLIES
+    }
+
+    pub fn terminal_resize(self, id: u64, rows: u16, cols: u16) -> bool {
+        unsafe { (self.0.terminal_resize)(self.0.context, id, rows, cols) == HOST_OK }
+    }
+
+    pub fn terminal_release(self, id: u64) {
+        unsafe { (self.0.terminal_release)(self.0.context, id) }
+    }
+}
+
+unsafe extern "C-unwind" fn inert_store_snapshot(
+    _: *mut c_void,
+    _: *const u8,
+    _: usize,
+    _: u32,
+) -> i32 {
+    HOST_FAILED
+}
+
+unsafe extern "C-unwind" fn inert_terminal_create(
+    _: *mut c_void,
+    _: u64,
+    _: *const u8,
+    _: usize,
+) -> u64 {
+    0
+}
+
+unsafe extern "C-unwind" fn inert_terminal_write(
+    _: *mut c_void,
+    _: u64,
+    _: *const u8,
+    _: usize,
+) -> i32 {
+    HOST_FAILED
+}
+
+unsafe extern "C-unwind" fn inert_terminal_read(
+    _: *mut c_void,
+    _: u64,
+    cursor: u64,
+    _: *mut u8,
+    _: usize,
+) -> TerminalRead {
+    TerminalRead {
+        next_cursor: cursor,
+        closed: 1,
+        ..Default::default()
+    }
+}
+
+unsafe extern "C-unwind" fn inert_terminal_resize(_: *mut c_void, _: u64, _: u16, _: u16) -> i32 {
+    HOST_FAILED
+}
+
+unsafe extern "C-unwind" fn inert_terminal_release(_: *mut c_void, _: u64) {}
+
+/// Snapshot callback. The plugin serializes its root and asks the host to copy it.
+pub type SnapshotFn = unsafe extern "C-unwind" fn(*mut c_void, *mut c_void, *const HostApi) -> i32;
+
+/// Activation callback. The snapshot pointer is host-owned and valid only for
+/// the duration of the call. A zero length means a fresh workspace.
+pub type ActivateFn = unsafe extern "C-unwind" fn(
+    *mut c_void,
+    *mut c_void,
+    *const HostApi,
+    *const u8,
+    usize,
+    u32,
+) -> i32;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PluginApi {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub gpui_revision: [u8; 40],
+    pub state_schema: u32,
+    pub minimum_state_schema: u32,
+    /// Identity of the Globals shared through this crate. A different crate
+    /// identity (for example after a version bump) gives them new TypeIds, so
+    /// the UI silently stops seeing host state such as per-window launches.
+    pub shared_globals: u64,
+    pub activate: ActivateFn,
+    pub snapshot: SnapshotFn,
+}
+
+/// Fingerprint of the TypeIds of every Global shared between host and UI.
+pub fn shared_globals_fingerprint() -> u64 {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    std::any::TypeId::of::<WindowLaunches>().hash(&mut hasher);
+    std::any::TypeId::of::<ImageIds>().hash(&mut hasher);
+    hasher.finish()
+}
+
+impl PluginApi {
+    pub fn new(activate: ActivateFn, snapshot: SnapshotFn) -> Self {
+        Self {
+            abi_version: ABI_VERSION,
+            struct_size: size_of::<Self>() as u32,
+            gpui_revision: GPUI_REVISION,
+            state_schema: STATE_SCHEMA_VERSION,
+            minimum_state_schema: STATE_SCHEMA_VERSION,
+            shared_globals: shared_globals_fingerprint(),
+            activate,
+            snapshot,
+        }
+    }
+
+    pub fn compatibility_error(self) -> Option<&'static str> {
+        if self.abi_version != ABI_VERSION {
+            Some("plugin ABI version differs from host")
+        } else if self.struct_size as usize != size_of::<Self>() {
+            Some("plugin ABI table size differs from host")
+        } else if self.gpui_revision != GPUI_REVISION {
+            Some("plugin GPUI revision differs from host")
+        } else if self.shared_globals != shared_globals_fingerprint() {
+            Some(
+                "plugin shared-global identity differs from host (jcode-desktop-api changed); restart Jcode Desktop",
+            )
+        } else if self.minimum_state_schema > self.state_schema {
+            Some("plugin state schema range is invalid")
+        } else {
+            None
+        }
+    }
+
+    pub fn accepts_state(self, schema: u32) -> bool {
+        schema == 0 || (self.minimum_state_schema..=self.state_schema).contains(&schema)
+    }
+}
+
+pub type EntryPoint = unsafe extern "C-unwind" fn() -> PluginApi;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    unsafe extern "C-unwind" fn activate(
+        _: *mut c_void,
+        _: *mut c_void,
+        _: *const HostApi,
+        _: *const u8,
+        _: usize,
+        _: u32,
+    ) -> i32 {
+        ACTIVATE_OK
+    }
+
+    unsafe extern "C-unwind" fn snapshot(_: *mut c_void, _: *mut c_void, _: *const HostApi) -> i32 {
+        ACTIVATE_OK
+    }
+
+    #[test]
+    fn current_plugin_api_is_compatible() {
+        let api = PluginApi::new(activate, snapshot);
+        assert_eq!(api.compatibility_error(), None);
+        assert!(api.accepts_state(STATE_SCHEMA_VERSION));
+        assert!(api.accepts_state(0));
+        assert!(!api.accepts_state(STATE_SCHEMA_VERSION + 1));
+    }
+
+    /// A UI built against a different jcode-desktop-api identity (the version
+    /// bump that broke JCODE_DESKTOP_WORKING_DIR for hot-reloaded windows)
+    /// must be refused rather than silently losing every shared Global.
+    #[test]
+    fn plugin_with_different_shared_global_identity_is_rejected() {
+        let mut api = PluginApi::new(activate, snapshot);
+        api.shared_globals ^= 1;
+        assert!(
+            api.compatibility_error()
+                .is_some_and(|error| error.contains("shared-global identity"))
+        );
+    }
+
+    #[test]
+    fn old_plugin_cannot_activate_against_the_shared_arena_host() {
+        let mut api = PluginApi::new(activate, snapshot);
+        api.abi_version = 3;
+        assert_eq!(
+            api.compatibility_error(),
+            Some("plugin ABI version differs from host")
+        );
+    }
+
+    #[test]
+    fn rejects_short_host_table_before_reading_callbacks() {
+        #[repr(C)]
+        struct Header {
+            abi_version: u32,
+            struct_size: u32,
+        }
+        for abi_version in [3, ABI_VERSION] {
+            let header = Header {
+                abi_version,
+                struct_size: size_of::<Header>() as u32,
+            };
+            // Deliberately only eight readable bytes, not a whole HostApi.
+            let handle = unsafe { HostHandle::new((&header as *const Header).cast()) };
+            assert!(handle.is_none());
+        }
+        assert!(unsafe { HostHandle::new(std::ptr::null()) }.is_none());
+    }
+
+    #[test]
+    fn current_host_table_carries_a_reinstallable_arena_context() {
+        let host = HostHandle::inert();
+        let handle = unsafe { HostHandle::new(&host.0) }.expect("current host table");
+        // A statically linked activation and rollback can install the same
+        // canonical context repeatedly without redirecting it to itself.
+        unsafe {
+            handle.install_element_arena_context();
+            handle.install_element_arena_context();
+        }
+    }
+
+    #[test]
+    fn rejects_wrong_gpui_revision() {
+        let mut api = PluginApi::new(activate, snapshot);
+        api.gpui_revision[0] ^= 1;
+        assert_eq!(
+            api.compatibility_error(),
+            Some("plugin GPUI revision differs from host")
+        );
+    }
+
+    #[test]
+    fn fingerprint_matches_the_workspace_gpui_pin() {
+        let manifest = include_str!("../../../Cargo.toml");
+        let revision = std::str::from_utf8(&GPUI_REVISION).unwrap();
+        assert!(
+            manifest.contains(&format!("rev = \"{revision}\"")),
+            "update GPUI_REVISION whenever the workspace GPUI pin changes"
+        );
+    }
+}

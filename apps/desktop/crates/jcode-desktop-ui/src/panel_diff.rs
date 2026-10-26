@@ -1,0 +1,1331 @@
+//! Clickable tool-edit metadata and an isolated, read-only change review panel.
+use super::*;
+use crate::diff::{FileDiff, tool_diffs};
+
+#[path = "edit_preview.rs"]
+mod edit_preview;
+pub(super) use edit_preview::EditPreviews;
+
+pub(super) struct DiffReview {
+    files: Arc<Vec<FileDiff>>,
+    selected: usize,
+    source: String,
+    collapsed: HashSet<String>,
+    rows: Vec<DiffRow>,
+    scroll: ListState,
+    rich: Option<crate::diff_review_content::ReviewContent>,
+}
+
+#[derive(Clone)]
+struct DiffRow {
+    old: String,
+    new: String,
+    text: String,
+}
+
+fn numbered_rows(lines: &[String]) -> Vec<DiffRow> {
+    let (mut old, mut new) = (None, None);
+    lines
+        .iter()
+        .map(|text| {
+            if text.starts_with("@@") {
+                if text.contains("snippet-relative") {
+                    old = None;
+                    new = None;
+                    return DiffRow {
+                        old: String::new(),
+                        new: String::new(),
+                        text: text.clone(),
+                    };
+                }
+                let mut parts = text.split_whitespace();
+                parts.next();
+                old = parts
+                    .next()
+                    .and_then(|s| s.strip_prefix('-'))
+                    .and_then(|s| s.split(',').next()?.parse::<usize>().ok());
+                new = parts
+                    .next()
+                    .and_then(|s| s.strip_prefix('+'))
+                    .and_then(|s| s.split(',').next()?.parse::<usize>().ok());
+                return DiffRow {
+                    old: String::new(),
+                    new: String::new(),
+                    text: text.clone(),
+                };
+            }
+            let mut next = |is_old: bool| {
+                let counter = if is_old { &mut old } else { &mut new };
+                counter
+                    .as_mut()
+                    .map(|n| {
+                        let label = n.to_string();
+                        *n = n.saturating_add(1);
+                        label
+                    })
+                    .unwrap_or_default()
+            };
+            let before = if text.starts_with('-') || text.starts_with(' ') {
+                next(true)
+            } else {
+                String::new()
+            };
+            let after = if text.starts_with('+') || text.starts_with(' ') {
+                next(false)
+            } else {
+                String::new()
+            };
+            DiffRow {
+                old: before,
+                new: after,
+                text: text.clone(),
+            }
+        })
+        .collect()
+}
+
+impl DiffReview {
+    fn new(files: Arc<Vec<FileDiff>>, selected: usize, source: String) -> Self {
+        let rows = numbered_rows(&files[selected].lines);
+        let scroll = ListState::new(rows.len(), ListAlignment::Top, px(200.));
+        Self {
+            files,
+            selected,
+            source,
+            collapsed: HashSet::new(),
+            rows,
+            scroll,
+            rich: None,
+        }
+    }
+
+    fn select(&mut self, index: usize, cx: &mut App) {
+        self.selected = index;
+        if let Some(rich) = &mut self.rich {
+            rich.select(index, cx);
+        }
+        self.rows = numbered_rows(&self.files[index].lines);
+        self.scroll = ListState::new(self.rows.len(), ListAlignment::Top, px(200.));
+    }
+}
+
+/// One visible row of the lazygit-style file tree.
+#[derive(Debug, PartialEq)]
+struct TreeRow {
+    depth: usize,
+    label: String,
+    /// Collapse key for directory rows.
+    dir: Option<String>,
+    /// Index into the review's files for file rows.
+    file: Option<usize>,
+}
+
+#[derive(Default)]
+struct TreeNode {
+    dirs: std::collections::BTreeMap<String, TreeNode>,
+    files: Vec<(String, usize)>,
+}
+
+/// Builds the visible tree: the shared directory prefix becomes a root label,
+/// single-child directory chains are compressed, and directories sort first.
+fn tree_rows(files: &[FileDiff], collapsed: &HashSet<String>) -> (String, Vec<TreeRow>) {
+    let split: Vec<Vec<&str>> = files
+        .iter()
+        .map(|file| file.path.split('/').filter(|p| !p.is_empty()).collect())
+        .collect();
+    let mut prefix = split
+        .first()
+        .map(|parts| parts[..parts.len().saturating_sub(1)].to_vec())
+        .unwrap_or_default();
+    for parts in &split {
+        let dirs = &parts[..parts.len().saturating_sub(1)];
+        let shared = prefix.iter().zip(dirs).take_while(|(a, b)| a == b).count();
+        prefix.truncate(shared);
+    }
+    let mut root = TreeNode::default();
+    for (index, parts) in split.iter().enumerate() {
+        let rest = &parts[prefix.len()..];
+        let Some((name, dirs)) = rest.split_last() else {
+            continue;
+        };
+        let mut node = &mut root;
+        for dir in dirs {
+            node = node.dirs.entry((*dir).to_owned()).or_default();
+        }
+        node.files.push(((*name).to_owned(), index));
+    }
+    fn flatten(
+        node: &TreeNode,
+        base: &str,
+        depth: usize,
+        collapsed: &HashSet<String>,
+        rows: &mut Vec<TreeRow>,
+    ) {
+        for (name, mut child) in &node.dirs {
+            let mut label = name.clone();
+            let mut full = if base.is_empty() {
+                name.clone()
+            } else {
+                format!("{base}/{name}")
+            };
+            while child.files.is_empty() && child.dirs.len() == 1 {
+                let (next, grandchild) = child.dirs.iter().next().unwrap();
+                label = format!("{label}/{next}");
+                full = format!("{full}/{next}");
+                child = grandchild;
+            }
+            rows.push(TreeRow {
+                depth,
+                label,
+                dir: Some(full.clone()),
+                file: None,
+            });
+            if !collapsed.contains(&full) {
+                flatten(child, &full, depth + 1, collapsed, rows);
+            }
+        }
+        let mut files: Vec<_> = node.files.iter().collect();
+        files.sort();
+        for (name, index) in files {
+            rows.push(TreeRow {
+                depth,
+                label: name.clone(),
+                dir: None,
+                file: Some(*index),
+            });
+        }
+    }
+    let mut rows = Vec::new();
+    flatten(&root, "", 0, collapsed, &mut rows);
+    let absolute = files.iter().all(|file| file.path.starts_with('/'));
+    let mut label = format!("{}{}", if absolute { "/" } else { "" }, prefix.join("/"));
+    label = crate::platform_dirs::tilde(&label);
+    (label, rows)
+}
+
+fn status_letter(kind: &str) -> (&'static str, gpui::Rgba) {
+    let theme = Theme::global();
+    match kind {
+        "Added" => ("A", theme.OK),
+        "Deleted" => ("D", theme.ERROR),
+        "Renamed" => ("R", theme.ACCENT),
+        _ => ("M", theme.WARN),
+    }
+}
+
+fn counts(file: &FileDiff) -> gpui::Div {
+    div()
+        .flex()
+        .gap_2()
+        .flex_none()
+        .font_family(Theme::global().FONT_MONO)
+        .child(
+            div()
+                .text_color(Theme::global().OK)
+                .child(format!("+{}", file.added())),
+        )
+        .child(
+            div()
+                .text_color(Theme::global().ERROR)
+                .child(format!("−{}", file.removed())),
+        )
+}
+
+fn source_label(done: bool, failed: bool) -> &'static str {
+    if failed {
+        "Failed · requested changes"
+    } else if done {
+        "Completed · requested changes"
+    } else {
+        "Running · proposed changes"
+    }
+}
+
+type PreviewCacheEntry = (String, String, String, Arc<Vec<FileDiff>>);
+
+thread_local! {
+    // Transcript repainting must not rerun snippet comparison. Cache data only,
+    // never themed elements, and bound retained arguments for large tool calls.
+    static PREVIEW_CACHE: std::cell::RefCell<std::collections::VecDeque<PreviewCacheEntry>> = const {
+        std::cell::RefCell::new(std::collections::VecDeque::new())
+    };
+}
+
+#[cfg(test)]
+fn inline_files(name: &str, input: &str) -> Arc<Vec<FileDiff>> {
+    inline_result_files(name, input, "")
+}
+
+pub(super) fn inline_result_files(name: &str, input: &str, output: &str) -> Arc<Vec<FileDiff>> {
+    PREVIEW_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some((_, _, _, files)) = cache.iter().find(|(tool, arguments, result, _)| {
+            tool == name && arguments == input && result == output
+        }) {
+            return files.clone();
+        }
+        let mut files = tool_diffs(name, input);
+        // Keep file identity/order aligned with the full-review action while
+        // using the same minimal snippet comparison as the detailed viewer.
+        if let Some(preview) =
+            crate::diff_model::from_tool_result(name, input, output).filter(|preview| {
+                preview.files.len() == files.len()
+                    && preview
+                        .files
+                        .iter()
+                        .zip(&files)
+                        .all(|(a, b)| a.path == b.path)
+            })
+        {
+            use crate::diff_model::LineKind;
+            for (file, rich) in files.iter_mut().zip(preview.files) {
+                file.lines = rich
+                    .hunks
+                    .into_iter()
+                    .flat_map(|hunk| {
+                        let header = if hunk.header.starts_with("@@ -") {
+                            hunk.header
+                        } else {
+                            let old = hunk
+                                .lines
+                                .iter()
+                                .filter_map(|line| line.old_line)
+                                .collect::<Vec<_>>();
+                            let new = hunk
+                                .lines
+                                .iter()
+                                .filter_map(|line| line.new_line)
+                                .collect::<Vec<_>>();
+                            format!(
+                                "@@ -{},{} +{},{} @@{}",
+                                old.first().copied().unwrap_or(0),
+                                old.len(),
+                                new.first().copied().unwrap_or(0),
+                                new.len(),
+                                if hunk.header.contains("snippet-relative") {
+                                    " (snippet-relative lines)"
+                                } else {
+                                    ""
+                                }
+                            )
+                        };
+                        let header = Some(header);
+                        header.into_iter().chain(hunk.lines.into_iter().map(|line| {
+                            let prefix = match line.kind {
+                                LineKind::Added => "+",
+                                LineKind::Removed => "-",
+                                LineKind::Context => " ",
+                                LineKind::Meta => "\\ ",
+                            };
+                            format!("{prefix}{}", line.text)
+                        }))
+                    })
+                    .collect();
+            }
+        }
+        let files = Arc::new(files);
+        // Keep at most eight small calls or one oversized call. Re-parsing a
+        // large write on every countdown frame is much costlier than retaining
+        // its already-resident transcript arguments until another tool arrives.
+        while !cache.is_empty()
+            && (cache.len() >= 8
+                || cache
+                    .iter()
+                    .map(|(_, input, output, _)| input.len() + output.len())
+                    .sum::<usize>()
+                    + input.len()
+                    + output.len()
+                    > 1024 * 1024)
+        {
+            cache.pop_front();
+        }
+        cache.push_back((
+            name.to_owned(),
+            input.to_owned(),
+            output.to_owned(),
+            files.clone(),
+        ));
+        files
+    })
+}
+
+pub(super) fn edit_preview_key(call_id: &str, index: usize) -> String {
+    format!("tool-edit-{call_id}-{index}")
+}
+
+pub(super) fn edit_preview_intent(input: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(input)
+        .ok()
+        .and_then(|value| value.get("intent")?.as_str().map(str::to_owned))
+        .filter(|intent| !intent.trim().is_empty())
+        .unwrap_or_else(|| "Edit file".into())
+}
+
+impl Panel {
+    pub(super) fn render_edit_metadata(
+        &self,
+        call_id: &str,
+        name: &str,
+        input: &str,
+        output: &str,
+        done: bool,
+        error: Option<&str>,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        let files = inline_result_files(name, input, if error.is_none() { output } else { "" });
+        if files.is_empty() {
+            return None;
+        }
+        let failed = error.is_some();
+        let intent = edit_preview_intent(input);
+        let review = crate::ui_actions::OpenChangeReview {
+            source: cx.entity_id(),
+            name: name.into(),
+            input: input.into(),
+            output: output.into(),
+            selected: 0,
+            done,
+            failed,
+        };
+        let mut card = div()
+            .debug_selector(|| "code-edit-preview".into())
+            .my_2()
+            .flex()
+            .flex_col()
+            .gap_2();
+        for index in 0..files.len() {
+            let header = edit_preview::PreviewHeader {
+                intent: Some(intent.clone()),
+                error: error.map(str::to_owned),
+                review: review.for_file(index),
+                focus: self.focus_handle.clone(),
+                selection: Some((
+                    self.transcript_selection.clone(),
+                    edit_preview_key(call_id, index).into(),
+                )),
+            };
+            let preview = self.edit_previews.view(
+                format!("{call_id}-{index}"),
+                files.clone(),
+                index,
+                done,
+                header,
+                cx,
+            );
+            card = card.child(
+                div()
+                    .debug_selector(move || format!("edit-preview-card-{index}").into())
+                    .min_w_0()
+                    .rounded_lg()
+                    .overflow_hidden()
+                    .bg(Theme::global().CODE_BG)
+                    .child(preview),
+            );
+        }
+        Some(card.into_any_element())
+    }
+
+    pub(crate) fn is_change_review(&self) -> bool {
+        self.session_id.starts_with("review://")
+    }
+
+    pub(crate) fn new_change_review(
+        session_id: String,
+        working_dir: Option<String>,
+        request: &crate::ui_actions::OpenChangeReview,
+        bridge: Bridge,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut panel = Self::new(
+            session_id,
+            Some("Change review".into()),
+            working_dir,
+            bridge,
+            cx,
+        );
+        panel.set_change_review(request, cx);
+        panel
+    }
+
+    pub(crate) fn set_change_review(
+        &mut self,
+        request: &crate::ui_actions::OpenChangeReview,
+        cx: &mut Context<Self>,
+    ) {
+        let output = if request.failed {
+            ""
+        } else {
+            request.output.as_ref()
+        };
+        let files = if output.is_empty() {
+            Arc::new(tool_diffs(&request.name, &request.input))
+        } else {
+            inline_result_files(&request.name, &request.input, output)
+        };
+        let source = format!(
+            "{} · {}",
+            request.name,
+            source_label(request.done, request.failed)
+        );
+        let mut review = DiffReview::new(files.clone(), request.selected, source);
+        // Parse structured comparisons only on open and never pair mismatched files.
+        if let Some(preview) =
+            crate::diff_model::from_tool_result(&request.name, &request.input, output).filter(
+                |preview| {
+                    preview.files.len() == files.len()
+                        && preview
+                            .files
+                            .iter()
+                            .zip(files.iter())
+                            .all(|(new, old)| new.path == old.path)
+                },
+            )
+        {
+            review.rich = Some(crate::diff_review_content::ReviewContent::new(
+                preview,
+                request.selected,
+                request.done,
+                request.failed,
+                cx,
+            ));
+        }
+        self.diff_review = Some(review);
+        cx.notify();
+    }
+
+    pub(super) fn close_diff_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.is_change_review() {
+            self.focus_handle.focus(window, cx);
+            window.dispatch_action(
+                Box::new(crate::ui_actions::CloseChangeReview {
+                    panel: cx.entity_id(),
+                }),
+                cx,
+            );
+            return;
+        }
+        self.diff_review = None;
+        self.focus_input(window, cx);
+        cx.notify();
+    }
+
+    pub(super) fn render_diff_review(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let review = self.diff_review.as_ref()?;
+        let file = &review.files[review.selected];
+        let theme = Theme::global();
+        let (root_label, rows) = tree_rows(&review.files, &review.collapsed);
+        let mono = theme.FONT_MONO.clone();
+        let mut tree = div()
+            .id("diff-tree-scroll")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .py_1()
+            .font_family(mono.clone())
+            .text_size(px(12.))
+            .line_height(px(22.));
+        let base = usize::from(!root_label.is_empty());
+        if !root_label.is_empty() {
+            tree = tree.child(
+                div()
+                    .px_2()
+                    .truncate()
+                    .text_color(theme.TEXT_DIM)
+                    .child(root_label),
+            );
+        }
+        for row in rows {
+            let indent = px(8. + (row.depth + base) as f32 * 14.);
+            if let Some(path) = row.dir {
+                let collapsed = review.collapsed.contains(&path);
+                let selector = format!("diff-directory-{path}");
+                tree = tree.child(
+                    div()
+                        .id(SharedString::from(format!("diff-dir-{path}")))
+                        .debug_selector(move || selector.clone().into())
+                        .mx_1()
+                        .pl(indent)
+                        .pr_2()
+                        .rounded_full()
+                        .flex()
+                        .gap_1p5()
+                        .cursor_pointer()
+                        .hover(|s| s.bg(theme.QUOTE_BG))
+                        .child(
+                            div()
+                                .flex_none()
+                                .w(px(10.))
+                                .text_color(theme.TEXT_FAINT)
+                                .child(if collapsed { "▸" } else { "▾" }),
+                        )
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .text_color(theme.TEXT_DIM)
+                                .child(row.label),
+                        )
+                        .on_mouse_down(
+                            gpui::MouseButton::Left,
+                            cx.listener(move |this, _, _, cx| {
+                                if let Some(review) = &mut this.diff_review {
+                                    if !review.collapsed.remove(&path) {
+                                        review.collapsed.insert(path.clone());
+                                    }
+                                }
+                                cx.stop_propagation();
+                                cx.notify();
+                            }),
+                        ),
+                );
+                continue;
+            }
+            let Some(index) = row.file else { continue };
+            let entry = &review.files[index];
+            let (letter, color) = status_letter(&entry.kind);
+            let selected = index == review.selected;
+            tree = tree.child(
+                div()
+                    .id(("diff-tree-file", index))
+                    .debug_selector(move || format!("diff-tree-file-{index}").into())
+                    .mx_1()
+                    .pl(indent)
+                    .pr_2()
+                    .rounded_full()
+                    .flex()
+                    .gap_1p5()
+                    .items_center()
+                    .cursor_pointer()
+                    .when(selected, |s| s.bg(theme.ACCENT_DIM))
+                    .when(!selected, |s| s.hover(|s| s.bg(theme.QUOTE_BG)))
+                    .child(div().flex_none().w(px(10.)).text_color(color).child(letter))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex_1()
+                            .truncate()
+                            .text_color(if selected {
+                                theme.TEXT
+                            } else {
+                                theme.CODE_TEXT
+                            })
+                            .when(selected, |s| s.font_weight(FontWeight::MEDIUM))
+                            .child(row.label),
+                    )
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(move |this, _, _, cx| {
+                            if let Some(review) = &mut this.diff_review {
+                                review.select(index, cx);
+                            }
+                            cx.stop_propagation();
+                            cx.notify();
+                        }),
+                    ),
+            );
+        }
+        let position = format!("{} of {}", review.selected + 1, review.files.len());
+        let panel = cx.entity().downgrade();
+        let diff_list = list(review.scroll.clone(), move |index, _, cx| {
+            let Some(panel) = panel.upgrade() else {
+                return div().into_any_element();
+            };
+            let Some(review) = &panel.read(cx).diff_review else {
+                return div().into_any_element();
+            };
+            let Some(row) = review.rows.get(index) else {
+                return div().into_any_element();
+            };
+            let theme = Theme::global();
+            div()
+                .min_w_full()
+                .flex()
+                .font_family(theme.FONT_MONO)
+                .text_size(px(12.))
+                .line_height(px(22.))
+                .when(row.text.starts_with('+'), |s| {
+                    s.bg(gpui::Hsla::from(theme.OK).opacity(0.08))
+                })
+                .when(row.text.starts_with('-'), |s| {
+                    s.bg(gpui::Hsla::from(theme.ERROR).opacity(0.08))
+                })
+                .when(row.text.starts_with("@@"), |s| s.bg(theme.CODE_HEADER_BG))
+                .child(gutter(row.old.clone()))
+                .child(gutter(row.new.clone()))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .pr_3()
+                        .text_color(line_color(&row.text))
+                        .child(row.text.clone()),
+                )
+                .into_any_element()
+        })
+        .size_full();
+        let copy = format!("{}\n{}", file.path, file.lines.join("\n"));
+        Some(div().id("diff-review").debug_selector(|| "diff-review".into())
+            .absolute().inset_0().size_full().flex().flex_col().bg(theme.PANEL_BG).occlude()
+            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+            .child(div().flex_none().flex().items_center().gap_3().p_3().border_b_1().border_color(theme.CODE_BORDER)
+                .child(div().flex_1().min_w_0().flex().flex_col().gap_1()
+                    .child(div().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).text_color(theme.TEXT).child("Change review"))
+                    .child(div().truncate().text_size(px(10.)).text_color(theme.TEXT_DIM).child(review.source.clone())))
+                .child(div().id("diff-close").debug_selector(|| "diff-close".into()).px_2().py_1().rounded_md()
+                    .text_size(px(11.)).text_color(theme.TEXT_DIM).cursor_pointer().hover(|s| s.bg(theme.QUOTE_BG))
+                    .child(if self.is_change_review() { "Close review · Esc" } else { "Back to chat · Esc" })
+                    .on_mouse_up(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| {
+                        this.close_diff_review(window, cx); cx.stop_propagation();
+                    }))))
+            .child(div().flex_1().min_h_0().flex()
+                .child(div().debug_selector(|| "diff-file-tree".into()).w(relative(0.25)).min_w(px(160.)).max_w(px(300.))
+                    .flex_none().flex().flex_col().m_2().mr_0().rounded_xl().border_1().border_color(theme.CODE_BORDER).bg(theme.CODE_BG).overflow_hidden()
+                    .child(div().flex_none().flex().items_center().gap_2().px_3().pt_2().pb_1()
+                        .child(div().text_size(px(12.)).font_weight(FontWeight::SEMIBOLD).text_color(theme.TEXT).child("Files"))
+                        .child(div().text_size(px(11.)).text_color(theme.TEXT_FAINT).child(review.files.len().to_string())))
+                    .child(tree)
+                    .child(div().flex_none().flex().justify_end().px_3().py_1p5().font_family(mono)
+                        .text_size(px(11.)).text_color(theme.TEXT_FAINT).child(position)))
+                .child(div().min_w_0().flex_1().flex().flex_col()
+                    .when(review.rich.is_none(), |el| el.child(div().flex_none().p_3().flex().flex_col().gap_2().border_b_1().border_color(theme.CODE_BORDER)
+                        .child(div().debug_selector(|| "diff-selected-path".into()).text_size(px(12.)).font_family(theme.FONT_MONO).text_color(theme.TEXT).child(file.path.clone()))
+                        .when_some(file.previous_path.clone(), |el, path| el.child(div().text_size(px(10.)).text_color(theme.TEXT_DIM).child(format!("Previously {path}"))))
+                        .child(div().flex().items_center().gap_3().text_size(px(11.))
+                            .child(div().text_color(theme.TEXT_DIM).child(file.kind.clone())).child(counts(file))
+                            .child(div().id("diff-copy")
+                                        .debug_selector(|| "diff-copy".into()).ml_auto().cursor_pointer().text_color(theme.ACCENT).child("Copy diff")
+                                .on_mouse_down(gpui::MouseButton::Left, move |_, _, cx| {
+                                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy.clone())); cx.stop_propagation();
+                                })))))
+                    .child(div().flex_1().min_h_0().relative().bg(theme.CODE_BG)
+                        .when(review.rich.is_none(), |el| el
+                            .when(review.rows.is_empty(), |el| el.child(div().p_4().text_size(px(12.)).text_color(theme.TEXT_DIM)
+                                .child("No line content supplied by this tool.")))
+                            .child(diff_list).child(crate::scrollbar::vertical_list(&review.scroll, "diff-scrollbar")))
+                        .when_some(review.rich.as_ref(), |el, rich| el.child(rich.render())))
+                    .child(div().flex_none().px_3().py_2().text_size(px(10.)).text_color(theme.TEXT_FAINT)
+                        .child("Recorded tool change, not a live working-tree diff."))))
+            .into_any_element())
+    }
+}
+
+fn gutter(text: String) -> gpui::Div {
+    div()
+        .w(px(42.))
+        .flex_none()
+        .pr_2()
+        .text_align(gpui::TextAlign::Right)
+        .text_color(Theme::global().CODE_GUTTER)
+        .child(text)
+}
+
+fn line_color(line: &str) -> gpui::Rgba {
+    if line.starts_with('+') {
+        Theme::global().OK
+    } else if line.starts_with('-') {
+        Theme::global().ERROR
+    } else if line.starts_with("@@") {
+        Theme::global().ACCENT
+    } else {
+        Theme::global().CODE_TEXT
+    }
+}
+
+pub(super) fn fixture_items() -> Vec<Item> {
+    vec![
+        Item::User("Make the navigation clearer and add a regression test.".into()),
+        Item::Assistant("The update touches two files. Click a card for its inline diff, or the change counts for a full review.".into()),
+        Item::Tool {
+            call_id: "diff-fixture".into(), name: "apply_patch".into(),
+            input: serde_json::json!({"intent": "Improve navigation labels", "patch_text": "*** Begin Patch\n*** Update File: src/navigation.rs\n@@\n fn label() -> &'static str {\n-    \"Go\"\n+    \"Continue\"\n }\n*** Add File: tests/navigation.rs\n+#[test]\n+fn navigation_label_is_clear() {\n+    assert_eq!(label(), \"Continue\");\n+}\n*** End Patch"}).to_string(),
+            output: "Updated src/navigation.rs and added tests/navigation.rs\n\nFile diff:\n```diff\n--- a/src/navigation.rs\n+++ b/src/navigation.rs\n@@ -42,3 +42,3 @@\n fn label() -> &'static str {\n-    \"Go\"\n+    \"Continue\"\n }\n--- /dev/null\n+++ b/tests/navigation.rs\n@@ -0,0 +1,4 @@\n+#[test]\n+fn navigation_label_is_clear() {\n+    assert_eq!(label(), \"Continue\");\n+}\n```\n".into(), done: true, error: None,
+        },
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn selection_tool(name: &str) -> Item {
+        let input = if name == "apply_patch" {
+            serde_json::json!({
+                "intent": "Update labels",
+                "patch_text": "*** Begin Patch\n*** Update File: src/first.rs\n@@\n-old\n+new\n*** Add File: src/second.rs\n+second\n*** End Patch",
+            })
+        } else {
+            serde_json::json!({
+                "intent": "Update labels", "file_path": "src/first.rs",
+                "old_string": "old", "new_string": "new",
+            })
+        };
+        Item::Tool {
+            call_id: "selection-edit".into(),
+            name: name.into(),
+            input: input.to_string(),
+            output: "Invisible tool output must not be copied".into(),
+            done: true,
+            error: None,
+        }
+    }
+
+    fn selection_workspace<'a>(
+        cx: &'a mut gpui::TestAppContext,
+        name: &str,
+    ) -> (
+        gpui::Entity<crate::workspace::Workspace>,
+        gpui::Entity<Panel>,
+        &'a mut gpui::VisualTestContext,
+    ) {
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.push_test_panel("edit-selection", cx);
+            workspace
+        });
+        vcx.simulate_resize(gpui::size(px(1200.), px(1000.)));
+        let panel = workspace.read_with(vcx, |workspace, _| workspace.test_panel(0).unwrap());
+        panel.update(vcx, |panel, cx| {
+            *panel.items = vec![
+                Item::Assistant("Before".into()),
+                selection_tool(name),
+                Item::Assistant("After".into()),
+            ];
+            cx.notify();
+        });
+        vcx.run_until_parked();
+        (workspace, panel, vcx)
+    }
+
+    fn drag_selection(
+        vcx: &mut gpui::VisualTestContext,
+        start: gpui::Point<gpui::Pixels>,
+        end: gpui::Point<gpui::Pixels>,
+    ) -> String {
+        vcx.simulate_event(gpui::MouseDownEvent {
+            button: gpui::MouseButton::Left,
+            position: start,
+            modifiers: gpui::Modifiers::default(),
+            click_count: 1,
+            first_mouse: false,
+        });
+        vcx.run_until_parked();
+        vcx.simulate_event(gpui::MouseMoveEvent {
+            position: end,
+            pressed_button: Some(gpui::MouseButton::Left),
+            modifiers: gpui::Modifiers::default(),
+        });
+        vcx.run_until_parked();
+        vcx.simulate_event(gpui::MouseUpEvent {
+            button: gpui::MouseButton::Left,
+            position: end,
+            modifiers: gpui::Modifiers::default(),
+            click_count: 1,
+        });
+        vcx.run_until_parked();
+        // Verify keyboard copy retains selection focus, not only copy-on-release.
+        vcx.update(|_, cx| {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string("sentinel".into()))
+        });
+        vcx.simulate_keystrokes("ctrl-c");
+        vcx.update(|_, cx| cx.read_from_clipboard())
+            .and_then(|item| item.text())
+            .unwrap()
+    }
+
+    #[gpui::test]
+    fn transcript_selection_crosses_edit_cards_and_copies_only_visible_headers(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(crate::input::bind_keys);
+        for name in ["apply_patch", "edit"] {
+            let (workspace, panel, vcx) = selection_workspace(cx, name);
+            let before = vcx.debug_bounds("selectable-text-0-0").unwrap();
+            let after = vcx.debug_bounds("selectable-text-2-0").unwrap();
+            let start = gpui::point(before.left() + px(0.1), before.center().y);
+            let end = gpui::point(after.right() - px(0.1), after.center().y);
+            let mut expected = format!("Before\n{name}\nUpdate labels\nsrc/first.rs\n");
+            if name == "apply_patch" {
+                expected.push_str("apply_patch\nUpdate labels\nsrc/second.rs\n");
+            }
+            expected.push_str("After");
+            for (start, end) in [(start, end), (end, start)] {
+                assert_eq!(drag_selection(vcx, start, end), expected, "{name}");
+                panel.read_with(vcx, |panel, cx| {
+                    let selection = panel.transcript_selection.read(cx);
+                    assert!(!selection.is_dragging());
+                    for part in ["name", "intent", "path"] {
+                        assert!(
+                            selection
+                                .highlight(&format!("tool-edit-selection-edit-0-{part}"), 4)
+                                .is_some()
+                        );
+                    }
+                });
+                assert!(
+                    vcx.debug_bounds("edit-expanded-body").is_some(),
+                    "drag must not toggle"
+                );
+                assert!(workspace.read_with(vcx, |workspace, _| workspace.test_panel(1).is_none()));
+            }
+        }
+    }
+
+    #[gpui::test]
+    fn edit_header_leaves_drag_copy_without_toggling_and_extend_into_transcript(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(crate::input::bind_keys);
+        for name in ["apply_patch", "edit"] {
+            let (workspace, panel, vcx) = selection_workspace(cx, name);
+            for (part, text) in [
+                ("name", name),
+                ("intent", "Update labels"),
+                ("path", "src/first.rs"),
+            ] {
+                let selector = match part {
+                    "name" => "selectable-text-tool-edit-selection-edit-0-name",
+                    "intent" => "selectable-text-tool-edit-selection-edit-0-intent",
+                    "path" => "selectable-text-tool-edit-selection-edit-0-path",
+                    _ => unreachable!(),
+                };
+                let bounds = vcx.debug_bounds(selector).unwrap();
+                let start = gpui::point(bounds.left() + px(0.1), bounds.center().y);
+                let end = gpui::point(bounds.right() - px(0.1), bounds.center().y);
+                assert_eq!(drag_selection(vcx, start, end), text, "{name} {part}");
+                assert!(
+                    vcx.debug_bounds("edit-expanded-body").is_some(),
+                    "leaf drag must not toggle"
+                );
+                assert!(!panel.read_with(vcx, |panel, cx| {
+                    panel.transcript_selection.read(cx).is_dragging()
+                }));
+            }
+            // End a drag from preceding text inside the card's selectable path.
+            let before = vcx.debug_bounds("selectable-text-0-0").unwrap();
+            let path = vcx
+                .debug_bounds("selectable-text-tool-edit-selection-edit-0-path")
+                .unwrap();
+            assert_eq!(
+                drag_selection(
+                    vcx,
+                    gpui::point(before.left() + px(0.1), before.center().y),
+                    gpui::point(path.right() - px(0.1), path.center().y)
+                ),
+                format!("Before\n{name}\nUpdate labels\nsrc/first.rs"),
+            );
+            assert!(vcx.debug_bounds("edit-expanded-body").is_some());
+            assert!(workspace.read_with(vcx, |workspace, _| workspace.test_panel(1).is_none()));
+        }
+    }
+
+    #[test]
+    fn completion_replaces_snippet_offsets_with_file_positions_and_refreshes_cache() {
+        let input = serde_json::json!({"file_path":"src/demo.rs", "old_string":"old();\n", "new_string":"new();\n"}).to_string();
+        let pending = inline_result_files("edit", &input, "");
+        assert!(
+            numbered_rows(&pending[0].lines)
+                .iter()
+                .all(|row| row.old.is_empty() && row.new.is_empty())
+        );
+        let output = "Done\n\nFile diff:\n```diff\n--- a/src/demo.rs\n+++ b/src/demo.rs\n@@ -142 +142 @@\n-old();\n+new();\n```\n";
+        let done = inline_result_files("edit", &input, output);
+        assert!(!Arc::ptr_eq(&pending, &done));
+        assert!(Arc::ptr_eq(
+            &done,
+            &inline_result_files("edit", &input, output)
+        ));
+        let rows = numbered_rows(&done[0].lines);
+        assert_eq!(rows[1].old, "142");
+        assert_eq!(rows[2].new, "142");
+        assert!(
+            !done[0]
+                .lines
+                .iter()
+                .any(|line| line.contains("snippet-relative"))
+        );
+    }
+
+    #[gpui::test]
+    fn failed_edit_footer_drag_copies_error_and_keeps_preview_open(cx: &mut gpui::TestAppContext) {
+        cx.update(crate::input::bind_keys);
+        let (workspace, panel, vcx) = selection_workspace(cx, "edit");
+        panel.update(vcx, |panel, cx| {
+            if let Item::Tool { error, .. } = &mut panel.items[1] {
+                *error = Some("No matching source text".into());
+            }
+            cx.notify();
+        });
+        vcx.run_until_parked();
+        let error = vcx
+            .debug_bounds("selectable-text-tool-edit-selection-edit-0-error")
+            .unwrap();
+        assert_eq!(
+            drag_selection(
+                vcx,
+                gpui::point(error.left() + px(0.1), error.center().y),
+                gpui::point(error.right() - px(0.1), error.center().y)
+            ),
+            "No matching source text"
+        );
+        let before = vcx.debug_bounds("selectable-text-0-0").unwrap();
+        let after = vcx.debug_bounds("selectable-text-2-0").unwrap();
+        assert_eq!(
+            drag_selection(
+                vcx,
+                gpui::point(before.left() + px(0.1), before.center().y),
+                gpui::point(after.right() - px(0.1), after.center().y)
+            ),
+            "Before\nedit\nUpdate labels\nsrc/first.rs\nNo matching source text\nAfter"
+        );
+        assert!(vcx.debug_bounds("edit-expanded-body").is_some());
+        assert!(workspace.read_with(vcx, |workspace, _| workspace.test_panel(1).is_none()));
+    }
+
+    #[test]
+    fn snippet_headers_reset_unknown_positions_between_real_hunks() {
+        let lines = [
+            "@@ -42 +42 @@",
+            "+known",
+            "@@ -1 +1 @@ (snippet-relative lines)",
+            "+unknown",
+        ]
+        .map(str::to_owned);
+        let rows = numbered_rows(&lines);
+        assert_eq!(rows[1].new, "42");
+        assert!(rows[3].new.is_empty());
+    }
+
+    #[test]
+    fn inline_preview_minimizes_unchanged_code_and_reuses_parsing() {
+        let input = serde_json::json!({
+            "file_path": "src/example.rs",
+            "old_string": "fn label() {\n    let label = \"Go\";\n    show(label);\n}\n",
+            "new_string": "fn label() {\n    let label = \"Continue\";\n    show(label);\n}\n"
+        })
+        .to_string();
+        let files = inline_files("edit", &input);
+        assert_eq!(files[0].added(), 1);
+        assert_eq!(files[0].removed(), 1);
+        assert!(files[0].lines.iter().any(|line| line == " fn label() {"));
+        assert!(Arc::ptr_eq(&files, &inline_files("edit", &input)));
+        let changed = input.replace("Continue", "Next");
+        let newer = inline_files("edit", &changed);
+        assert!(!Arc::ptr_eq(&files, &newer));
+        assert!(newer[0].lines.iter().any(|line| line.contains("Next")));
+        assert!(inline_files("read", &input).is_empty());
+    }
+
+    #[test]
+    fn inline_preview_retains_multiedit_boundaries_and_noop_counts() {
+        let input = serde_json::json!({"file_path": "same.rs", "edits": [
+            {"old_string": "same\n", "new_string": "same\n"},
+            {"old_string": "one\n", "new_string": "two\n"},
+            {"old_string": "three\n", "new_string": "four\n"}
+        ]})
+        .to_string();
+        let files = inline_files("multiedit", &input);
+        assert_eq!((files[0].added(), files[0].removed()), (2, 2));
+        assert!(
+            files[0]
+                .lines
+                .iter()
+                .filter(|line| line.starts_with("@@"))
+                .count()
+                >= 2
+        );
+        let noop =
+            serde_json::json!({"file_path": "same.rs", "old_string": "same", "new_string": "same"})
+                .to_string();
+        let files = inline_files("edit", &noop);
+        assert_eq!((files[0].added(), files[0].removed()), (0, 0));
+    }
+
+    #[gpui::test]
+    fn inline_preview_numbers_full_diff_without_expanding_long_lines(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.push_test_panel("balanced-preview", cx);
+            workspace
+        });
+        let panel = workspace.read_with(vcx, |workspace, _| workspace.test_panel(0).unwrap());
+        panel.update(vcx, |panel, cx| {
+            *panel.items = vec![Item::Tool {
+                call_id: "balanced".into(), name: "edit".into(),
+                input: serde_json::json!({
+                    "file_path": format!("src/{}/example.rs", "long-directory/".repeat(20)),
+                    "old_string": (0..30).map(|n| format!("old {n} {}\n", "界".repeat(400))).collect::<String>(),
+                    "new_string": (0..30).map(|n| format!("new {n} {}\n", "界".repeat(400))).collect::<String>(),
+                }).to_string(),
+                output: String::new(), done: true, error: None,
+            }];
+            cx.notify();
+        });
+        vcx.run_until_parked();
+        let card = vcx.debug_bounds("edit-preview-card-0").unwrap();
+        for selector in [
+            "edit-preview-line-1",
+            "edit-preview-line-2",
+            "edit-preview-line-3",
+        ] {
+            let line = vcx.debug_bounds(selector).unwrap();
+            assert!(line.size.height >= px(22.));
+            assert!(line.size.width <= card.size.width);
+        }
+        assert!(vcx.debug_bounds("edit-countdown-bar").is_some());
+        assert!(vcx.debug_bounds("edit-preview-number-1").is_some());
+        assert!(
+            card.size.width < px(1000.),
+            "long paths and code must not widen the panel"
+        );
+        let header = vcx.debug_bounds("edit-change-counts-0").unwrap();
+        vcx.simulate_click(header.center(), gpui::Modifiers::default());
+        vcx.run_until_parked();
+        assert!(vcx.debug_bounds("diff-review").is_some());
+        assert!(panel.read_with(vcx, |panel, _| panel.expanded_tools.is_empty()));
+    }
+
+    #[test]
+    fn diff_numbers_only_claim_locations_present_in_hunks() {
+        let lines = [
+            "@@ -12,2 +20,3 @@",
+            " unchanged",
+            "-before",
+            "+after",
+            "+extra",
+            "\\ No newline at end of file",
+            "@@",
+            "+unknown",
+        ]
+        .map(str::to_owned);
+        let rows = numbered_rows(&lines);
+        assert_eq!((&rows[1].old[..], &rows[1].new[..]), ("12", "20"));
+        assert_eq!((&rows[2].old[..], &rows[2].new[..]), ("13", ""));
+        assert_eq!((&rows[3].old[..], &rows[3].new[..]), ("", "21"));
+        assert_eq!(&rows[4].new, "22");
+        assert!(rows[5].old.is_empty() && rows[5].new.is_empty());
+        assert!(rows[7].new.is_empty());
+    }
+
+    #[test]
+    fn diff_status_does_not_present_failed_or_running_input_as_applied() {
+        assert!(source_label(false, false).contains("proposed"));
+        assert!(source_label(true, true).starts_with("Failed"));
+        assert!(source_label(true, false).contains("requested"));
+    }
+
+    #[gpui::test]
+    fn diff_review_scrolls_full_changes_without_scrolling_chat(cx: &mut gpui::TestAppContext) {
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.push_test_panel("large-diff", cx);
+            workspace
+        });
+        let panel = workspace.read_with(vcx, |workspace, _| workspace.test_panel(0).unwrap());
+        panel.update(vcx, |panel, cx| {
+            *panel.items = vec![Item::Tool {
+                call_id: "large".into(), name: "write".into(),
+                input: serde_json::json!({"file_path": "src/large.rs", "content": (0..500).map(|n| format!("line {n}\n")).collect::<String>()}).to_string(),
+                output: String::new(), done: true, error: None,
+            }];
+            cx.notify();
+        });
+        vcx.run_until_parked();
+        let header = vcx.debug_bounds("edit-change-counts-0").unwrap();
+        vcx.simulate_click(header.center(), gpui::Modifiers::default());
+        vcx.run_until_parked();
+        let review_panel =
+            workspace.read_with(vcx, |workspace, _| workspace.test_panel(1).unwrap());
+        assert!(panel.read_with(vcx, |panel, _| panel.diff_review.is_none()));
+        assert_eq!(
+            review_panel.read_with(vcx, |p, _| p.diff_review.as_ref().unwrap().rows.len()),
+            500
+        );
+        let before = panel.read_with(vcx, |p, _| p.test_scroll_offset_y());
+        let review = vcx.debug_bounds("diff-review").unwrap();
+        vcx.simulate_event(gpui::ScrollWheelEvent {
+            position: review.center() + gpui::point(review.size.width / 4., px(0.)),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-300.))),
+            modifiers: gpui::Modifiers::default(),
+            touch_phase: gpui::TouchPhase::Moved,
+        });
+        vcx.run_until_parked();
+        assert_ne!(
+            review_panel.read_with(vcx, |p, _| p
+                .diff_review
+                .as_ref()
+                .unwrap()
+                .rich
+                .as_ref()
+                .unwrap()
+                .scroll()
+                .unwrap()
+                .offset()
+                .y),
+            px(0.)
+        );
+        assert_eq!(
+            panel.read_with(vcx, |p, _| p.test_scroll_offset_y()),
+            before
+        );
+    }
+
+    #[gpui::test]
+    fn rich_review_retains_file_modes_and_escape_after_code_selection(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(crate::input::bind_keys);
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.push_test_panel("rich-review", cx);
+            workspace
+        });
+        let panel = workspace.read_with(vcx, |workspace, _| workspace.test_panel(0).unwrap());
+        panel.update(vcx, |panel, cx| {
+            *panel.items = fixture_items();
+            cx.notify();
+        });
+        vcx.run_until_parked();
+        let click_position = vcx.debug_bounds("edit-change-counts-0").unwrap().center();
+        vcx.simulate_click(click_position, gpui::Modifiers::default());
+        vcx.run_until_parked();
+        let click_position = vcx.debug_bounds("diff-split").unwrap().center();
+        vcx.simulate_click(click_position, gpui::Modifiers::default());
+        vcx.run_until_parked();
+        assert!(vcx.debug_bounds("diff-line-0-0-1-old").is_some());
+        let click_position = vcx.debug_bounds("diff-tree-file-1").unwrap().center();
+        vcx.simulate_click(click_position, gpui::Modifiers::default());
+        vcx.run_until_parked();
+        assert!(vcx.debug_bounds("diff-line-0-0-0-unified").is_some());
+        let click_position = vcx.debug_bounds("diff-tree-file-0").unwrap().center();
+        vcx.simulate_click(click_position, gpui::Modifiers::default());
+        vcx.run_until_parked();
+        let code = vcx
+            .debug_bounds("diff-line-0-0-1-old")
+            .expect("first file retains split mode");
+        vcx.simulate_click(code.center(), gpui::Modifiers::default());
+        vcx.simulate_keystrokes("escape");
+        vcx.run_until_parked();
+        assert!(panel.read_with(vcx, |panel, _| panel.diff_review.is_none()));
+    }
+
+    #[test]
+    fn tree_rows_strip_shared_prefix_and_compress_chains() {
+        let file = |path: &str| FileDiff {
+            path: path.into(),
+            previous_path: None,
+            kind: "Modified".into(),
+            lines: Vec::new(),
+        };
+        let files = vec![
+            file("/repo/crates/api/src/requests.rs"),
+            file("/repo/crates/api/src/tests/coverage.rs"),
+            file("/repo/sdk/ts/src/client.ts"),
+        ];
+        let (root, rows) = tree_rows(&files, &HashSet::new());
+        assert!(root.ends_with("/repo"));
+        let labels: Vec<_> = rows.iter().map(|r| (r.depth, r.label.as_str())).collect();
+        assert_eq!(
+            labels,
+            vec![
+                (0, "crates/api/src"),
+                (1, "tests"),
+                (2, "coverage.rs"),
+                (1, "requests.rs"),
+                (0, "sdk/ts/src"),
+                (1, "client.ts"),
+            ]
+        );
+        let collapsed = HashSet::from(["crates/api/src".to_owned()]);
+        let (_, rows) = tree_rows(&files, &collapsed);
+        assert_eq!(rows.len(), 3);
+    }
+
+    #[gpui::test]
+    fn diff_click_tree_copy_and_escape_preserve_chat(cx: &mut gpui::TestAppContext) {
+        cx.update(crate::input::bind_keys);
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.push_test_panel("diff-session", cx);
+            workspace
+        });
+        let panel = workspace.read_with(vcx, |workspace, _| workspace.test_panel(0).unwrap());
+        panel.update(vcx, |panel, cx| {
+            *panel.items = fixture_items();
+            panel.input.update(cx, |input, cx| {
+                input.set_content("keep my draft".into(), cx)
+            });
+            cx.notify();
+        });
+        vcx.run_until_parked();
+        let before = panel.read_with(vcx, |panel, _| panel.test_scroll_offset_y());
+        let header = vcx
+            .debug_bounds("edit-change-counts-0")
+            .expect("clickable change counts");
+        vcx.simulate_click(header.center(), gpui::Modifiers::default());
+        vcx.run_until_parked();
+        assert!(vcx.debug_bounds("diff-review").is_some());
+        assert!(vcx.debug_bounds("diff-file-tree").is_some());
+        let review_panel =
+            workspace.read_with(vcx, |workspace, _| workspace.test_panel(1).unwrap());
+        assert!(panel.read_with(vcx, |panel, _| panel.diff_review.is_none()));
+        assert!(
+            panel.read_with(vcx, |p, _| p.expanded_tools.is_empty()),
+            "counts click must not toggle raw JSON"
+        );
+        let file = vcx.debug_bounds("diff-tree-file-1").unwrap();
+        vcx.simulate_click(file.center(), gpui::Modifiers::default());
+        vcx.run_until_parked();
+        assert_eq!(
+            review_panel.read_with(vcx, |p, _| p.diff_review.as_ref().unwrap().selected),
+            1
+        );
+        let copy = vcx.debug_bounds("diff-copy").unwrap();
+        vcx.simulate_click(copy.center(), gpui::Modifiers::default());
+        vcx.update(|_, cx| {
+            let text = cx.read_from_clipboard().unwrap().text().unwrap();
+            assert!(text.contains("tests/navigation.rs"));
+            assert!(text.contains("+fn navigation_label_is_clear"));
+        });
+        let directory = vcx.debug_bounds("diff-directory-tests").unwrap();
+        vcx.simulate_click(directory.center(), gpui::Modifiers::default());
+        vcx.run_until_parked();
+        assert!(vcx.debug_bounds("diff-tree-file-1").is_none());
+        vcx.simulate_click(directory.center(), gpui::Modifiers::default());
+        vcx.run_until_parked();
+        assert!(vcx.debug_bounds("diff-tree-file-1").is_some());
+        vcx.simulate_keystrokes("x");
+        assert_eq!(
+            panel.read_with(vcx, |p, cx| p.input.read(cx).snapshot().content),
+            "keep my draft"
+        );
+        vcx.simulate_keystrokes("escape");
+        vcx.run_until_parked();
+        assert!(panel.read_with(vcx, |p, _| p.diff_review.is_none()));
+        assert_eq!(
+            panel.read_with(vcx, |p, _| p.test_scroll_offset_y()),
+            before
+        );
+        let header = vcx.debug_bounds("edit-change-counts-1").unwrap();
+        vcx.simulate_click(header.center(), gpui::Modifiers::default());
+        vcx.run_until_parked();
+        let review_panel =
+            workspace.read_with(vcx, |workspace, _| workspace.test_panel(1).unwrap());
+        assert_eq!(
+            review_panel.read_with(vcx, |p, _| p.diff_review.as_ref().unwrap().selected),
+            1
+        );
+        let close = vcx.debug_bounds("diff-close").unwrap();
+        vcx.simulate_click(close.center(), gpui::Modifiers::default());
+        vcx.run_until_parked();
+        assert!(panel.read_with(vcx, |p, _| p.diff_review.is_none()));
+    }
+}

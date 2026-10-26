@@ -1,0 +1,376 @@
+"""Native /model acceptance on screenshot.py's private, offline X11 display.
+
+Only rendered pixels/OCR are used as evidence. The harness state file is not a
+substitute for visible search, list accessibility, focus, or model selection.
+Artifacts include the open picker at OUTPUT, per-step PNGs, OCR crops, and a
+JSON report (including the failing step if acceptance fails).
+"""
+import csv
+import io
+import itertools
+import json
+import re
+import shutil
+import subprocess
+import time
+from collections import Counter
+
+from PIL import Image
+
+
+
+# These routes are supplied by the explicitly enabled screenshot model fixture.
+# Three provider groups include twelve OpenAI models, initially capped at three.
+# Rows show readable titles (`Atlas 12`) with the exact id in small detail
+# text. OCR checks the titles people read; queries still type raw ids.
+TENTH_ROUTE = "Atlas 10"
+LAST_ROUTE = "Atlas 12"
+LAST_QUERY = "atlas-12"
+FILTER_ROUTE = "Sonnet Review"
+FILTER = "sonnet-review"
+# A misspelled query must still find the model.
+TYPO_FILTER = "sonet-reveiw"
+GEMINI_ROUTE = "Gemini Review"
+NO_MATCH = "zzzz-no-model-937"
+FILTER_SPEC = "claude-api:sonnet-review"
+LAST_SPEC = "openai-api:atlas-12"
+
+
+def normalized(text):
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
+def focused_edges(image):
+    edges = []
+    # A tall expanded menu above an empty-transcript composer can reach the
+    # window top, so scan every row. Border runs must still span 300px.
+    for y in range(0, image.height):
+        xs = [x for x in range(image.width - 12)
+              # Foreground popup shadows slightly darken the composer border.
+              if all(expected - 14 <= actual <= expected
+                     for actual, expected in zip(image.getpixel((x, y))[:3], (135, 121, 107)))]
+        # Ignore isolated sidebar/vertical-border pixels on the same scanline.
+        runs = [[x for _, x in group] for _, group in
+                itertools.groupby(enumerate(xs), key=lambda item: item[1] - item[0])]
+        run = max(runs, key=len, default=[])
+        if len(run) >= 300:
+            edges.append((y, run[0], run[-1]))
+    return edges
+
+
+def composer_bounds(image):
+    edges = focused_edges(image)
+    assert len(edges) == 2, f"Expected two composer borders, found {edges}"
+    top, bottom = edges
+    return (top[1], top[0], top[2] + 1, bottom[0] + 1)
+
+
+def picker_regions(image):
+    """Distinguish popup and editor by their rendered surfaces, allowing a flip."""
+    edges = focused_edges(image)
+    assert len(edges) == 4, f"Expected suggestion and composer borders, found {edges}"
+    first_top, first_bottom, second_top, second_bottom = edges
+    assert 0 < second_top[0] - first_bottom[0] <= 8, ("Popup must adjoin input", edges)
+    # Straight border runs stop where corners begin, and the composer's radius
+    # is larger than the popup's, so allow that inset on each end.
+    assert abs(first_top[1] - second_top[1]) <= 12, ("Suggestions must align with input", edges)
+    assert abs(first_top[2] - second_top[2]) <= 12, ("Suggestions must match input width", edges)
+    # The popup has HEADER_BG just inside its top border, before the first row.
+    # This remains distinct from INPUT_BG even for a filtered single-row menu.
+    sample = ((second_top[1] + second_top[2]) // 2, second_top[0] + 3)
+    below = image.getpixel(sample)[:3] == (48, 43, 39)
+    top, bottom = (second_top, second_bottom) if below else (first_top, first_bottom)
+    composer_top, composer_bottom = (first_top, first_bottom) if below else (second_top, second_bottom)
+    assert abs(top[1] - bottom[1]) <= 2 and abs(top[2] - bottom[2]) <= 2, edges
+    return ((top[1], top[0], top[2] + 1, bottom[0] + 1),
+            (composer_top[1], composer_top[0], composer_top[2] + 1, composer_bottom[0] + 1))
+
+
+def dialog_bounds(image):
+    return picker_regions(image)[0]
+
+
+def parse_words(tsv, bounds, scale=3):
+    words = []
+    for row in csv.DictReader(io.StringIO(tsv), delimiter="\t"):
+        if not row.get("text", "").strip():
+            continue
+        words.append({
+            "text": row["text"],
+            "x": bounds[0] + int(row["left"]) / scale,
+            "y": bounds[1] + int(row["top"]) / scale,
+            "width": int(row["width"]) / scale,
+            "height": int(row["height"]) / scale,
+        })
+    return words
+
+
+def phrase_bounds(words, phrase):
+    """Locate OCR words allowing punctuation/spacing variation, never typos."""
+    expected = normalized(phrase)
+    for start in range(len(words)):
+        text = ""
+        for end in range(start, len(words)):
+            text += normalized(words[end]["text"])
+            if text == expected:
+                matched = words[start:end + 1]
+                return (min(word["x"] for word in matched),
+                        min(word["y"] for word in matched),
+                        max(word["x"] + word["width"] for word in matched),
+                        max(word["y"] + word["height"] for word in matched))
+            if not expected.startswith(text):
+                break
+    raise AssertionError(f"Visible text {phrase!r} missing from: "
+                         + " ".join(word["text"] for word in words))
+
+
+def selected_row(image, bounds, words, route):
+    row = phrase_bounds(words, route)
+    y = round((row[1] + row[3]) / 2)
+    selected_pixels = sum(image.getpixel((x, y))[:3] == (228, 221, 211)
+                          for x in range(bounds[0] + 1, bounds[2] - 1))
+    assert selected_pixels >= 200, ("Keyboard-selected route is not visibly highlighted", route)
+
+
+def normalize_menu_ocr(crop):
+    """Give inverse selected rows the same polarity as other menu rows.
+
+    Keep original captures as pixel evidence. Tesseract otherwise drops the
+    light selected row while recognizing the surrounding dark menu.
+    """
+    crop = crop.convert("RGB").copy()
+    for y in range(crop.height):
+        colors = [crop.getpixel((x, y)) for x in range(crop.width)]
+        background = Counter(colors).most_common(1)[0][0]
+        if sum(background) > 128 * 3:
+            for x, color in enumerate(colors):
+                crop.putpixel((x, y), tuple(255 - channel for channel in color))
+    return crop
+
+
+def verify(output, env, root):
+    # Refuse direct use against a user's live desktop, even if invoked manually.
+    assert env.get("JCODE_DESKTOP_SCREENSHOT") == "1", "Offline fixture required"
+    assert env.get("JCODE_DESKTOP_SCREENSHOT_MODELS") == "1", "Model fixture required"
+    assert env.get("XDG_RUNTIME_DIR") == str(root / "runtime"), "Private runtime required"
+    assert env.get("DISPLAY") and not env.get("WAYLAND_DISPLAY"), "Private X11 required"
+    report = {"checks": {}, "scope": "native UI and local selection request, not backend acknowledgement"}
+    stage = "initial"
+
+    def native(*args):
+        subprocess.run(["xdotool", *map(str, args)], env=env, cwd=root,
+                       check=True, timeout=15)
+
+    def type_text(text):
+        native("type", "--clearmodifiers", "--delay", "35", text)
+
+    def capture(label):
+        path = output.with_name(output.stem + "-" + label + ".png")
+        time.sleep(.35)
+        subprocess.run(["import", "-window", "root", "png:" + str(path)],
+                       env=env, cwd=root, check=True, timeout=15)
+        return path, Image.open(path).convert("RGB")
+
+    def ocr(image, bounds, label):
+        path = output.with_name(output.stem + "-" + label + "-ocr.png")
+        crop = normalize_menu_ocr(image.crop(bounds))
+        crop.resize((crop.width * 3, crop.height * 3)).save(path)
+        tsv = subprocess.check_output(
+            ["tesseract", str(path), "stdout", "--psm", "6", "tsv"],
+            env=env, cwd=root, timeout=20, stderr=subprocess.DEVNULL,
+        ).decode()
+        return parse_words(tsv, bounds)
+
+    def wait_frame(label, check):
+        # Retry only painting, never re-send input to manufacture missing focus.
+        deadline = time.monotonic() + 10
+        while True:
+            path, image = capture(label)
+            try:
+                result = check(image)
+                return path, image, result
+            except AssertionError:
+                if time.monotonic() >= deadline:
+                    raise
+
+    def picker(image, label, expected=None):
+        bounds = dialog_bounds(image)
+        words = ocr(image, bounds, label)
+        if expected:
+            phrase_bounds(words, expected)
+        return bounds, words
+
+    def open_picker(command, label):
+        type_text(command)
+        # /model opens as it is typed. Do not turn an OCR/paint delay into an
+        # Enter press that would accidentally submit the highlighted model.
+        # Only the explicit /models alias needs command submission.
+        if command == "/models":
+            native("key", "Return")
+            trigger = "Return"
+        else:
+            trigger = "typing"
+        report.setdefault("open_actions", {})[label] = trigger
+        return wait_frame(label, lambda image: picker(image, label, FILTER_ROUTE))
+
+    def closed(image):
+        # A restored composer border proves the backdrop disappeared. The
+        # current dialog border must never be mistaken for a fresh composer.
+        bounds = composer_bounds(image)
+        words = ocr(image, (280, 100, image.width - 12, image.height), "closed")
+        assert "chooseamodel" not in normalized(" ".join(word["text"] for word in words)), "Picker stayed open"
+        return bounds
+
+    try:
+        initial = Image.open(output).convert("RGB")
+        bounds = composer_bounds(initial)
+        native("mousemove", bounds[0] + 32, bounds[1] + 24, "click", "1")
+        shutil.copyfile(output, output.with_name(output.stem + "-initial.png"))
+
+        stage = "native-open-and-visible-search"
+        path, opened, (dialog, words) = open_picker("/model", "model-open")
+        shutil.copyfile(path, output)
+        report["dialog_bounds"] = dialog
+        report["checks"][stage] = True
+        stage = "visible-model-usage-metadata"
+        phrase_bounds(words, "42 tracked turns")
+        phrase_bounds(words, "Last used 2h ago")
+        phrase_bounds(words, "7 tracked turns")
+        phrase_bounds(words, "Last used 3d ago")
+        phrase_bounds(words, "Current")
+        report["checks"][stage] = True
+
+        stage = "pointer-selection-and-keyboard-handoff"
+        google = phrase_bounds(words, GEMINI_ROUTE)
+        native("mousemove", round((google[0] + google[2]) / 2), round((google[1] + google[3]) / 2))
+        def pointer_selected(image):
+            bounds, current_words = picker(image, stage, GEMINI_ROUTE)
+            selected_row(image, bounds, current_words, GEMINI_ROUTE)
+        wait_frame("model-pointer-selected", pointer_selected)
+        native("mousemove", bounds[0] + 32, bounds[1] + 24)
+        native("key", "Up")
+        def keyboard_restored(image):
+            menu_bounds, current_words = picker(image, stage, FILTER_ROUTE)
+            selected_row(image, menu_bounds, current_words, FILTER_ROUTE)
+        wait_frame("model-keyboard-restored", keyboard_restored)
+        report["checks"][stage] = True
+
+        stage = "provider-groups-and-three-model-preview"
+        phrase_bounds(words, "Show 9 more models")
+        for route in ["Atlas 01", "Atlas 02", "Atlas 03"]:
+            phrase_bounds(words, route)
+        assert normalized("Atlas 04") not in normalized(" ".join(word["text"] for word in words)), "Collapsed group shows a fourth model"
+        report["checks"][stage] = True
+
+        stage = "mouse-expand-provider-without-submitting"
+        x1, y1, x2, y2 = phrase_bounds(words, "Show 9 more models")
+        native("mousemove", round((x1 + x2) / 2), round((y1 + y2) / 2), "click", "1")
+        # Expansion retains the composer and exposes the provider's full list.
+        native("mousemove", dialog[2] - 45, dialog[3] - 70,
+               "click", "--repeat", "12", "--delay", "60", "5")
+        _, _, (_, expanded_words) = wait_frame("model-provider-expanded", lambda image: picker(image, stage, LAST_ROUTE))
+        phrase_bounds(expanded_words, "Show fewer models")
+        report["checks"][stage] = True
+
+        stage = "keyboard-collapse-provider-without-submitting"
+        x1, y1, x2, y2 = phrase_bounds(expanded_words, "Show fewer models")
+        native("mousemove", round((x1 + x2) / 2), round((y1 + y2) / 2))
+        native("key", "Return")
+        _, _, (dialog, words) = wait_frame("model-provider-collapsed", lambda image: picker(image, stage, "Show 9 more models"))
+        assert normalized(LAST_ROUTE) not in normalized(" ".join(word["text"] for word in words)), "Collapse kept hidden models visible"
+        report["checks"][stage] = True
+
+        stage = "keyboard-expand-provider-without-submitting"
+        native("key", "Return")
+        native("mousemove", dialog[2] - 45, dialog[1] + 30,
+               "click", "--repeat", "18", "--delay", "60", "4")
+        _, _, (dialog, words) = wait_frame("model-provider-reexpanded", lambda image: picker(image, stage, "Atlas 01"))
+        report["checks"][stage] = True
+
+        stage = "keyboard-beyond-eight"
+        native("key", "--clearmodifiers", "--delay", "40", *(["Up"] * 20))
+        native("key", "--clearmodifiers", "--delay", "80", *(["Down"] * 9))
+        def keyboard_scrolled(image):
+            bounds, words = picker(image, stage, TENTH_ROUTE)
+            selected_row(image, bounds, words, TENTH_ROUTE)
+            return bounds, words
+        _, _, (_, words) = wait_frame("model-keyboard-scroll", keyboard_scrolled)
+        report["checks"][stage] = " ".join(word["text"] for word in words)
+
+        stage = "mouse-scroll-to-last-route"
+        native("mousemove", dialog[2] - 45, dialog[3] - 70,
+               "click", "--repeat", "12", "--delay", "60", "5")
+        wait_frame("model-wheel-scroll", lambda image: picker(image, stage, LAST_ROUTE))
+        report["checks"][stage] = True
+
+        stage = "focused-filter-and-scroll-reset"
+        type_text(" " + FILTER + " ")
+        def filtered(image, query=FILTER):
+            bounds, words = picker(image, stage, FILTER_ROUTE)
+            # The query remains in the real composer below the suggestions.
+            query_words = ocr(image, picker_regions(image)[1], stage + "-query")
+            phrase_bounds(query_words, query)
+            assert normalized(LAST_ROUTE) not in normalized(" ".join(word["text"] for word in words)), "Filtering kept unrelated routes"
+            return bounds, words
+        wait_frame("model-filtered", filtered)
+        report["checks"][stage] = True
+
+        stage = "no-matches-and-enter-does-not-submit"
+        native("key", "ctrl+a")
+        type_text("/model " + NO_MATCH)
+        wait_frame("model-no-matches", lambda image: picker(image, stage, "No models match"))
+        native("key", "Return")
+        wait_frame("model-no-matches-enter", lambda image: picker(image, stage, "No models match"))
+        report["checks"][stage] = True
+
+        stage = "escape-restores-native-composer-focus"
+        native("key", "Escape")
+        _, _, bounds = wait_frame("model-escaped", closed)
+        type_text("Composer focus restored ")
+        wait_frame("model-focus-restored", lambda image: phrase_bounds(
+            ocr(image, bounds, stage), "Composer focus restored"))
+        native("key", "ctrl+a", "BackSpace")
+        report["checks"][stage] = True
+
+        stage = "models-alias"
+        open_picker("/models", "models-alias")
+        report["checks"][stage] = True
+
+        stage = "keyboard-selection"
+        # Misspelled on purpose: typo-tolerant search must still select it.
+        type_text(" " + TYPO_FILTER + " ")
+        wait_frame("model-keyboard-filter", lambda image: filtered(image, TYPO_FILTER))
+        native("key", "Return")
+        def selected(image, route):
+            closed(image)
+            words = ocr(image, (0, 50, image.width - 12, image.height - 30), stage)
+            phrase_bounds(words, "Switching model to")
+            phrase_bounds(words, route)
+            return True
+        wait_frame("model-keyboard-selected", lambda image: selected(image, FILTER_SPEC))
+        report["checks"][stage] = FILTER_SPEC
+
+        stage = "mouse-selection"
+        open_picker("/model", "model-mouse-open")
+        type_text(" " + LAST_QUERY)
+        _, _, (_, words) = wait_frame("model-mouse-filter", lambda image: picker(image, stage, LAST_ROUTE))
+        x1, y1, x2, y2 = phrase_bounds(words, LAST_ROUTE)
+        native("mousemove", round((x1 + x2) / 2), round((y1 + y2) / 2), "click", "1")
+        wait_frame("model-mouse-selected", lambda image: selected(image, LAST_SPEC))
+        report["checks"][stage] = LAST_SPEC
+
+        stage = "search-finds-collapsed-model"
+        _, _, (_, words) = open_picker("/model", "model-search-collapsed-open")
+        # Search must reveal a model outside the initial three choices.
+        type_text(" " + LAST_QUERY)
+        wait_frame("model-search-collapsed-result", lambda image: picker(image, stage, LAST_ROUTE))
+        native("key", "Escape")
+        wait_frame("model-search-collapsed-closed", closed)
+        report["checks"][stage] = True
+        report["passed"] = True
+    except Exception as error:
+        report.update(passed=False, failed_step=stage, error=str(error))
+        raise
+    finally:
+        output.with_suffix(".acceptance.json").write_text(json.dumps(report, indent=2) + "\n")
+        print("Model-picker native acceptance: " + json.dumps(report))

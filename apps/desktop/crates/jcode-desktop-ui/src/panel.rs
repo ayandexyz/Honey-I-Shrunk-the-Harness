@@ -1,0 +1,9919 @@
+//! Panel: one Jcode session as a spatial card with a live transcript.
+
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use base64::Engine as _;
+use gpui::{
+    App, Context, Entity, FocusHandle, Focusable, FontWeight, ListAlignment, ListState,
+    ScrollHandle, SharedString, StyledImage, Task, Window, div, img, list, point, prelude::*, px,
+    relative,
+};
+use jcode_desktop_api::HostHandle;
+use jcode_sdk::ApiEvent;
+use serde::{Deserialize, Serialize};
+
+use crate::commands::{help_markdown, registered_command};
+use crate::harness::{Bridge, Command, SessionOperation};
+use crate::input::{PromptInput, PromptInputSnapshot};
+use crate::markdown;
+use crate::preview_state::PreviewState;
+use crate::terminal::TerminalPanel;
+use crate::text_selection::{self, TextSelection};
+use crate::theme::Theme;
+use crate::todoist::{CreateTask, Project as TodoistProject, Task as TodoistTask, TodoistClient};
+
+#[path = "panel_workspace_commands.rs"]
+pub(crate) mod workspace_commands;
+
+#[path = "panel_special_commands.rs"]
+mod special_commands;
+
+#[path = "panel_command_recovery.rs"]
+mod command_recovery;
+
+#[path = "panel_runtime_commands.rs"]
+mod runtime_commands;
+
+#[path = "panel_commands.rs"]
+mod desktop_commands;
+
+#[cfg(test)]
+#[path = "panel_command_workflow_tests.rs"]
+mod command_workflow_tests;
+
+#[cfg(test)]
+#[path = "panel_display_tests.rs"]
+mod display_tests;
+
+#[cfg(test)]
+#[path = "panel_selection_tests.rs"]
+mod selection_tests;
+
+#[cfg(test)]
+#[path = "panel_file_drop_tests.rs"]
+mod file_drop_tests;
+
+#[cfg(test)]
+#[path = "panel_provisional_history_tests.rs"]
+mod provisional_history_tests;
+
+#[path = "panel_text_document.rs"]
+mod text_document;
+
+#[path = "panel_snapshot.rs"]
+mod snapshot;
+pub use snapshot::TranscriptSnapshot;
+
+#[path = "panel_background_task.rs"]
+mod background_task;
+
+#[path = "panel_activity.rs"]
+mod activity;
+#[path = "panel_activity_state.rs"]
+mod activity_state;
+#[path = "panel_scroll_motion.rs"]
+mod scroll_motion;
+#[path = "panel_steady_activity.rs"]
+mod steady_activity;
+#[path = "panel_tail_glide.rs"]
+mod tail_glide;
+use scroll_motion::WheelGlide;
+#[path = "panel_cache_miss.rs"]
+mod cache_miss;
+#[path = "panel_composer.rs"]
+mod composer;
+#[path = "panel_diff.rs"]
+mod diff_review;
+#[path = "panel_effort.rs"]
+mod effort_switch;
+#[path = "panel_flicker.rs"]
+mod flicker;
+#[path = "panel_image_pane.rs"]
+mod image_pane;
+#[cfg(test)]
+#[path = "panel_image_pane_tests.rs"]
+mod image_pane_tests;
+#[path = "panel_image_preview.rs"]
+mod image_preview;
+#[path = "panel_latest.rs"]
+mod latest;
+#[path = "panel_login.rs"]
+mod login;
+#[path = "panel_preview.rs"]
+mod preview;
+#[path = "panel_prompt.rs"]
+mod prompt;
+#[path = "panel_queue.rs"]
+mod queue;
+#[path = "panel_recovery.rs"]
+mod recovery;
+#[cfg(test)]
+#[path = "panel_scroll_momentum_tests.rs"]
+mod scroll_momentum_tests;
+#[path = "panel_shortcuts.rs"]
+pub(crate) mod shortcuts;
+#[path = "panel_startup.rs"]
+mod startup;
+#[path = "panel_stop_reason.rs"]
+mod stop_reason;
+#[path = "panel_stream_reveal.rs"]
+mod stream_reveal;
+#[cfg(test)]
+#[path = "panel_stream_scroll_tests.rs"]
+mod stream_scroll_tests;
+pub use startup::StartupLayout;
+#[path = "panel_applet.rs"]
+pub(crate) mod applet_panel;
+#[path = "panel_demo_replay.rs"]
+pub(crate) mod demo_replay;
+#[path = "panel_gmail_draft_card.rs"]
+mod gmail_draft_card;
+#[path = "panel_user_response.rs"]
+mod user_response;
+#[path = "panel_gmail_read_card.rs"]
+mod gmail_read_card;
+#[path = "panel_mcp_list_card.rs"]
+mod mcp_list_card;
+#[path = "panel_orchestration.rs"]
+pub(crate) mod orchestration;
+#[path = "panel_response_stats.rs"]
+mod response_stats;
+#[path = "panel_side_document.rs"]
+mod side_document;
+#[path = "panel_tab_outline.rs"]
+mod tab_outline;
+pub(crate) use tab_outline::TabRing;
+#[path = "panel_tool_streaming.rs"]
+mod tool_streaming;
+#[path = "panel_usage.rs"]
+pub(crate) mod usage;
+#[path = "panel_voice.rs"]
+pub(crate) mod voice;
+pub use side_document::SideDocumentSnapshot;
+
+pub(crate) type SessionOpener =
+    Arc<dyn Fn(crate::harness::UnfinishedSession, &mut Window, &mut App)>;
+
+// Keep the last message/card clear of the composer and its metadata. This is
+// outside the scrolling list so it remains visible even while reading history.
+const TRANSCRIPT_BOTTOM_GAP: f32 = 12.0;
+
+fn command_unavailable_message(input: &str) -> String {
+    let name = input.split_whitespace().next().unwrap_or(input);
+    match registered_command(name) {
+        Some(command) => format!(
+            "`{name}` is a Jcode command, but its {} behavior is not available in Desktop yet.",
+            command.help.to_ascii_lowercase()
+        ),
+        None => format!("Unknown command: `{name}`. Type `/help` for available commands."),
+    }
+}
+
+/// The transcript items, with a revision that advances on every mutable
+/// access. Rendering derives rows, selectable text and pinned chrome from the
+/// items; the revision lets it reuse them across frames that only move the
+/// panel (camera travel, resizes) instead of rehashing the whole history.
+/// Any `&mut` access counts as a change, so it can only over-invalidate.
+/// Revisions come from one process-wide counter, so a transcript that is
+/// replaced, taken or rebuilt never repeats a revision a cache has seen.
+#[derive(Debug, Clone)]
+pub struct Transcript {
+    items: Vec<Item>,
+    revision: u64,
+}
+
+fn next_transcript_revision() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+impl Default for Transcript {
+    fn default() -> Self {
+        Vec::new().into()
+    }
+}
+
+impl Transcript {
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+}
+
+impl std::ops::Deref for Transcript {
+    type Target = Vec<Item>;
+    fn deref(&self) -> &Vec<Item> {
+        &self.items
+    }
+}
+
+impl std::ops::DerefMut for Transcript {
+    fn deref_mut(&mut self) -> &mut Vec<Item> {
+        self.revision = next_transcript_revision();
+        &mut self.items
+    }
+}
+
+impl From<Vec<Item>> for Transcript {
+    fn from(items: Vec<Item>) -> Self {
+        Self {
+            items,
+            revision: next_transcript_revision(),
+        }
+    }
+}
+
+impl PartialEq<Vec<Item>> for Transcript {
+    fn eq(&self, other: &Vec<Item>) -> bool {
+        &self.items == other
+    }
+}
+
+impl PartialEq for Transcript {
+    fn eq(&self, other: &Self) -> bool {
+        self.items == other.items
+    }
+}
+
+impl<'a> IntoIterator for &'a Transcript {
+    type Item = &'a Item;
+    type IntoIter = std::slice::Iter<'a, Item>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.items.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut Transcript {
+    type Item = &'a mut Item;
+    type IntoIter = std::slice::IterMut<'a, Item>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.revision = next_transcript_revision();
+        self.items.iter_mut()
+    }
+}
+
+/// One transcript entry, in display order.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Item {
+    User(String),
+    Image(TranscriptImage),
+    Assistant(String),
+    ResponseStats(response_stats::ResponseStats),
+    Reasoning(String),
+    Tool {
+        call_id: String,
+        name: String,
+        /// Raw tool arguments as streamed, used for the one-line summary and
+        /// the expanded detail.
+        input: String,
+        output: String,
+        done: bool,
+        error: Option<String>,
+    },
+    /// Live state for work detached by a tool call. Unlike the originating
+    /// `bg`/`bash` row, this continues to change while the agent waits.
+    BackgroundTask {
+        task_id: String,
+        label: String,
+        summary: String,
+        percent: Option<f32>,
+        done: bool,
+    },
+    Todos(TodoCardPayload),
+    Error(String),
+    Stopped(stop_reason::StopNotice),
+    /// Daemon-reported KV (prompt) cache miss for a provider request.
+    CacheMiss(cache_miss::CacheMissNotice),
+    /// An applet instance placed in this transcript that is not anchored to
+    /// a tool call. Only ever a derived render row, never stored in `items`.
+    #[serde(skip)]
+    Applet(String),
+}
+
+#[derive(Clone)]
+enum TranscriptRowSource {
+    Settled(usize),
+    // Almost every row only points into `Panel::items`. Keep the largest Item
+    // variant out of every descriptor rebuilt during a frame. Only live text
+    // and coalesced reasoning need owned storage.
+    Owned(Box<Item>),
+}
+
+/// Everything a render derives from the transcript alone. Recomputing it
+/// walks and hashes the whole history, which dominated frames that merely
+/// move a panel, so it is reused while its key is unchanged.
+struct TranscriptDerived {
+    key: TranscriptDerivedKey,
+    rows: Arc<Vec<TranscriptRenderRow>>,
+    prompt_rows: Vec<(usize, usize)>,
+    latest_todo: Option<TodoCardPayload>,
+}
+
+#[derive(Clone, PartialEq)]
+struct TranscriptDerivedKey {
+    items_revision: u64,
+    applet_rows_version: u64,
+    /// Visible live text, reasoning, by pointer-free content hash.
+    streaming: u64,
+    expansions: u64,
+    display: crate::config::DisplayConfig,
+}
+
+#[derive(Clone)]
+struct TranscriptRenderRow {
+    index: usize,
+    source: TranscriptRowSource,
+    role: Option<&'static str>,
+    show_label: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TodoCardPayload {
+    #[serde(default)]
+    todos: Vec<TodoCardItem>,
+    #[serde(default)]
+    plan: TodoCardPlan,
+    /// Goal-level quality assessments, one per todo group.
+    #[serde(default)]
+    goals: Vec<jcode_base::todo::TodoGoal>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+struct TodoCardPlan {
+    #[serde(default)]
+    user_intention: Option<String>,
+    #[serde(default, alias = "alignment_score", alias = "user_intention_alignment")]
+    understands_user_intent: Option<jcode_base::todo::IntentUnderstanding>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct TodoCardItem {
+    content: String,
+    status: String,
+    #[serde(default)]
+    group: Option<String>,
+    #[serde(default)]
+    blocked_by: Vec<String>,
+    #[serde(default)]
+    confidence: Option<jcode_base::todo::ConfidenceState>,
+    #[serde(default)]
+    completion_confidence: Option<jcode_base::todo::ConfidenceState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TranscriptImage {
+    media_type: String,
+    data: String,
+    label: Option<String>,
+    #[serde(skip)]
+    preview: Option<Arc<gpui::Image>>,
+    source: jcode_sdk::RenderedImageSource,
+    anchor: Option<jcode_sdk::RenderedImageAnchor>,
+}
+
+impl TranscriptImage {
+    fn new(media_type: String, data: String, label: Option<String>) -> Self {
+        let preview = base64::engine::general_purpose::STANDARD
+            .decode(&data)
+            .ok()
+            .and_then(|bytes| {
+                Some(crate::image_cache::encoded(
+                    gpui::ImageFormat::from_mime_type(&media_type)?,
+                    bytes,
+                ))
+            });
+        Self {
+            media_type,
+            data,
+            label,
+            preview,
+            source: jcode_sdk::RenderedImageSource::UserInput,
+            anchor: None,
+        }
+    }
+
+    fn from_rendered(image: jcode_sdk::RenderedImage) -> Self {
+        let mut transcript = Self::new(image.media_type, image.data, image.label);
+        transcript.source = image.source;
+        transcript.anchor = image.anchor;
+        transcript
+    }
+
+    fn model_input_caption(&self) -> Option<&'static str> {
+        matches!(
+            self.source,
+            jcode_sdk::RenderedImageSource::ToolResult { .. }
+        )
+        .then_some("Image provided to model")
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct PanelSnapshot {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript: Option<TranscriptSnapshot>,
+    #[serde(default)]
+    pub image_pane_open: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub side_document: Option<SideDocumentSnapshot>,
+    #[serde(default)]
+    pub prompt_queue: queue::PromptQueue,
+    pub session_id: String,
+    pub title: String,
+    pub working_dir: Option<String>,
+    pub draft: PromptInputSnapshot,
+    pub scroll_x: f32,
+    pub scroll_y: f32,
+    pub stick_to_bottom: bool,
+    pub terminal_resource_id: Option<u64>,
+    #[serde(default)]
+    pub terminal_output_cursor: Option<u64>,
+    #[serde(default)]
+    pub startup_layout: Option<StartupLayout>,
+}
+
+pub(crate) struct AccountsPanelClosed;
+pub(crate) struct AccountsPanelChooseModel;
+/// A banked reset on the Accounts page was clicked. Opens the review only.
+pub(crate) struct AccountsPanelRedeemReset(pub crate::accounts::BankedReset);
+
+impl gpui::EventEmitter<AccountsPanelRedeemReset> for Panel {}
+
+impl gpui::EventEmitter<AccountsPanelChooseModel> for Panel {}
+
+impl gpui::EventEmitter<AccountsPanelClosed> for Panel {}
+
+pub struct Panel {
+    pub preview_state: Option<PreviewState>,
+    /// Scripted onboarding replay: real rendering and motion, never sounds.
+    pub(crate) demo: bool,
+    pub session_id: String,
+    pub title: SharedString,
+    pub working_dir: Option<String>,
+    pub status: String,
+    pub connection_phase: String,
+    /// Model id serving this session, e.g. `gpt-5.6-sol`.
+    pub model: Option<String>,
+    /// Provider display name, e.g. `openai` or `anthropic`.
+    pub provider: Option<String>,
+    /// Credential route for the current model, e.g. `oauth` or `api key`.
+    pub auth_method: Option<String>,
+    /// Reasoning effort, e.g. `high`, when the provider exposes it.
+    pub reasoning_effort: Option<String>,
+    /// Effort requests the runtime has not answered yet.
+    pending_effort: Option<effort_switch::PendingEffort>,
+    /// `/save` or `/unsave` requests awaiting the daemon's confirmation, so
+    /// the transcript only claims success once the bookmark persisted.
+    pending_save_requests: usize,
+    /// Latest provider-reported prompt occupancy, with cache accounting normalized.
+    context_tokens: Option<u64>,
+    response_stats: response_stats::Tracker,
+    pub items: Transcript,
+    /// Streaming assistant text accumulates here until the turn ends.
+    streaming_text: String,
+    streaming_reasoning: String,
+    /// Paced, fading reveal of the live rows above. Presentation only.
+    text_reveal: stream_reveal::StreamReveal,
+    reasoning_reveal: stream_reveal::StreamReveal,
+    #[cfg(test)]
+    animate_stream_in_tests: bool,
+    sound_events: crate::sound_events::SoundEvents,
+    activity_spinner: Entity<activity::Spinner>,
+    latest_activity_spinner: Entity<activity::Spinner>,
+    tab_outline: Entity<tab_outline::TabOutline>,
+    /// The last turn finished while this session was out of view.
+    finished_unseen: bool,
+    sidebar_spinner: Entity<activity::Spinner>,
+    /// Selected workspace surface, independent of temporary keyboard focus.
+    surface_focused: bool,
+    pub input: Entity<PromptInput>,
+    pub(super) show_build_footer: bool,
+    voice: voice::VoiceState,
+    image_pane_open: bool,
+    image_pane_selected: Option<usize>,
+    image_pane_scroll: ScrollHandle,
+    image_pane_stacked: bool,
+    image_preview: Option<TranscriptImage>,
+    diff_review: Option<diff_review::DiffReview>,
+    edit_previews: diff_review::EditPreviews,
+    image_preview_zoom: f32,
+    image_preview_scroll: gpui::ScrollHandle,
+    image_preview_drag: Option<gpui::Point<gpui::Pixels>>,
+    pub focus_handle: FocusHandle,
+    transcript_list: ListState,
+    transcript_row_count: usize,
+    transcript_measurements: TranscriptMeasurements,
+    flicker_diagnostics: std::rc::Rc<std::cell::RefCell<flicker::Detector>>,
+    startup_layout: Option<startup::StartupLayout>,
+    offscreen_prompt: Option<usize>,
+    offscreen_prompt_clip: Option<gpui::Pixels>,
+    /// Inline and pinned prompts expand independently so the reminder stays compact.
+    expanded_prompts: HashSet<(usize, bool)>,
+    /// Tracks a Desktop publish pipeline. Hot reloads recover it from the title.
+    publish_tracker: bool,
+    /// The Publish button needs a second click within a short window.
+    publish_armed_at: Option<Instant>,
+    transcript_selection: Entity<TextSelection>,
+    transcript_text_document: text_document::TranscriptTextDocument,
+    transcript_dragging: bool,
+    changelog_view: crate::update_notes::View,
+    /// Remaining wheel travel. Precise touchpad input stays directly mapped
+    /// so native gesture control never fights a second momentum animation.
+    transcript_wheel_glide: WheelGlide,
+    transcript_wheel_frame: Option<Instant>,
+    transcript_wheel_frame_pending: bool,
+    /// Eased tail follow state. See `panel_tail_glide`.
+    tail_glide: tail_glide::TailGlide,
+    stick_to_bottom: bool,
+    transcript_end_visible: bool,
+    /// Height of the floating composer dock. The transcript scrolls beneath
+    /// it, padded by this much so the live end still clears the composer.
+    composer_dock_height: f32,
+    /// Eased screen position of the live activity row.
+    steady_activity: steady_activity::SteadyCell,
+    /// Padding last applied to the final transcript row. A change must
+    /// remeasure that row, whose cached height includes it.
+    transcript_end_pad: f32,
+    /// A detached reload offset cannot be applied until asynchronous history
+    /// has rebuilt the scroll region. Painting the empty panel clamps it to 0.
+    pending_history_scroll: Option<(f32, f32)>,
+    bridge: Bridge,
+    history_loaded: bool,
+    reconnect_response: Option<jcode_sdk::HistoryMessage>,
+    restored_transcript: bool,
+    /// Leading items painted from the persisted session record while the
+    /// runtime attaches. The authoritative history reply replaces them.
+    provisional_items: usize,
+    provisional_task: Option<gpui::Task<()>>,
+    /// A stored transcript is being read. Suppress the fresh-session empty
+    /// state so an established conversation never flashes the new-chat prompt.
+    awaiting_persisted: bool,
+    /// Tool rows the user expanded, keyed by call id.
+    expanded_tools: HashSet<String>,
+    /// Retain closing cards until their fade finishes, and allow smooth reversal.
+    tool_detail_motion: HashMap<String, crate::transition::AnimatedValue>,
+    prompt_queue: queue::PromptQueue,
+    pending_users: VecDeque<usize>,
+    accepted_users: HashMap<usize, Instant>,
+    /// Newly received tool calls, keyed by call id, while their entrance runs.
+    arriving_tools: HashMap<String, Instant>,
+    /// Item count when each unanchored inline applet first appeared, so an
+    /// `end` card stays where it was mounted as the conversation continues.
+    applet_positions: HashMap<String, usize>,
+    /// Selection scope for transcript applet cards.
+    applet_selection: Entity<TextSelection>,
+    /// Applet runtime generation last reflected in transcript measurements.
+    applet_generation: (u64, usize),
+    /// Unanchored transcript applets as `(item position, instance)`, in order.
+    applet_rows: Vec<(usize, String)>,
+    /// Advances whenever `applet_rows` is replaced.
+    applet_rows_version: u64,
+    /// Transcript-derived data reused while its inputs are unchanged.
+    transcript_derived: Option<TranscriptDerived>,
+    /// Live tool timing: start instants while running, final durations after.
+    tool_started: HashMap<String, Instant>,
+    tool_durations: HashMap<String, Duration>,
+    /// A running tool's breathing veil and clock, each a leaf view that
+    /// ticks on its own, so the transcript is not rebuilt 20 times a second
+    /// while a tool runs. Filled while the transcript renders.
+    running_tool_tickers: std::cell::RefCell<crate::pulse_text::Tickers>,
+    /// Gmail compose cards a later call replaced, keyed by call id, cached
+    /// for the transcript revision it was computed from.
+    superseded_drafts: std::cell::RefCell<(
+        u64,
+        std::rc::Rc<HashMap<String, gmail_draft_card::Superseded>>,
+    )>,
+    terminal: Option<Entity<TerminalPanel>>,
+    unfinished_work: Option<Vec<crate::harness::UnfinishedSession>>,
+    unfinished_session_opener: Option<SessionOpener>,
+    /// A read-only source file opened from the workspace file browser.
+    code_file: Option<CodeFile>,
+    side_document: Option<side_document::SideDocument>,
+    /// One mounted applet instance, rendered from the shared applet runtime.
+    applet: Option<applet_panel::AppletPanel>,
+    /// A native Todoist-backed task view. The existing session todo cards remain
+    /// independent and continue to represent the agent's current work.
+    todoist: Option<TodoistPanelState>,
+    /// Live sessions, their run state and todos. Never shows chat content.
+    orchestration: Option<orchestration::State>,
+    recovery_picker_open: bool,
+    model_picker_open: bool,
+    focus_pending: bool,
+    /// Read-only transcript surface (resume preview): the chat renderer
+    /// without composer, footer, or focus stealing.
+    pub(crate) transcript_only: bool,
+    login: Option<login::LoginState>,
+    available_models: Vec<String>,
+}
+
+/// Panel/chrome notifications do not imply that settled message heights changed.
+/// GPUI measures visible rows on every layout and invalidates all rows on width
+/// changes. Only its offscreen measurements need explicit content invalidation.
+#[derive(Default)]
+struct TranscriptMeasurements {
+    dirty: bool,
+    item_count: usize,
+    row_count: usize,
+    streaming_lengths: (usize, usize),
+    fonts: Option<(&'static str, &'static str, &'static str)>,
+    #[cfg(test)]
+    remeasured_rows: usize,
+}
+
+impl TranscriptMeasurements {
+    fn take_range(
+        &mut self,
+        item_count: usize,
+        row_count: usize,
+        streaming_lengths: (usize, usize),
+        fonts: (&'static str, &'static str, &'static str),
+    ) -> Option<std::ops::Range<usize>> {
+        let range = if self.dirty
+            || self.item_count != item_count
+            || self.row_count != row_count
+            || self.fonts != Some(fonts)
+        {
+            Some(0..row_count)
+        } else if self.streaming_lengths != streaming_lengths {
+            // At most reasoning, assistant text, and activity occupy the live
+            // suffix. Settling/merging reasoning explicitly dirties history.
+            Some(row_count.saturating_sub(3)..row_count)
+        } else {
+            None
+        };
+        self.dirty = false;
+        self.item_count = item_count;
+        self.row_count = row_count;
+        self.streaming_lengths = streaming_lengths;
+        self.fonts = Some(fonts);
+        let range = range.filter(|range| !range.is_empty());
+        #[cfg(test)]
+        if let Some(range) = &range {
+            self.remeasured_rows += range.len();
+        }
+        range
+    }
+}
+
+#[cfg(test)]
+#[path = "panel_measurement_tests.rs"]
+mod measurement_tests;
+
+#[cfg(test)]
+#[path = "panel_sound_tests.rs"]
+mod sound_tests;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum MinimapSessionState {
+    Idle,
+    Working,
+    Streaming,
+    Complete,
+    Error,
+}
+
+struct CodeFile {
+    path: std::path::PathBuf,
+    contents: Result<String, String>,
+}
+
+#[derive(Debug)]
+enum TodoistLoadState {
+    Loading,
+    Ready,
+    Error(String),
+}
+
+#[derive(Debug)]
+struct TodoistPanelState {
+    load: TodoistLoadState,
+    tasks: Vec<TodoistTask>,
+    projects: Vec<TodoistProject>,
+    selected_project: Option<String>,
+    busy_tasks: HashSet<String>,
+    scroll: ScrollHandle,
+    scroll_layout: Option<(usize, usize, Option<String>, gpui::Size<gpui::Pixels>)>,
+}
+
+impl TodoistPanelState {
+    /// Offline geometry fixture shared by headless tests and native screenshots.
+    fn fixture(count: usize) -> Self {
+        Self {
+            load: TodoistLoadState::Ready,
+            tasks: (0..count)
+                .map(|index| {
+                    serde_json::from_value(serde_json::json!({
+                        "id": format!("task-{index}"),
+                        "content": format!("Task {index}: review the scrolling task list"),
+                        "project_id": "inbox",
+                        "priority": 1
+                    }))
+                    .expect("valid offline task")
+                })
+                .collect(),
+            projects: Vec::new(),
+            selected_project: None,
+            busy_tasks: HashSet::new(),
+            scroll: ScrollHandle::new(),
+            scroll_layout: None,
+        }
+    }
+}
+
+#[path = "panel_changelog.rs"]
+mod changelog_panel;
+
+#[path = "panel_publish.rs"]
+mod publish_panel;
+
+impl Panel {
+    pub(crate) const CHANGELOG_SESSION_ID: &str = "desktop://changelog";
+
+    pub(crate) fn is_changelog(&self) -> bool {
+        self.session_id == Self::CHANGELOG_SESSION_ID
+    }
+
+    /// Activity painted over the tab. The session emoji stays still.
+    pub(crate) fn tab_ring(&self) -> Option<TabRing> {
+        // Only a live turn animates. `minimap_state` treats any non-idle
+        // status as work, which would mark merely connected sessions.
+        let state = match self.minimap_state() {
+            MinimapSessionState::Error => MinimapSessionState::Error,
+            _ if self.activity_active() => MinimapSessionState::Working,
+            _ if self.finished_unseen => MinimapSessionState::Complete,
+            _ => MinimapSessionState::Idle,
+        };
+        TabRing::resolve(state, self.latest_todo_progress())
+    }
+
+    pub(crate) fn tab_outline(&self) -> gpui::AnyView {
+        self.tab_outline.clone().into()
+    }
+
+    /// Sidebar spinner for a session running in the shared daemon without an
+    /// open panel. Created once per running session and reused while it runs.
+    pub(crate) fn daemon_sidebar_mark(cx: &mut gpui::App) -> gpui::AnyView {
+        cx.new(activity::Spinner::for_daemon_session).into()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn sidebar_mark(&self) -> Option<gpui::AnyView> {
+        self.supports_voice()
+            .then(|| self.sidebar_spinner.clone().into())
+    }
+
+    fn orb_activity(&self) -> activity::Activity {
+        if self.activity_active() {
+            activity::Activity::from_status_line(&self.status_line())
+        } else {
+            activity::Activity::Idle
+        }
+    }
+
+    pub(crate) fn sidebar_activity(&self) -> Option<gpui::AnyView> {
+        self.activity_active()
+            .then(|| self.sidebar_spinner.clone().into())
+    }
+
+    /// Whether the regular conversation surface has anything that can consume
+    /// a vertical scroll. Workspace gesture routing uses this to let an empty
+    /// panel behave like bare canvas and move between strips instead.
+    pub(crate) fn has_scrollable_conversation(&self) -> bool {
+        self.is_default_directory()
+            || self.is_machines()
+            || self.is_changelog()
+            || self.is_change_review()
+            || self.is_accounts_panel()
+            || self.code_file.is_some()
+            || self.is_side_document()
+            || self.applet.is_some()
+            || self.todoist.is_some()
+            || self.orchestration.is_some()
+            || self.terminal.is_some()
+            || self.transcript_row_count > 0
+            || !self.streaming_text.is_empty()
+            || !self.streaming_reasoning.is_empty()
+    }
+
+    pub const MACHINES_SESSION_ID: &str = "settings://machines";
+
+    pub(crate) fn is_machines(&self) -> bool {
+        self.session_id == Self::MACHINES_SESSION_ID
+    }
+
+    pub const DEFAULT_DIRECTORY_SESSION_ID: &str = "settings://default-directory";
+
+    pub(crate) fn is_default_directory(&self) -> bool {
+        self.session_id == Self::DEFAULT_DIRECTORY_SESSION_ID
+    }
+
+    pub const STARTUP_SESSION_ID: &str = "startup://draft";
+
+    pub fn is_startup_draft(&self) -> bool {
+        self.session_id == Self::STARTUP_SESSION_ID
+    }
+
+    pub(crate) fn is_pending_session_id(id: &str) -> bool {
+        id == Self::STARTUP_SESSION_ID || id.starts_with("startup://draft/")
+    }
+
+    pub(crate) fn is_pending_session(&self) -> bool {
+        Self::is_pending_session_id(&self.session_id)
+    }
+
+    /// Promote in place so focus, selection, undo history, and pasted images
+    /// all survive the asynchronous runtime connection.
+    pub fn attach_startup_session(
+        &mut self,
+        session: jcode_sdk::SessionInfo,
+        cx: &mut Context<Self>,
+    ) {
+        self.session_id = session.session_id;
+        self.title = session
+            .title
+            .filter(|title| !title.is_empty())
+            .unwrap_or_else(|| short_id(&self.session_id))
+            .into();
+        // Older bridges report no directory for a session that has not
+        // persisted yet. Keep the draft's requested directory in that case.
+        if let Some(dir) = session.working_dir.filter(|dir| !dir.trim().is_empty()) {
+            self.working_dir = Some(dir);
+        }
+        self.status = "idle".into();
+        self.input.update(cx, |input, cx| {
+            input.set_submission_enabled(true, cx);
+            input.set_pending_session(!self.history_loaded, cx);
+        });
+        self.send_queued_prompts(cx);
+        cx.notify();
+    }
+
+    pub fn new(
+        session_id: String,
+        title: Option<String>,
+        working_dir: Option<String>,
+        bridge: Bridge,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let send_bridge = bridge.clone();
+        let send_session = session_id.clone();
+        let input = cx.new(|cx| {
+            PromptInput::new(
+                cx,
+                "Type something…",
+                move |content, images, _window, _app| {
+                    send_bridge.send(Command::Send {
+                        session_id: send_session.clone(),
+                        content,
+                        images,
+                    });
+                },
+            )
+            .with_example_prompts()
+        });
+        // Local echo is appended by the workspace when submit fires; simplest
+        // is to observe our own input entity... but the closure above has no
+        // panel access. Instead the workspace routes sends through the panel.
+        let display_title = title
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| short_id(&session_id));
+        let transcript_list = ListState::new(0, ListAlignment::Top, px(600.));
+        let transcript_selection = cx.new(TextSelection::new);
+        cx.observe(&transcript_selection, |panel, selection, cx| {
+            let dragging = selection.read(cx).is_dragging();
+            if dragging && !panel.transcript_dragging {
+                panel.cancel_transcript_momentum();
+                panel.stick_to_bottom = false;
+                panel.release_startup_preview();
+            }
+            panel.transcript_dragging = dragging;
+            panel.transcript_measurements.dirty = true;
+            cx.notify();
+        })
+        .detach();
+        // The panel owns this ListState. A strong entity in its persistent
+        // callback would keep the panel and its transcript alive after close
+        // or hot reload, even when no window references it anymore.
+        let panel_entity = cx.entity().downgrade();
+        transcript_list.set_scroll_handler(move |event, _, cx| {
+            let _ = panel_entity.update(cx, |panel, cx| {
+                panel.release_startup_preview();
+                let stick_to_bottom =
+                    event.is_following_tail && !panel.transcript_selection.read(cx).is_dragging();
+                if panel.stick_to_bottom != stick_to_bottom {
+                    panel.stick_to_bottom = stick_to_bottom;
+                    cx.notify();
+                }
+            });
+        });
+        let fixture = screenshot_fixture_for(&session_id);
+        let streaming_fixture = crate::harness::screenshot_mode()
+            && session_id == "screenshot-fixture"
+            && matches!(
+                std::env::var("JCODE_DESKTOP_SCREENSHOT_TRANSCRIPT").as_deref(),
+                Ok("streaming" | "mermaid")
+            );
+        let usage_fixture =
+            crate::harness::screenshot_mode() && fixture.as_deref() == Some("tokens");
+        let activity_status = if crate::harness::screenshot_mode() {
+            match fixture.as_deref() {
+                Some("orb-working" | "orb-todos") => "running",
+                Some("orb-thinking") => "thinking",
+                Some("orb-tools") => "running_tools",
+                _ => "idle",
+            }
+        } else {
+            "idle"
+        };
+        let activity_owner = cx.entity();
+        Self {
+            session_id,
+            title: display_title.into(),
+            working_dir,
+            status: activity_status.into(),
+            connection_phase: String::new(),
+            model: usage_fixture.then(|| "gpt-5.6-sol".into()),
+            provider: usage_fixture.then(|| "openai".into()),
+            auth_method: usage_fixture.then(|| "oauth".into()),
+            reasoning_effort: usage_fixture.then(|| "high".into()),
+            pending_effort: None,
+            pending_save_requests: 0,
+            context_tokens: usage_fixture.then_some(100_000),
+            response_stats: response_stats::Tracker::default(),
+            items: demo_items(fixture.as_deref()).into(),
+            streaming_text: if streaming_fixture {
+                "I’m checking the implementation and updating the active panel indicators as the response arrives…".into()
+            } else {
+                String::new()
+            },
+            streaming_reasoning: String::new(),
+            text_reveal: Default::default(),
+            reasoning_reveal: Default::default(),
+            #[cfg(test)]
+            animate_stream_in_tests: false,
+            sound_events: crate::sound_events::SoundEvents::default(),
+            activity_spinner: cx.new(|cx| activity::Spinner::for_panel(activity_owner.clone(), cx)),
+            show_build_footer: true,
+            latest_activity_spinner: cx
+                .new(|cx| activity::Spinner::for_panel(activity_owner.clone(), cx)),
+            tab_outline: cx.new(|cx| tab_outline::TabOutline::new(activity_owner.clone(), cx)),
+            // The completed-plan fixture shows a turn that finished unseen.
+            finished_unseen: crate::harness::screenshot_mode()
+                && fixture.as_deref() == Some("todos-completed"),
+            sidebar_spinner: cx
+                .new(|cx| activity::Spinner::for_sidebar(activity_owner.clone(), cx)),
+            surface_focused: true,
+            input,
+            voice: voice::VoiceState::default(),
+            image_pane_open: false,
+            image_pane_selected: None,
+            image_pane_scroll: ScrollHandle::new(),
+            image_pane_stacked: false,
+            image_preview: None,
+            diff_review: None,
+            edit_previews: diff_review::EditPreviews::default(),
+            image_preview_zoom: 1.0,
+            image_preview_scroll: gpui::ScrollHandle::new(),
+            image_preview_drag: None,
+            focus_handle: cx.focus_handle(),
+            transcript_list,
+            transcript_row_count: 0,
+            transcript_measurements: Default::default(),
+            flicker_diagnostics: Default::default(),
+            startup_layout: None,
+            offscreen_prompt: None,
+            offscreen_prompt_clip: None,
+            expanded_prompts: HashSet::new(),
+            publish_tracker: false,
+            publish_armed_at: None,
+            transcript_selection,
+            transcript_text_document: Default::default(),
+            transcript_dragging: false,
+            changelog_view: crate::update_notes::View::Latest,
+            transcript_wheel_glide: WheelGlide::default(),
+            transcript_wheel_frame: None,
+            transcript_wheel_frame_pending: false,
+            tail_glide: Default::default(),
+            stick_to_bottom: true,
+            transcript_end_visible: true,
+            composer_dock_height: 0.0,
+            steady_activity: Default::default(),
+            transcript_end_pad: 0.0,
+            pending_history_scroll: None,
+            bridge,
+            preview_state: None,
+            demo: false,
+            history_loaded: false,
+            reconnect_response: None,
+            restored_transcript: false,
+            provisional_items: 0,
+            provisional_task: None,
+            awaiting_persisted: false,
+            expanded_tools: HashSet::new(),
+            tool_detail_motion: HashMap::new(),
+            prompt_queue: queue::PromptQueue::default(),
+            pending_users: VecDeque::new(),
+            accepted_users: HashMap::new(),
+            arriving_tools: HashMap::new(),
+            applet_positions: HashMap::new(),
+            applet_selection: cx.new(TextSelection::new),
+            applet_generation: (u64::MAX, 0),
+            applet_rows: Vec::new(),
+            applet_rows_version: 0,
+            transcript_derived: None,
+            tool_started: HashMap::new(),
+            tool_durations: HashMap::new(),
+            running_tool_tickers: Default::default(),
+            superseded_drafts: Default::default(),
+            terminal: None,
+            unfinished_work: None,
+            unfinished_session_opener: None,
+            code_file: None,
+            side_document: None,
+            applet: None,
+            todoist: (crate::harness::screenshot_mode() && fixture.as_deref() == Some("todos"))
+                .then(|| TodoistPanelState::fixture(80)),
+            orchestration: (crate::harness::screenshot_mode()
+                && fixture.as_deref() == Some("orchestration"))
+            .then(orchestration::State::fixture),
+            recovery_picker_open: false,
+            model_picker_open: false,
+            focus_pending: false,
+            transcript_only: false,
+            login: None,
+            available_models: Vec::new(),
+        }
+    }
+
+    fn glide_transcript_wheel(&mut self, pixels: f32, cx: &mut Context<Self>) {
+        self.glide_transcript_input(pixels, false, cx);
+    }
+
+    fn glide_transcript_input(&mut self, pixels: f32, precise: bool, cx: &mut Context<Self>) {
+        if !pixels.is_finite() || pixels == 0.0 {
+            return;
+        }
+        self.flicker_diagnostics
+            .borrow_mut()
+            .scroll_input(pixels, precise);
+        if crate::config::get().appearance.reduce_motion || cx.reduce_motion() {
+            self.scroll_transcript_direct(-pixels, cx);
+            return;
+        }
+        self.release_startup_preview();
+        // `ListState::scroll_by` is a programmatic movement and therefore does
+        // not invoke the list's user-scroll callback. Release follow mode here
+        // before the first animated frame, or render would pin every step back
+        // to the live tail.
+        if pixels < 0.0 && self.stick_to_bottom {
+            self.stick_to_bottom = false;
+            cx.notify();
+        }
+        if precise {
+            self.transcript_wheel_glide.push_input(pixels, true);
+        } else {
+            self.transcript_wheel_glide.push(pixels);
+        }
+        self.transcript_wheel_frame
+            .get_or_insert_with(|| cx.background_executor().now());
+        cx.notify();
+    }
+
+    fn cancel_transcript_momentum(&mut self) {
+        self.transcript_wheel_glide.remaining = 0.0;
+        self.transcript_wheel_frame = None;
+    }
+
+    fn scroll_transcript_direct(&mut self, delta_y: f32, cx: &mut Context<Self>) {
+        self.cancel_transcript_momentum();
+        self.release_startup_preview();
+        if delta_y > 0.0 && self.stick_to_bottom {
+            self.stick_to_bottom = false;
+        }
+        let current = self.transcript_list.scroll_px_offset_for_scrollbar();
+        self.transcript_list
+            .set_offset_from_scrollbar(point(current.x, current.y + px(delta_y)));
+        self.resume_transcript_follow_after_scroll(cx);
+        self.flicker_diagnostics
+            .borrow_mut()
+            .scroll_applied(f32::from(
+                current.y - self.transcript_list.scroll_px_offset_for_scrollbar().y,
+            ));
+        cx.notify();
+    }
+
+    fn schedule_transcript_wheel_frame(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if self.transcript_wheel_frame.is_none() || self.transcript_wheel_frame_pending {
+            return;
+        }
+        self.transcript_wheel_frame_pending = true;
+        let panel = cx.entity().downgrade();
+        window.on_next_frame(move |_, cx| {
+            let _ = panel.update(cx, |panel, cx| {
+                panel.transcript_wheel_frame_pending = false;
+                let Some(previous) = panel.transcript_wheel_frame else {
+                    return;
+                };
+                let now = cx.background_executor().now();
+                let elapsed = now.saturating_duration_since(previous);
+                // Do not replay stale momentum after a suspended/hidden window.
+                if elapsed > Duration::from_millis(250) {
+                    panel.cancel_transcript_momentum();
+                    return;
+                }
+                panel.transcript_wheel_frame = Some(now);
+                if !panel.advance_transcript_wheel_by(elapsed, cx) {
+                    panel.cancel_transcript_momentum();
+                }
+            });
+        });
+    }
+
+    #[cfg(test)]
+    fn advance_transcript_wheel(&mut self, cx: &mut Context<Self>) -> bool {
+        self.advance_transcript_wheel_by(Duration::from_millis(16), cx)
+    }
+
+    fn advance_transcript_wheel_by(&mut self, elapsed: Duration, cx: &mut Context<Self>) -> bool {
+        if elapsed.is_zero() {
+            cx.notify();
+            return true;
+        }
+        let Some(step) = self.transcript_wheel_glide.take_step(elapsed) else {
+            return false;
+        };
+        let current = self.transcript_list.scroll_px_offset_for_scrollbar();
+        let max = f32::from(self.transcript_list.max_offset_for_scrollbar().y).max(0.0);
+        let target = (f32::from(current.y) - step).clamp(-max, 0.0);
+        self.transcript_list
+            .set_offset_from_scrollbar(point(current.x, px(target)));
+        self.resume_transcript_follow_after_scroll(cx);
+        self.flicker_diagnostics
+            .borrow_mut()
+            .scroll_applied(f32::from(current.y) - target);
+        // Discard travel into an edge instead of accumulating invisible debt.
+        if (step < 0.0 && target >= 0.0) || (step > 0.0 && target <= -max) {
+            self.transcript_wheel_glide.remaining = 0.0;
+        }
+        cx.notify();
+        self.transcript_wheel_glide.remaining != 0.0
+    }
+
+    pub fn new_code_file(path: std::path::PathBuf, bridge: Bridge, cx: &mut Context<Self>) -> Self {
+        const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
+        let title = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.display().to_string());
+        let contents = std::fs::metadata(&path)
+            .map_err(|error| error.to_string())
+            .and_then(|metadata| {
+                if metadata.len() > MAX_FILE_BYTES {
+                    Err(format!(
+                        "file is too large to preview ({} bytes)",
+                        metadata.len()
+                    ))
+                } else {
+                    std::fs::read_to_string(&path).map_err(|error| {
+                        if error.kind() == std::io::ErrorKind::InvalidData {
+                            "binary files cannot be previewed".to_string()
+                        } else {
+                            error.to_string()
+                        }
+                    })
+                }
+            });
+        let working_dir = path.parent().map(|parent| parent.display().to_string());
+        let mut panel = Self::new(
+            format!("file://{}", path.display()),
+            Some(title),
+            working_dir,
+            bridge,
+            cx,
+        );
+        panel.items.clear();
+        panel.code_file = Some(CodeFile { path, contents });
+        panel
+    }
+
+    pub(crate) fn new_accounts(
+        source_session: &str,
+        preview: Option<PreviewState>,
+        bridge: Bridge,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut panel = Self::new(
+            format!("accounts://{source_session}"),
+            Some("accounts".into()),
+            None,
+            bridge,
+            cx,
+        );
+        panel.items.clear();
+        panel.preview_state = preview;
+        panel.open_login_picker(cx);
+        panel
+    }
+
+    pub(crate) fn choose_account_model(&mut self, cx: &mut Context<Self>) {
+        if self.is_side_document() {
+            return;
+        }
+        self.open_recovery_models(cx);
+    }
+
+    pub(crate) fn can_refresh_account_runtime(&self) -> bool {
+        self.can_fork() && self.todoist.is_none() && self.orchestration.is_none()
+    }
+
+    pub(crate) fn is_accounts_panel(&self) -> bool {
+        self.session_id.starts_with("accounts://")
+    }
+
+    pub fn new_todoist(bridge: Bridge, cx: &mut Context<Self>) -> Self {
+        let mut panel = Self::new(
+            "todoist://tasks".into(),
+            Some("todos".into()),
+            None,
+            bridge,
+            cx,
+        );
+        panel.items.clear();
+        panel.todoist = Some(TodoistPanelState {
+            load: TodoistLoadState::Loading,
+            tasks: Vec::new(),
+            projects: Vec::new(),
+            selected_project: None,
+            busy_tasks: HashSet::new(),
+            scroll: ScrollHandle::new(),
+            scroll_layout: None,
+        });
+        let weak = cx.weak_entity();
+        panel.input = cx.new(|cx| {
+            PromptInput::new(
+                cx,
+                "add a task, for example: Review PR tomorrow",
+                move |content, _, _, app| {
+                    let _ = weak.update(app, |panel, cx| panel.create_todoist_task(content, cx));
+                },
+            )
+        });
+        panel.refresh_todoist(cx);
+        panel
+    }
+
+    fn refresh_todoist(&mut self, cx: &mut Context<Self>) {
+        let Some(state) = self.todoist.as_mut() else {
+            return;
+        };
+        state.load = TodoistLoadState::Loading;
+        cx.notify();
+        self.run_todoist(
+            cx,
+            |client| Ok((client.tasks()?, client.projects()?)),
+            |panel, result, cx| {
+                let Some(state) = panel.todoist.as_mut() else {
+                    return;
+                };
+                match result {
+                    Ok((tasks, projects)) => {
+                        state.tasks = tasks;
+                        state.projects = projects;
+                        state.load = TodoistLoadState::Ready;
+                    }
+                    Err(error) => state.load = TodoistLoadState::Error(error),
+                }
+                cx.notify();
+            },
+        );
+    }
+
+    fn create_todoist_task(&mut self, content: String, cx: &mut Context<Self>) {
+        let content = content.trim().to_owned();
+        if content.is_empty() {
+            return;
+        }
+        let project_id = self
+            .todoist
+            .as_ref()
+            .and_then(|state| state.selected_project.clone());
+        self.run_todoist(
+            cx,
+            move |client| {
+                client.create_task(&CreateTask {
+                    content: &content,
+                    project_id: project_id.as_deref(),
+                    ..CreateTask::default()
+                })
+            },
+            |panel, result, cx| {
+                let Some(state) = panel.todoist.as_mut() else {
+                    return;
+                };
+                match result {
+                    Ok(task) => {
+                        state.tasks.push(task);
+                        state.load = TodoistLoadState::Ready;
+                    }
+                    Err(error) => state.load = TodoistLoadState::Error(error),
+                }
+                cx.notify();
+            },
+        );
+    }
+
+    fn complete_todoist_task(&mut self, id: String, cx: &mut Context<Self>) {
+        if let Some(state) = self.todoist.as_mut() {
+            state.busy_tasks.insert(id.clone());
+        }
+        self.run_todoist(
+            cx,
+            move |client| client.close_task(&id).map(|_| id),
+            |panel, result, cx| {
+                let Some(state) = panel.todoist.as_mut() else {
+                    return;
+                };
+                match result {
+                    Ok(id) => state.tasks.retain(|task| task.id != id),
+                    Err(error) => state.load = TodoistLoadState::Error(error),
+                }
+                state.busy_tasks.clear();
+                cx.notify();
+            },
+        );
+    }
+
+    fn run_todoist<T: Send + 'static>(
+        &self,
+        cx: &mut Context<Self>,
+        operation: impl FnOnce(TodoistClient) -> crate::todoist::Result<T> + Send + 'static,
+        apply: impl FnOnce(&mut Self, Result<T, String>, &mut Context<Self>) + 'static,
+    ) {
+        let (tx, rx) = async_channel::bounded(1);
+        std::thread::Builder::new()
+            .name("jcode-todoist".into())
+            .spawn(move || {
+                let result = TodoistClient::from_env()
+                    .and_then(operation)
+                    .map_err(|error| error.to_string());
+                let _ = tx.send_blocking(result);
+            })
+            .expect("spawn Todoist worker");
+        cx.spawn(async move |this, cx| {
+            if let Ok(result) = rx.recv().await {
+                let _ = this.update(cx, |panel, cx| apply(panel, result, cx));
+            }
+        })
+        .detach();
+    }
+
+    fn render_todoist(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let state = self.todoist.as_mut().expect("Todoist state");
+        let layout = (
+            state.tasks.len(),
+            state.projects.len(),
+            state.selected_project.clone(),
+            window.viewport_size(),
+        );
+        // Repaint after layout, including asynchronous loads, filtering and resize.
+        // Never poll for geometry on every idle frame.
+        if state.scroll_layout.as_ref() != Some(&layout) {
+            state.scroll_layout = Some(layout);
+            let panel = cx.weak_entity();
+            window.on_next_frame(move |_, cx| {
+                let _ = panel.update(cx, |_, cx| cx.notify());
+            });
+        }
+        let selected = state.selected_project.clone();
+        let mut tasks = state
+            .tasks
+            .iter()
+            .filter(|task| {
+                selected
+                    .as_ref()
+                    .is_none_or(|project| &task.project_id == project)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        tasks.sort_by(|a, b| b.priority.cmp(&a.priority));
+
+        let mut projects = div().flex().flex_wrap().gap_1().child(
+            div()
+                .id("todoist-project-all")
+                .px_2()
+                .py_1()
+                .rounded_md()
+                .cursor_pointer()
+                .bg(if selected.is_none() {
+                    Theme::global().ACCENT_DIM
+                } else {
+                    Theme::global().HEADER_BG
+                })
+                .text_size(px(11.))
+                .child("All")
+                .on_mouse_down(
+                    gpui::MouseButton::Left,
+                    cx.listener(|panel, _, _, cx| {
+                        if let Some(state) = panel.todoist.as_mut() {
+                            state.selected_project = None;
+                        }
+                        cx.notify();
+                    }),
+                ),
+        );
+        for (index, project) in state.projects.iter().cloned().enumerate() {
+            let project_id = project.id.clone();
+            let is_selected = selected.as_deref() == Some(project.id.as_str());
+            projects = projects.child(
+                div()
+                    .id(("todoist-project", index))
+                    .px_2()
+                    .py_1()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .bg(if is_selected {
+                        Theme::global().ACCENT_DIM
+                    } else {
+                        Theme::global().HEADER_BG
+                    })
+                    .hover(|el| el.bg(Theme::global().ACCENT_DIM))
+                    .text_size(px(11.))
+                    .child(
+                        div()
+                            .size(px(7.))
+                            .rounded_full()
+                            .bg(todoist_named_color(project.color.as_deref())),
+                    )
+                    .child(project.name)
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(move |panel, _, _, cx| {
+                            if let Some(state) = panel.todoist.as_mut() {
+                                state.selected_project = Some(project_id.clone());
+                            }
+                            cx.notify();
+                        }),
+                    ),
+            );
+        }
+
+        let mut list = div()
+            .id("todoist-task-list")
+            .debug_selector(|| "todoist-task-list".into())
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .restrict_scroll_to_axis()
+            .track_scroll(&state.scroll)
+            .px_4()
+            .pb_4()
+            .flex()
+            .flex_col()
+            .gap_1();
+        if tasks.is_empty() {
+            let message = match &state.load {
+                TodoistLoadState::Loading => "Loading Todoist…".to_owned(),
+                TodoistLoadState::Ready => "No open tasks in this view.".to_owned(),
+                TodoistLoadState::Error(error) => format!(
+                    "{error}\n\nSet TODOIST_API_TOKEN, then refresh. The token is never written to Jcode config."
+                ),
+            };
+            list = list.child(
+                div()
+                    .p_4()
+                    .whitespace_normal()
+                    .text_color(match state.load {
+                        TodoistLoadState::Error(_) => Theme::global().ERROR,
+                        _ => Theme::global().TEXT_DIM,
+                    })
+                    .child(message),
+            );
+        }
+        for (index, task) in tasks.into_iter().enumerate() {
+            let id = task.id.clone();
+            let busy = state.busy_tasks.contains(&task.id);
+            let project_name = state
+                .projects
+                .iter()
+                .find(|project| project.id == task.project_id)
+                .map(|p| p.name.clone());
+            let priority = todoist_priority_color(task.priority);
+            list = list.child(
+                div()
+                    .id(("todoist-task", index))
+                    .debug_selector(move || format!("todoist-task-{index}"))
+                    .flex_none()
+                    .px_3()
+                    .py_2()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(Theme::global().PANEL_BORDER_IDLE)
+                    .bg(Theme::global().BG)
+                    .hover(|el| {
+                        el.bg(Theme::global().HEADER_BG)
+                            .border_color(Theme::global().PANEL_BORDER)
+                    })
+                    .flex()
+                    .items_start()
+                    .gap_2()
+                    .child(
+                        div()
+                            .id(("todoist-complete", index))
+                            .mt(px(2.))
+                            .size(px(16.))
+                            .rounded_full()
+                            .border_2()
+                            .border_color(priority)
+                            .cursor_pointer()
+                            .when(busy, |el| el.bg(priority))
+                            .on_mouse_down(
+                                gpui::MouseButton::Left,
+                                cx.listener(move |panel, _, _, cx| {
+                                    panel.complete_todoist_task(id.clone(), cx)
+                                }),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .child(div().text_size(px(13.)).child(task.content))
+                            .child(
+                                div()
+                                    .flex()
+                                    .gap_2()
+                                    .text_size(px(10.))
+                                    .text_color(Theme::global().TEXT_DIM)
+                                    .when_some(task.due.map(|due| due.string), |el, due| {
+                                        el.child(format!("◷ {due}"))
+                                    })
+                                    .when_some(project_name, |el, name| {
+                                        el.child(format!("# {name}"))
+                                    })
+                                    .when(task.priority > 1, |el| {
+                                        el.child(format!("P{}", 5 - task.priority))
+                                    }),
+                            ),
+                    ),
+            );
+        }
+
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .track_focus(&self.input.read(cx).focus_handle)
+            .child(
+                div()
+                    .debug_selector(|| "todoist-header".into())
+                    .flex_none()
+                    .px_4()
+                    .pt_4()
+                    .pb_2()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .child(
+                                div()
+                                    .text_size(px(18.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child("Todos"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.))
+                                    .text_color(Theme::global().TEXT_DIM)
+                                    .child(format!(
+                                        "{} open · synced with Todoist",
+                                        state.tasks.len()
+                                    )),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("todoist-refresh")
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .cursor_pointer()
+                            .text_size(px(11.))
+                            .text_color(Theme::global().TEXT_DIM)
+                            .hover(|el| el.bg(Theme::global().HEADER_BG))
+                            .child("↻ refresh")
+                            .on_mouse_down(
+                                gpui::MouseButton::Left,
+                                cx.listener(|panel, _, _, cx| panel.refresh_todoist(cx)),
+                            ),
+                    ),
+            )
+            .child(div().flex_none().px_4().pb_3().child(projects))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .child(list)
+                    .child(crate::scrollbar::vertical(
+                        &state.scroll,
+                        "todoist-scrollbar",
+                    )),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "todoist-composer".into())
+                    .flex_none()
+                    .border_t_1()
+                    .border_color(Theme::global().PANEL_BORDER)
+                    .p_3()
+                    .child(self.input.clone()),
+            )
+            .into_any_element()
+    }
+
+    pub fn new_terminal(
+        working_dir: Option<String>,
+        bridge: Bridge,
+        host: HostHandle,
+        resource_id: Option<u64>,
+        replay_until: Option<u64>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let terminal = cx
+            .new(|cx| TerminalPanel::new(working_dir.clone(), resource_id, replay_until, host, cx));
+        let mut panel = Self::new(
+            "terminal".into(),
+            Some("terminal".into()),
+            working_dir,
+            bridge,
+            cx,
+        );
+        panel.terminal = Some(terminal);
+        panel
+    }
+
+    pub(crate) fn can_fork(&self) -> bool {
+        self.preview_state.is_none()
+            && !self.is_default_directory()
+            && !self.is_machines()
+            && !self.is_change_review()
+            && !self.is_accounts_panel()
+            && !self.is_changelog()
+            && self.terminal.is_none()
+            && self.code_file.is_none()
+            && !self.is_side_document()
+            && self.session_id != "unfinished-work"
+            && self.orchestration.is_none()
+            && !self.is_pending_session()
+    }
+
+    pub fn new_unfinished_work(
+        sessions: Vec<crate::harness::UnfinishedSession>,
+        session_opener: SessionOpener,
+        bridge: Bridge,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut panel = Self::new(
+            "unfinished-work".into(),
+            Some("unfinished work".into()),
+            None,
+            bridge,
+            cx,
+        );
+        panel.unfinished_work = Some(sessions);
+        panel.unfinished_session_opener = Some(session_opener);
+        panel
+    }
+
+    pub fn set_unfinished_work(
+        &mut self,
+        sessions: Vec<crate::harness::UnfinishedSession>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.unfinished_work.as_ref() != Some(&sessions) {
+            self.unfinished_work = Some(sessions);
+            cx.notify();
+        }
+    }
+
+    pub fn snapshot(&self, cx: &App) -> PanelSnapshot {
+        let offset = self
+            .document_scroll_offset(cx)
+            .unwrap_or_else(|| self.transcript_list.scroll_px_offset_for_scrollbar());
+        PanelSnapshot {
+            transcript: None,
+            image_pane_open: self.image_pane_open,
+            side_document: self.document_snapshot(cx),
+            prompt_queue: self.prompt_queue.clone(),
+            session_id: self.session_id.clone(),
+            title: self.title.to_string(),
+            working_dir: self.working_dir.clone(),
+            draft: self.input.read(cx).snapshot(),
+            scroll_x: f32::from(offset.x),
+            scroll_y: f32::from(offset.y),
+            stick_to_bottom: self.stick_to_bottom,
+            startup_layout: self
+                .startup_layout
+                .clone()
+                .filter(|layout| layout.committed),
+            terminal_resource_id: self
+                .terminal
+                .as_ref()
+                .and_then(|terminal| terminal.read(cx).resource_id()),
+            terminal_output_cursor: self
+                .terminal
+                .as_ref()
+                .map(|terminal| terminal.read(cx).output_cursor()),
+        }
+    }
+
+    pub fn restore_snapshot(&mut self, snapshot: PanelSnapshot, cx: &mut Context<Self>) {
+        if self.restore_side_document_snapshot(&snapshot, cx) {
+            return;
+        }
+        if let Some(transcript) = snapshot.transcript {
+            self.restore_transcript(transcript);
+        }
+        self.image_pane_open = snapshot.image_pane_open;
+        self.image_pane_selected = None;
+        self.prompt_queue = snapshot.prompt_queue;
+        self.title = snapshot.title.into();
+        self.working_dir = snapshot.working_dir;
+        self.stick_to_bottom = snapshot.stick_to_bottom;
+        self.startup_layout = snapshot.startup_layout;
+        self.pending_history_scroll =
+            (!snapshot.stick_to_bottom).then_some((snapshot.scroll_x, snapshot.scroll_y));
+        self.transcript_list
+            .set_offset_from_scrollbar(point(px(snapshot.scroll_x), px(snapshot.scroll_y)));
+        self.input
+            .update(cx, |input, cx| input.restore(snapshot.draft, cx));
+    }
+
+    /// Wire the input's submit to also echo locally. Called once after
+    /// creation, when we have the panel entity.
+    pub fn connect_input(panel: &Entity<Panel>, cx: &mut App) {
+        if panel.read(cx).is_side_document() {
+            return;
+        }
+        let weak = panel.downgrade();
+        panel.update(cx, |this, cx| {
+            let cancel_weak = weak.clone();
+            let change_weak = weak.clone();
+            this.input = cx.new(|cx| {
+                PromptInput::new_with_queue(
+                    cx,
+                    "Type something…",
+                    move |content, images, queued, _window, app| {
+                        if images.is_empty()
+                            && let Some(panel) = weak.upgrade()
+                            && Panel::dispatch_workspace_command(&panel, &content, _window, app)
+                        {
+                            return;
+                        }
+                        if images.is_empty() && crate::commands::is_resume_command(&content) {
+                            _window.dispatch_action(Box::new(crate::ui_actions::OpenResume), app);
+                            return;
+                        }
+                        // First-run launch is local, including before a session connects.
+                        if images.is_empty() && content.trim() == "/applets" {
+                            _window.dispatch_action(
+                                Box::new(crate::ui_actions::OpenAppletShowcase),
+                                app,
+                            );
+                            return;
+                        }
+                        if images.is_empty()
+                            && matches!(content.trim(), "/onboarding-sim" | "/onboarding-preview")
+                        {
+                            _window.dispatch_action(
+                                Box::new(crate::ui_actions::ToggleOnboardingSimulator),
+                                app,
+                            );
+                            return;
+                        }
+                        if images.is_empty()
+                            && (crate::commands::is_accounts_command(&content)
+                                || content.trim() == "/subscribe")
+                            && let Some(panel) = weak.upgrade()
+                        {
+                            _window.dispatch_action(
+                                Box::new(crate::ui_actions::OpenAccounts {
+                                    source: panel.entity_id(),
+                                    login_command: None,
+                                }),
+                                app,
+                            );
+                            return;
+                        }
+                        // Usage resets open Desktop's review dialog. The daemon
+                        // never sees the command, and nothing is spent until the
+                        // dialog's confirm button.
+                        if images.is_empty()
+                            && let Some(command) = crate::commands::reset_command(&content)
+                        {
+                            let provider = match command {
+                                crate::commands::ResetCommand::OpenAi => {
+                                    crate::accounts::ResetProvider::OpenAi
+                                }
+                                crate::commands::ResetCommand::Claude => {
+                                    crate::accounts::ResetProvider::Claude
+                                }
+                                crate::commands::ResetCommand::Current => weak
+                                    .upgrade()
+                                    .map(|panel| reset_provider_for(panel.read(app)))
+                                    .unwrap_or(crate::accounts::ResetProvider::OpenAi),
+                            };
+                            _window.dispatch_action(
+                                Box::new(crate::ui_actions::OpenUsageReset { provider }),
+                                app,
+                            );
+                            return;
+                        }
+                        // A draft has no runtime identity yet. The editor
+                        // retains slash commands while ordinary prompts queue.
+                        if let Some(panel) = weak.upgrade()
+                            && (panel.read(app).is_pending_session()
+                                || (panel.read(app).prompt_queue.waiting_for_connection
+                                    && !panel.read(app).history_loaded))
+                        {
+                            panel.update(app, |this, cx| {
+                                this.submit_or_queue(content, images, queued, cx);
+                            });
+                            return;
+                        }
+                        if images.is_empty() && content.trim() == "/changelog" {
+                            _window
+                                .dispatch_action(Box::new(crate::ui_actions::OpenChangelog), app);
+                            return;
+                        }
+                        if images.is_empty()
+                            && content.trim() == "/publish"
+                            && let Some(panel) = weak.upgrade()
+                            && panel.read(app).publish_checkout().is_some()
+                        {
+                            _window.dispatch_action(
+                                Box::new(crate::ui_actions::PublishDesktop {
+                                    source: panel.entity_id(),
+                                }),
+                                app,
+                            );
+                        }
+                        if let Some(panel) = weak.upgrade() {
+                            // Login owns a separate, transient panel just like the
+                            // Accounts footer. Never cover the source conversation.
+                            if images.is_empty()
+                                && content.split_whitespace().next() == Some("/login")
+                            {
+                                _window.dispatch_action(
+                                    Box::new(crate::ui_actions::OpenAccounts {
+                                        source: panel.entity_id(),
+                                        login_command: Some(content),
+                                    }),
+                                    app,
+                                );
+                                return;
+                            }
+                            panel.update(app, |this, cx| {
+                                if this.preview_state.is_some() {
+                                    this.handle_preview_command(&content, cx);
+                                    return;
+                                }
+                                if images.is_empty() && this.handle_slash_command(&content, cx) {
+                                    return;
+                                }
+                                this.submit_or_queue(content, images, queued, cx);
+                            });
+                        }
+                    },
+                )
+                .with_example_prompts()
+                .with_on_change(move |content, app| {
+                    if let Some(panel) = change_weak.upgrade() {
+                        panel.update(app, |this, cx| {
+                            if (content == "/model" || content.starts_with("/model "))
+                                && !this.is_pending_session()
+                            {
+                                this.model_picker_open = true;
+                                cx.notify();
+                            } else if this.model_picker_open && !content.starts_with("/model ") {
+                                this.close_model_picker(cx);
+                            }
+                        });
+                    }
+                })
+                .with_on_overlay_cancel(move |app| {
+                    let mut handled = false;
+                    if let Some(panel) = cancel_weak.upgrade() {
+                        panel.update(app, |this, cx| {
+                            if this.recovery_picker_open {
+                                this.recovery_picker_open = false;
+                                handled = true;
+                            } else if this.model_picker_open {
+                                this.close_model_picker(cx);
+                                handled = true;
+                            } else if !this.is_pending_session()
+                                && (this.status != "idle"
+                                    || !this.connection_phase.is_empty()
+                                    || !this.streaming_text.is_empty()
+                                    || !this.streaming_reasoning.is_empty()
+                                    || !this.pending_users.is_empty())
+                            {
+                                if this.preview_state.is_none() {
+                                    this.bridge.send(Command::Cancel {
+                                        session_id: this.session_id.clone(),
+                                    });
+                                }
+                                this.prompt_queue.paused = true;
+                                this.sound_events.cancel();
+                                this.record_stop(stop_reason::StopNotice::cancel_requested());
+                                handled = true;
+                            }
+                            cx.notify();
+                        });
+                    }
+                    handled
+                })
+            });
+            if std::env::var("JCODE_DESKTOP_SCREENSHOT").as_deref() == Ok("1")
+                && std::env::var("JCODE_DESKTOP_SCREENSHOT_MODELS").as_deref() == Ok("1")
+            {
+                let names = [
+                    "anthropic:sonnet-review".to_string(),
+                    "google:gemini-review".to_string(),
+                ]
+                .into_iter()
+                .chain((1..=12).map(|index| format!("openai:atlas-{index:02}")));
+                let routes = names
+                    .map(|model| {
+                        let provider = model.split(':').next().unwrap().to_string();
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs();
+                        let usage = match provider.as_str() {
+                            "anthropic" => Some(jcode_sdk::ModelUsage {
+                                count: 42,
+                                last_used_unix_secs: Some(now - 7200),
+                                tracking_started_unix_secs: Some(now - 86400 * 14),
+                                selection_count: 5,
+                                last_selected_unix_secs: Some(now - 7200),
+                            }),
+                            "google" => Some(jcode_sdk::ModelUsage {
+                                count: 7,
+                                last_used_unix_secs: Some(now - 86400 * 3),
+                                tracking_started_unix_secs: Some(now - 86400 * 14),
+                                selection_count: 2,
+                                last_selected_unix_secs: Some(now - 86400 * 3),
+                            }),
+                            _ => None,
+                        };
+                        jcode_sdk::ModelRouteInfo {
+                            api_method: format!("{provider}-api-key"),
+                            model,
+                            provider,
+                            available: true,
+                            detail: String::new(),
+                            usage,
+                        }
+                    })
+                    .collect();
+                this.apply(
+                    &ApiEvent::RuntimeInfo {
+                        session_id: this.session_id.clone(),
+                        provider: Some("openai".into()),
+                        model: Some("openai:atlas-01".into()),
+                        reasoning_effort: None,
+                        auth_method: None,
+                        routes,
+                    },
+                    cx,
+                );
+            }
+            if this.is_pending_session() {
+                this.status = "Starting session · you can type now".into();
+                this.input
+                    .update(cx, |input, cx| input.set_pending_session(true, cx));
+            }
+        });
+    }
+
+    #[cfg(test)]
+    pub(crate) fn handle_slash_command_for_test(
+        &mut self,
+        content: &str,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.handle_slash_command(content, cx)
+    }
+
+    fn handle_slash_command(&mut self, content: &str, cx: &mut Context<Self>) -> bool {
+        if self.is_side_document() {
+            return true;
+        }
+        self.transcript_measurements.dirty = true;
+        if self.preview_state.is_some() {
+            return self.handle_preview_command(content, cx);
+        }
+        let trimmed = content.trim();
+        if self.handle_special_command(trimmed, cx)
+            || self.handle_recovery_command(trimmed, cx)
+            || self.handle_runtime_command(trimmed, cx)
+            || self.handle_desktop_command(trimmed, cx)
+        {
+            self.stick_to_bottom = true;
+            self.transcript_list.scroll_to_end();
+            return true;
+        }
+        if matches!(trimmed, "/improve stop" | "/refactor stop") {
+            self.pause_queue_for_stop();
+            self.bridge.send(Command::Cancel {
+                session_id: self.session_id.clone(),
+            });
+            self.record_stop(stop_reason::StopNotice::cancel_requested());
+            self.items.push(Item::Assistant("Stopped the active workflow. Queued prompts are preserved and paused, and no continuation was submitted.".into()));
+            cx.notify();
+            return true;
+        }
+        if matches!(trimmed, "/improve status" | "/refactor status") {
+            let payload = self.latest_todo_payload().unwrap_or_default();
+            self.items.push(Item::Todos(payload));
+            self.items.push(Item::Assistant(format!(
+                "Session workflow status: {}. Use `{}` to continue existing work.",
+                self.status,
+                trimmed.replace("status", "resume")
+            )));
+            cx.notify();
+            return true;
+        }
+        if let Some(prompt) = jcode_desktop_model::command_workflows::workflow_prompt(trimmed) {
+            self.submit_or_queue(prompt, Vec::new(), true, cx);
+            return true;
+        }
+        if self.login_command(trimmed, cx) {
+            return true;
+        }
+        if let Some(command) = queue::parse_poke_command(trimmed) {
+            match command {
+                Ok(command) => self.handle_poke_command(command, cx),
+                Err(usage) => self.items.push(Item::Error(usage)),
+            }
+            cx.notify();
+            return true;
+        }
+        if let Some(model) = trimmed
+            .strip_prefix("/model ")
+            .map(str::trim)
+            .filter(|model| !model.is_empty())
+        {
+            self.close_model_picker(cx);
+            self.bridge.send(Command::SetModel {
+                session_id: self.session_id.clone(),
+                model: model.to_string(),
+            });
+            self.items
+                .push(Item::Assistant(format!("Switching model to `{model}`…")));
+        } else if let Some(effort) = trimmed.strip_prefix("/effort ").map(str::trim) {
+            let effort = effort.to_ascii_lowercase();
+            if self.request_effort(&effort, cx) {
+                let input = self.input.clone();
+                cx.defer(move |cx| input.update(cx, |input, cx| input.close_effort_menu(cx)));
+                self.items.push(Item::Assistant(format!(
+                    "Reasoning effort set to `{effort}`."
+                )));
+            }
+        } else if let Some(title) = trimmed.strip_prefix("/rename ").map(str::trim) {
+            if title.is_empty() {
+                self.items.push(Item::Error(
+                    "Usage: `/rename <session name>` or `/rename --clear`.".into(),
+                ));
+            } else {
+                let title = (title != "--clear").then(|| title.to_string());
+                self.run_session_operation(SessionOperation::Rename(title), "Session renamed.");
+            }
+        } else if trimmed == "/save" || trimmed.starts_with("/save ") {
+            let label = trimmed["/save".len()..].trim();
+            let label = (!label.is_empty()).then(|| label.to_string());
+            self.request_session_saved(true, label);
+        } else if trimmed == "/unsave" {
+            self.request_session_saved(false, None);
+        } else if let Some(target) = trimmed.strip_prefix("/rewind ").map(str::trim) {
+            if target == "undo" {
+                self.run_session_operation(SessionOperation::RewindUndo, "Rewind undone.");
+            } else if let Ok(index) = target.parse::<usize>() {
+                if index == 0 {
+                    self.items
+                        .push(Item::Error("Rewind numbering starts at 1.".into()));
+                } else {
+                    self.run_session_operation(
+                        SessionOperation::Rewind(index - 1),
+                        format!("Rewound to message {index}."),
+                    );
+                }
+            } else {
+                self.items.push(Item::Error(
+                    "Usage: `/rewind <message number|undo>`.".into(),
+                ));
+            }
+        } else {
+            match trimmed {
+                "/cancel" => {
+                    self.bridge.send(Command::Cancel {
+                        session_id: self.session_id.clone(),
+                    });
+                    self.record_stop(stop_reason::StopNotice::cancel_requested());
+                }
+                "/cls" | "/clear-view" => {
+                    self.startup_layout = None;
+                    self.image_pane_selected = None;
+                    self.items.clear();
+                    self.response_stats = response_stats::Tracker::default();
+                    self.streaming_text.clear();
+                    self.streaming_reasoning.clear();
+                }
+                "/clear" => self.run_session_operation(
+                    SessionOperation::Clear,
+                    "Conversation history cleared.",
+                ),
+                "/compact" => self.run_session_operation(
+                    SessionOperation::Compact,
+                    "Context compacted.",
+                ),
+                "/help" | "/commands" | "/?" => {
+                    self.items.push(Item::Assistant(help_markdown()))
+                }
+                "/todos" | "/todo" => {
+                    if let Some(payload) = self.latest_todo_payload() {
+                        self.items.push(Item::Todos(payload));
+                    } else {
+                        self.items.push(Item::Todos(TodoCardPayload::default()));
+                    }
+                }
+                "/model" | "/models" => self.open_model_picker(cx),
+                "/update" => {
+                    let request = crate::updates::request_now();
+                    let message = match request {
+                        crate::updates::UpdateRequest::Checking =>
+                            "Checking for Jcode Desktop updates…",
+                        crate::updates::UpdateRequest::AlreadyChecking =>
+                            "Jcode Desktop is already checking for updates.",
+                        crate::updates::UpdateRequest::Downloading =>
+                            "A Jcode Desktop update is downloading in the background.",
+                        crate::updates::UpdateRequest::Restarting =>
+                            "Installing the update and restarting Jcode Desktop…",
+                        crate::updates::UpdateRequest::Unavailable =>
+                            "Automatic updates are unavailable in this build of Jcode Desktop.",
+                    };
+                    self.items.push(Item::Assistant(message.into()));
+                    #[cfg(not(target_os = "macos"))]
+                    if request == crate::updates::UpdateRequest::Checking {
+                        cx.spawn(async move |this, cx| {
+                            loop {
+                                // The worker owns IO, never the UI thread. Surface
+                                // its terminal result even if the user is idle.
+                                let result = match crate::updates::current() {
+                                    crate::updates::UpdateState::Finished { message } => Some(Ok(message)),
+                                    crate::updates::UpdateState::Failed { message } => Some(Err(message)),
+                                    crate::updates::UpdateState::ReadyToRestart { version } => Some(Ok(format!(
+                                        "Jcode Desktop {version} is installed. Run `/update` again or click the update chip to restart into it now, or it starts the next time you open Jcode Desktop."
+                                    ))),
+                                    crate::updates::UpdateState::Idle => break,
+                                    _ => None,
+                                };
+                                if let Some(result) = result {
+                                    let _ = this.update(cx, |panel, cx| {
+                                        panel.items.push(match result {
+                                            Ok(message) => Item::Assistant(message),
+                                            Err(message) => Item::Error(message),
+                                        });
+                                        cx.notify();
+                                    });
+                                    break;
+                                }
+                                if this.upgrade().is_none() { break; }
+                                cx.background_executor().timer(std::time::Duration::from_millis(250)).await;
+                            }
+                        }).detach();
+                    }
+                }
+                "/effort" => {
+                    let ladder = self.effort_ladder();
+                    let current = self.reasoning_effort.as_deref().unwrap_or("default");
+                    let keys = crate::effort::bound_keys_label(cx)
+                        .map(|keys| format!(" or {keys}"))
+                        .unwrap_or_default();
+                    self.items.push(Item::Assistant(if ladder.is_empty() {
+                        "Reasoning effort is not available for this model.".into()
+                    } else {
+                        format!(
+                            "Effort: `{current}`. Use `/effort <{}>`{keys} to change it.",
+                            ladder.join("|")
+                        )
+                    }));
+                }
+                "/rename" => self.items.push(Item::Error(
+                    "Usage: `/rename <session name>` or `/rename --clear`.".into(),
+                )),
+                "/rewind" => self.items.push(Item::Assistant(
+                    "Use `/rewind <message number>` to rewind, or `/rewind undo` to restore.".into(),
+                )),
+                "/commit" => self.submit_command_prompt(
+                    "Make interactive, logical commits for the current uncommitted work. Inspect git state first, group related changes into coherent commits, preserve unrelated work, validate appropriately, and report the commits created plus remaining changes.",
+                    cx,
+                ),
+                "/publish" => {
+                    let item = match self.publish_checkout() {
+                        Some(_) => Item::Assistant(
+                            "Opened the publish tracker. Commit, push, release, and publish progress appears in its panel.".into(),
+                        ),
+                        None => Item::Error(
+                            "`/publish` is only available in Jcode Desktop self-development sessions.".into(),
+                        ),
+                    };
+                    self.items.push(item);
+                }
+                "/restart-all" | "/restart-all desktop" => {
+                    let restart_server = trimmed == "/restart-all";
+                    self.items.push(match crate::restart_spawn::spawn_worker(restart_server) {
+                        Ok(()) => Item::Assistant(if restart_server {
+                            "Restarting the Jcode server and every Desktop window. Windows, sessions, drafts, and layout come back in a few seconds.".into()
+                        } else {
+                            "Restarting every Desktop window. Windows, sessions, drafts, and layout come back in a few seconds.".into()
+                        }),
+                        Err(error) => Item::Error(format!("Could not start the restart: {error}")),
+                    });
+                }
+                "/commit-push" | "/commit-and-push" => self.submit_command_prompt(
+                    "Make logical commits for the current uncommitted work, preserving unrelated work and validating appropriately. Then push to the tracking branch without force-pushing, and report the commits and push result.",
+                    cx,
+                ),
+                _ if trimmed.starts_with('/') => self.items.push(Item::Error(format!(
+                    "{}",
+                    command_unavailable_message(trimmed)
+                ))),
+                _ => return false,
+            }
+        }
+        self.stick_to_bottom = true;
+        self.transcript_list.scroll_to_end();
+        cx.notify();
+        true
+    }
+
+    /// Compose cards a later Gmail call replaced, recomputed only when the
+    /// transcript changes.
+    fn superseded_drafts(&self) -> std::rc::Rc<HashMap<String, gmail_draft_card::Superseded>> {
+        let revision = self.items.revision();
+        let mut cache = self.superseded_drafts.borrow_mut();
+        if cache.0 != revision {
+            let tools = self.items.iter().filter_map(|item| match item {
+                Item::Tool {
+                    call_id,
+                    name,
+                    input,
+                    output,
+                    done,
+                    error,
+                } => Some((
+                    call_id.as_str(),
+                    name.as_str(),
+                    input.as_str(),
+                    output.as_str(),
+                    *done,
+                    error.as_deref(),
+                )),
+                _ => None,
+            });
+            *cache = (
+                revision,
+                std::rc::Rc::new(gmail_draft_card::superseded_cards(tools)),
+            );
+        }
+        cache.1.clone()
+    }
+
+    fn latest_todo_payload(&self) -> Option<TodoCardPayload> {
+        self.items.iter().rev().find_map(|item| match item {
+            Item::Todos(payload) => Some(payload.clone()),
+            Item::Tool {
+                name,
+                output,
+                done: true,
+                error: None,
+                ..
+            } if name == "todo" => parse_todo_tool_output(output),
+            _ => None,
+        })
+    }
+
+    fn open_model_picker(&mut self, cx: &mut Context<Self>) {
+        if self.is_side_document() {
+            return;
+        }
+        if self.available_models.is_empty() {
+            self.open_recovery_models(cx);
+            return;
+        }
+        self.recovery_picker_open = false;
+        self.model_picker_open = true;
+        let models = self.available_models.clone();
+        let input = self.input.clone();
+        cx.defer(move |cx| {
+            input.update(cx, |input, cx| {
+                input.open_model_menu(models, cx);
+            });
+        });
+    }
+
+    /// Toggle the `/effort` suggestion menu from the effort pill.
+    pub(super) fn toggle_effort_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.is_side_document() {
+            return;
+        }
+        if self.model_picker_open {
+            self.close_model_picker(cx);
+        }
+        let input = self.input.clone();
+        cx.defer(move |cx| {
+            input.update(cx, |input, cx| {
+                if input.effort_menu_open() {
+                    input.close_effort_menu(cx);
+                } else {
+                    input.open_effort_menu(cx);
+                }
+            });
+        });
+        self.focus_input(window, cx);
+        cx.notify();
+    }
+
+    fn close_model_picker(&mut self, cx: &mut Context<Self>) {
+        self.model_picker_open = false;
+        let input = self.input.clone();
+        cx.defer(move |cx| input.update(cx, |input, cx| input.close_model_menu(cx)));
+        cx.notify();
+    }
+
+    /// Ask the daemon to bookmark or unbookmark this session. The transcript
+    /// note waits for [`Self::session_saved_settled`] so a rejected request
+    /// never reads as saved.
+    fn request_session_saved(&mut self, saved: bool, label: Option<String>) {
+        if self.is_side_document() || self.preview_state.is_some() {
+            return;
+        }
+        self.bridge.send(Command::SessionOperation {
+            session_id: self.session_id.clone(),
+            operation: SessionOperation::SetSaved(saved, label),
+        });
+        self.pending_save_requests += 1;
+    }
+
+    /// Settle one pending `/save` or `/unsave`. Returns false when no request
+    /// from this panel was waiting, e.g. a sidebar pin, so callers stay quiet.
+    pub(crate) fn session_saved_settled(
+        &mut self,
+        saved: bool,
+        label: Option<&str>,
+        error: Option<&str>,
+    ) -> bool {
+        if self.pending_save_requests == 0 {
+            return false;
+        }
+        self.pending_save_requests -= 1;
+        self.items.push(match (error, saved, label) {
+            (Some(error), true, _) => Item::Error(format!("Failed to save session: {error}")),
+            (Some(error), false, _) => Item::Error(format!("Failed to unsave session: {error}")),
+            (None, true, Some(label)) => Item::Assistant(format!(
+                "📌 Session saved as \"{label}\". It will appear at the top of /resume."
+            )),
+            (None, true, None) => {
+                Item::Assistant("📌 Session saved. It will appear at the top of /resume.".into())
+            }
+            (None, false, _) => Item::Assistant("Session removed from saved.".into()),
+        });
+        true
+    }
+
+    fn run_session_operation(&mut self, operation: SessionOperation, _message: impl Into<String>) {
+        if self.is_side_document() || self.preview_state.is_some() {
+            return;
+        }
+        self.bridge.send(Command::SessionOperation {
+            session_id: self.session_id.clone(),
+            operation,
+        });
+        self.items.push(Item::Assistant(
+            "Requested the session change. The conversation will refresh after the runtime confirms it.".into(),
+        ));
+    }
+
+    fn submit_command_prompt(&mut self, prompt: &str, cx: &mut Context<Self>) {
+        if self.is_side_document() || self.preview_state.is_some() {
+            return;
+        }
+        self.bridge.send(Command::Send {
+            session_id: self.session_id.clone(),
+            content: prompt.to_string(),
+            images: Vec::new(),
+        });
+        let index = self.items.len();
+        self.items.push(Item::User(prompt.to_string()));
+        self.pending_users.push_back(index);
+        crate::sounds::play(crate::sounds::Cue::Sent, cx);
+    }
+
+    /// Convert protocol history into transcript items. Shared by the
+    /// authoritative reply and the provisional on-disk prefix so both paint
+    /// identically.
+    fn history_items(
+        messages: Vec<jcode_sdk::HistoryMessage>,
+        images: Vec<jcode_sdk::RenderedImage>,
+    ) -> Vec<Item> {
+        let mut images_by_prompt: HashMap<usize, Vec<jcode_sdk::RenderedImage>> = HashMap::new();
+        let mut images_by_message: HashMap<usize, Vec<jcode_sdk::RenderedImage>> = HashMap::new();
+        let mut trailing_images = Vec::new();
+        for image in images {
+            if let Some(index) = image.history_message_index {
+                // The boundary counts protocol messages, including hidden tool
+                // rows, rather than visible desktop transcript items.
+                images_by_message
+                    .entry(index.min(messages.len()))
+                    .or_default()
+                    .push(image);
+                continue;
+            }
+            match &image.anchor {
+                Some(jcode_sdk::RenderedImageAnchor::UserPrompt { ordinal }) => {
+                    images_by_prompt.entry(*ordinal).or_default().push(image);
+                }
+                _ => trailing_images.push(image),
+            }
+        }
+        let mut items = Vec::with_capacity(messages.len() + trailing_images.len());
+        let mut user_ordinal = 0;
+        let message_count = messages.len();
+        for (index, message) in messages.into_iter().enumerate() {
+            if let Some(images) = images_by_message.remove(&index) {
+                items.extend(
+                    images
+                        .into_iter()
+                        .map(|image| Item::Image(TranscriptImage::from_rendered(image))),
+                );
+            }
+            match message.role.as_str() {
+                "user" => {
+                    items.push(Item::User(message.content));
+                    if let Some(images) = images_by_prompt.remove(&user_ordinal) {
+                        items.extend(
+                            images
+                                .into_iter()
+                                .map(|image| Item::Image(TranscriptImage::from_rendered(image))),
+                        );
+                    }
+                    user_ordinal += 1;
+                }
+                "assistant" => {
+                    if !message.content.trim().is_empty() {
+                        items.push(Item::Assistant(message.content));
+                    }
+                    if let Some(stats) = message.response_stats {
+                        let stats: response_stats::ResponseStats = stats.into();
+                        if !stats.is_empty() {
+                            items.push(Item::ResponseStats(stats));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if let Some(images) = images_by_message.remove(&message_count) {
+            trailing_images.splice(0..0, images);
+        }
+        for images in images_by_prompt.into_values() {
+            trailing_images.extend(images);
+        }
+        items.extend(
+            trailing_images
+                .into_iter()
+                .map(|image| Item::Image(TranscriptImage::from_rendered(image))),
+        );
+        items
+    }
+
+    /// Paint the locally persisted transcript while the runtime attaches.
+    /// Attaching restores the agent before `get_history` can answer, which
+    /// takes hundreds of milliseconds. The stored record renders in a few, so
+    /// the reader sees the conversation at once and the authoritative reply
+    /// swaps in underneath (usually as a no-op when nothing changed).
+    pub fn prefetch_persisted_history(&mut self, cx: &mut Context<Self>) {
+        if cfg!(test) || crate::harness::screenshot_mode() {
+            return;
+        }
+        let id = self.session_id.clone();
+        if !crate::persisted_history::is_local_session_id(&id)
+            || !jcode_base::session::session_path(&id).is_ok_and(|path| path.exists())
+        {
+            return;
+        }
+        self.prefetch_history_with(move || crate::persisted_history::load(&id), cx);
+    }
+
+    pub(crate) fn prefetch_history_with(
+        &mut self,
+        loader: impl FnOnce() -> Result<crate::persisted_history::History, String> + Send + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.can_show_provisional() {
+            return;
+        }
+        self.awaiting_persisted = true;
+        let started = Instant::now();
+        // Parse, render, and decode images off the UI thread.
+        let request = cx.background_executor().spawn(async move {
+            loader().map(|(messages, images)| Self::history_items(messages, images))
+        });
+        self.provisional_task = Some(cx.spawn(async move |this, cx| {
+            let result = request.await;
+            let _ = this.update(cx, |panel, cx| {
+                panel.provisional_task = None;
+                if std::mem::take(&mut panel.awaiting_persisted) {
+                    cx.notify();
+                }
+                let Ok(items) = result else { return };
+                if items.is_empty() || !panel.can_show_provisional() {
+                    return;
+                }
+                eprintln!(
+                    "jcode desktop: provisional transcript items={} in {:?}",
+                    items.len(),
+                    started.elapsed()
+                );
+                panel.provisional_items = items.len();
+                *panel.items = items;
+                panel.transcript_measurements.dirty = true;
+                if panel.startup_layout.as_ref().is_some_and(|l| !l.committed) {
+                    panel.startup_layout = None;
+                }
+                if panel.pending_history_scroll.is_none() && panel.stick_to_bottom {
+                    panel.transcript_list.scroll_to_end();
+                }
+                cx.notify();
+            });
+        }));
+    }
+
+    /// Only an untouched, not-yet-hydrated transcript may borrow the disk copy.
+    fn can_show_provisional(&self) -> bool {
+        !self.history_loaded
+            && !self.restored_transcript
+            && !self.transcript_only
+            && !self.is_side_document()
+            && self.provisional_items == 0
+            && self.items.is_empty()
+            && self.pending_users.is_empty()
+            && self.streaming_text.is_empty()
+            && self.streaming_reasoning.is_empty()
+    }
+
+    /// Retire the provisional prefix before the authoritative history lands.
+    /// Returns true when the reply matched it exactly and nothing else is
+    /// needed, which keeps measurements and scroll position untouched.
+    fn adopt_authoritative_over_provisional(&mut self, items: &[Item]) -> bool {
+        self.provisional_task = None;
+        self.awaiting_persisted = false;
+        let count = std::mem::take(&mut self.provisional_items).min(self.items.len());
+        if count == 0 {
+            return false;
+        }
+        if self.items[..count] == *items {
+            return true;
+        }
+        self.items.drain(..count);
+        self.pending_users = self
+            .pending_users
+            .drain(..)
+            .filter_map(|index| index.checked_sub(count))
+            .collect();
+        self.accepted_users = std::mem::take(&mut self.accepted_users)
+            .into_iter()
+            .filter_map(|(index, at)| Some((index.checked_sub(count)?, at)))
+            .collect();
+        self.expanded_prompts.clear();
+        false
+    }
+
+    pub(crate) fn history_loaded(&self) -> bool {
+        self.history_loaded
+    }
+
+    pub fn load_history(
+        &mut self,
+        messages: Vec<jcode_sdk::HistoryMessage>,
+        images: Vec<jcode_sdk::RenderedImage>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.is_side_document() {
+            return;
+        }
+        self.transcript_measurements.dirty = true;
+        if self.restored_transcript {
+            self.hydrate_restored_prefix(&messages);
+            // An empty/behind reply still completes the connection handshake.
+            // Keep the cache reconciliation marker independent of readiness.
+            self.history_loaded = true;
+            self.input
+                .update(cx, |input, cx| input.set_pending_session(false, cx));
+        }
+        if self.history_loaded {
+            // History is persisted message state, not a replay of the live turn.
+            // Wait for authoritative idle before reconciling it with a saved
+            // suffix. Buffered deltas must not be appended to a history prefix.
+            self.defer_reconnect_history(&messages);
+            for image in images {
+                self.insert_rendered_image(image);
+            }
+            self.send_queued_prompts(cx);
+            cx.notify();
+            return;
+        }
+        self.history_loaded = true;
+        if !self.is_pending_session() {
+            self.input
+                .update(cx, |input, cx| input.set_pending_session(false, cx));
+        }
+        // An established session can paint an empty placeholder before its
+        // history arrives. That must not adopt a new conversation's layout.
+        if !messages.is_empty()
+            && self.pending_users.is_empty()
+            && self
+                .startup_layout
+                .as_ref()
+                .is_some_and(|layout| !layout.committed)
+        {
+            self.startup_layout = None;
+        }
+        let mut items = Self::history_items(messages, images);
+        if self.adopt_authoritative_over_provisional(&items) {
+            self.send_queued_prompts(cx);
+            cx.notify();
+            return;
+        }
+        // History goes first; anything echoed locally before it arrived is
+        // appended, minus the duplicate the server already knows about.
+        let mut existing = std::mem::take(&mut self.items);
+        existing.retain(|item| match item {
+            Item::User(text) => !matches!(items.last(), Some(Item::User(last)) if last == text),
+            _ => true,
+        });
+        let history_len = items.len();
+        self.pending_users = self
+            .pending_users
+            .drain(..)
+            .map(|index| index + history_len)
+            .collect();
+        self.accepted_users = std::mem::take(&mut self.accepted_users)
+            .into_iter()
+            .map(|(index, at)| (index + history_len, at))
+            .collect();
+        items.append(&mut existing);
+        self.image_pane_selected = None;
+        *self.items = items;
+        if self.pending_history_scroll.is_none() && self.stick_to_bottom {
+            self.transcript_list.scroll_to_end();
+        }
+        self.send_queued_prompts(cx);
+        cx.notify();
+    }
+
+    fn recover_response(&mut self, response: &str) {
+        self.transcript_measurements.dirty = true;
+        if self.streaming_text == response {
+            return;
+        }
+        if !self.streaming_text.is_empty() && response.starts_with(&self.streaming_text) {
+            self.streaming_text = response.to_string();
+            return;
+        }
+
+        if let Some(existing) = self
+            .items
+            .iter_mut()
+            .rev()
+            .take_while(|item| !matches!(item, Item::User(_)))
+            .find_map(|item| match item {
+                Item::Assistant(text) => Some(text),
+                _ => None,
+            })
+        {
+            if existing == response {
+                return;
+            }
+            if response.starts_with(existing.as_str()) {
+                *existing = response.to_string();
+                return;
+            }
+        }
+
+        self.flush_reasoning();
+        self.flush_streaming();
+        self.items.push(Item::Assistant(response.to_string()));
+    }
+
+    /// Apply a streaming event addressed to this session.
+    pub fn apply(&mut self, event: &ApiEvent, cx: &mut Context<Self>) {
+        if self.is_side_document() {
+            return;
+        }
+        let was_active = self.activity_active();
+        self.apply_event(event, cx);
+        self.note_turn_transition(was_active, cx);
+    }
+
+    /// A turn that finishes out of view leaves a green "done" glow on its
+    /// tab until the session is seen. A new turn clears it right away.
+    fn note_turn_transition(&mut self, was_active: bool, cx: &mut Context<Self>) {
+        let active = self.activity_active();
+        let finished_unseen = match (was_active, active) {
+            (false, true) => false,
+            (true, false) => {
+                !self.surface_focused
+                    && self.minimap_state() != MinimapSessionState::Error
+            }
+            _ => return,
+        };
+        if self.finished_unseen != finished_unseen {
+            self.finished_unseen = finished_unseen;
+            cx.notify();
+        }
+    }
+
+    fn apply_event(&mut self, event: &ApiEvent, cx: &mut Context<Self>) {
+        if matches!(
+            event,
+            ApiEvent::TextDelta { .. }
+                | ApiEvent::ReasoningDelta { .. }
+                | ApiEvent::ToolStart { .. }
+                | ApiEvent::MessageAccepted { .. }
+                | ApiEvent::Error { .. }
+                | ApiEvent::TurnStopped { .. }
+        ) {
+            // New live evidence supersedes the earlier persisted candidate.
+            self.reconnect_response = None;
+        }
+        // Streaming appends only affect the live suffix. Keep a conservative
+        // full invalidation for tools, status transitions, images and errors.
+        // Metadata-only events still repaint chrome without discarding heights.
+        if !matches!(
+            event,
+            ApiEvent::TextDelta { .. }
+                | ApiEvent::ReasoningDelta { .. }
+                | ApiEvent::TokenUsage { .. }
+                | ApiEvent::ModelInfo { .. }
+                | ApiEvent::RuntimeInfo { .. }
+                | ApiEvent::SessionRenamed { .. }
+        ) {
+            self.transcript_measurements.dirty = true;
+        }
+        self.response_stats.observe(event, self.provider.as_deref());
+        self.observe_activity_state(event);
+        if let Some(cue) = self.sound_events.observe(event)
+            && self.preview_state.is_none()
+            && !self.demo
+        {
+            crate::sounds::play(cue, cx);
+        }
+        match event {
+            ApiEvent::RuntimeCommandResult {
+                session_id,
+                command,
+                data,
+                message,
+            } => {
+                let output = jcode_sdk::api::RuntimeCommandOutput {
+                    session_id: session_id.clone(),
+                    command: *command,
+                    data: data.clone(),
+                    message: message.clone(),
+                };
+                self.items.push(Item::Assistant(output.message.clone()));
+                self.apply_special_command_artifacts(&output, cx);
+                self.stick_to_bottom = true;
+            }
+            ApiEvent::MessageAccepted { .. } => {
+                acknowledge_next(
+                    &mut self.pending_users,
+                    &mut self.accepted_users,
+                    Instant::now(),
+                );
+            }
+            ApiEvent::TextDelta { text, .. } => {
+                self.flush_reasoning();
+                self.streaming_text.push_str(text);
+            }
+            ApiEvent::ReasoningDelta { text, .. } => {
+                // Thinking that resumes after answer text is a new phase. Settle
+                // the text first so the thought paints below it instead of
+                // merging into the earlier thinking block above the text.
+                self.flush_streaming();
+                self.streaming_reasoning.push_str(text);
+            }
+            ApiEvent::ReasoningDone { .. } => {
+                self.flush_reasoning();
+            }
+            ApiEvent::ToolStart { call_id, name, .. } => {
+                self.flush_reasoning();
+                self.flush_streaming();
+                self.arriving_tools.insert(call_id.clone(), Instant::now());
+                self.tool_started.insert(call_id.clone(), Instant::now());
+                self.items.push(Item::Tool {
+                    call_id: call_id.clone(),
+                    name: name.clone(),
+                    input: String::new(),
+                    output: String::new(),
+                    done: false,
+                    error: None,
+                });
+            }
+            ApiEvent::ToolInputDelta { call_id, delta, .. } => {
+                if let Some(Item::Tool { input, .. }) = self.find_tool(call_id) {
+                    input.push_str(delta);
+                }
+            }
+            ApiEvent::ToolDone {
+                call_id,
+                name,
+                output,
+                error,
+                ..
+            } => {
+                if let Some(Item::Tool {
+                    done,
+                    error: slot,
+                    output: output_slot,
+                    ..
+                }) = self.find_tool(call_id)
+                {
+                    *done = true;
+                    *slot = error.clone();
+                    *output_slot = output.clone();
+                    if let Some(started) = self.tool_started.remove(call_id) {
+                        self.tool_durations
+                            .insert(call_id.clone(), started.elapsed());
+                    }
+                    let running = &self.tool_started;
+                    self.running_tool_tickers.get_mut().retain(|key| {
+                        key.split_once(':')
+                            .is_some_and(|(_, call)| running.contains_key(call))
+                    });
+                } else {
+                    self.arriving_tools.insert(call_id.clone(), Instant::now());
+                    self.items.push(Item::Tool {
+                        call_id: call_id.clone(),
+                        name: name.clone(),
+                        input: String::new(),
+                        output: output.clone(),
+                        done: true,
+                        error: error.clone(),
+                    });
+                }
+            }
+            ApiEvent::BackgroundProgress {
+                task_id,
+                label,
+                summary,
+                percent,
+                done,
+                ..
+            } => {
+                if let Some(Item::BackgroundTask {
+                    label: current_label,
+                    summary: current_summary,
+                    percent: current_percent,
+                    done: current_done,
+                    ..
+                }) = self.items.iter_mut().rev().find(|item| {
+                    matches!(item, Item::BackgroundTask { task_id: id, .. } if id == task_id)
+                }) {
+                    *current_label = label.clone();
+                    *current_summary = summary.clone();
+                    *current_percent = *percent;
+                    *current_done = *done;
+                } else {
+                    self.items.push(Item::BackgroundTask {
+                        task_id: task_id.clone(),
+                        label: label.clone(),
+                        summary: summary.clone(),
+                        percent: *percent,
+                        done: *done,
+                    });
+                }
+            }
+            ApiEvent::SidePaneImages { images, .. } => {
+                for image in images.iter().cloned() {
+                    self.insert_rendered_image(image);
+                }
+            }
+            ApiEvent::TurnDone { .. } => {
+                self.reconcile_reconnect_response();
+                self.finish_response();
+            }
+            ApiEvent::TurnStopped {
+                reason,
+                message,
+                provider_stop_reason,
+                ..
+            } => {
+                self.record_stop(stop_reason::StopNotice::from_event(
+                    reason,
+                    message,
+                    provider_stop_reason.as_deref(),
+                ));
+            }
+            ApiEvent::SessionStatus { status, .. }
+                if status == "attached" || (status == "connected" && self.activity_active()) =>
+            {
+                // Transport bookkeeping is not a turn transition. In particular,
+                // a late attach notification must not resurrect a completed turn.
+            }
+            ApiEvent::SessionStatus { status, .. } => {
+                if let Some(notice) = stop_reason::StopNotice::from_status(status) {
+                    // New runtimes send a richer event before their legacy status.
+                    if !matches!(self.items.last(), Some(Item::Stopped(notice)) if !notice.provisional)
+                    {
+                        self.record_stop(notice);
+                    }
+                    cx.notify();
+                    return;
+                }
+                self.status = if status == "processing" {
+                    "running".into()
+                } else {
+                    status.clone()
+                };
+                if matches!(status.as_str(), "idle" | "cancelled" | "canceled") {
+                    self.reconcile_reconnect_response();
+                    self.finish_response();
+                }
+            }
+            ApiEvent::ConnectionPhase { phase, .. } => {
+                self.connection_phase = phase.clone();
+            }
+            ApiEvent::ModelInfo {
+                provider,
+                model,
+                reasoning_effort,
+                auth_method,
+                ..
+            } => {
+                if provider.is_some() {
+                    self.provider = provider.clone();
+                }
+                // Identity events always carry the current effort, and `None`
+                // means the provider has none, so a stale label never lingers.
+                self.identity_effort(reasoning_effort.clone());
+                // Only an actual switch invalidates the auth method: the route
+                // catalog keyed it by model, but effort broadcasts repeat the
+                // current model and must not wipe a still-correct label.
+                if model.is_some() && *model != self.model {
+                    self.model = model.clone();
+                    self.auth_method = None;
+                    self.input.update(cx, |input, cx| {
+                        input.set_current_model(self.model.clone(), cx)
+                    });
+                }
+                // The daemon's resolved credential is authoritative, including
+                // an OAuth<->API key switch that keeps the same model id.
+                if let Some(method) = auth_method.as_deref() {
+                    self.auth_method = Some(human_auth_method(method));
+                }
+                self.sync_effort_menu(cx);
+            }
+            ApiEvent::RuntimeInfo {
+                provider,
+                model,
+                reasoning_effort,
+                auth_method,
+                routes,
+                ..
+            } => {
+                if provider.is_some() {
+                    self.provider = provider.clone();
+                }
+                self.identity_effort(reasoning_effort.clone());
+                if model.is_some() {
+                    self.model = model.clone();
+                }
+                self.auth_method = auth_method
+                    .as_deref()
+                    .map(human_auth_method)
+                    .or_else(|| auth_method_for_model(self.model.as_deref(), routes));
+                let models = available_model_names(routes);
+                self.available_models = models.clone();
+                self.input.update(cx, |input, cx| {
+                    input.set_model_routes(models, routes, self.model.clone(), cx);
+                });
+                self.sync_effort_menu(cx);
+            }
+            ApiEvent::TokenUsage {
+                input,
+                cache_read_input,
+                cache_creation_input,
+                ..
+            } => {
+                self.context_tokens =
+                    Some(jcode_base::compaction::effective_context_tokens_from_usage(
+                        self.provider.as_deref().unwrap_or_default(),
+                        *input,
+                        *cache_read_input,
+                        *cache_creation_input,
+                    ));
+            }
+            ApiEvent::KvCacheMiss { .. } => {
+                if let Some(notice) = cache_miss::CacheMissNotice::from_event(event) {
+                    // Keep the notice in order: settle text streamed so far.
+                    self.flush_reasoning();
+                    self.flush_streaming();
+                    self.items.push(Item::CacheMiss(notice));
+                }
+            }
+            ApiEvent::SessionRenamed { display_title, .. } => {
+                self.title = display_title.clone().into();
+            }
+            ApiEvent::Error { message, .. } => {
+                self.finish_response();
+                if !matches!(self.items.last(), Some(Item::Stopped(notice)) if notice.detail == *message)
+                {
+                    self.items.push(Item::Error(message.clone()));
+                }
+            }
+            _ => {}
+        }
+        self.observe_prompt_queue(event, cx);
+        // Follow only during render, after pending user input. Installing an
+        // end sentinel here replaces the painted scroll position before layout,
+        // so an intervening upward wheel delta is clamped back to the bottom.
+        cx.notify();
+    }
+
+    /// Settle partial output and stop activity without waiting for a later idle event.
+    fn finish_response(&mut self) {
+        self.transcript_measurements.dirty = true;
+        self.flush_reasoning();
+        self.flush_streaming();
+        if let Some(stats) = self.response_stats.finish() {
+            self.items.push(Item::ResponseStats(stats));
+        }
+        self.status = "idle".into();
+        self.connection_phase.clear();
+    }
+
+    fn flush_streaming(&mut self) {
+        if !self.streaming_text.trim().is_empty() {
+            self.transcript_measurements.dirty = true;
+            self.items
+                .push(Item::Assistant(std::mem::take(&mut self.streaming_text)));
+        } else {
+            self.streaming_text.clear();
+        }
+    }
+
+    /// Advance the paced reveal of live reasoning and response text. Only the
+    /// visible prefix is rendered, so bursts flow in instead of jumping.
+    /// Returns true when motion is instant this frame (reduced motion, tests).
+    fn tick_stream_reveal(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        // Render tests assert on painted text from a single frame.
+        #[cfg(test)]
+        let test_snap = !self.animate_stream_in_tests;
+        #[cfg(not(test))]
+        let test_snap = false;
+        let instant = test_snap
+            || self.preview_state.is_some()
+            || cx.reduce_motion()
+            || crate::config::get().appearance.reduce_motion;
+        let now = Instant::now();
+        let text = self
+            .text_reveal
+            .tick(&self.streaming_text, now, instant);
+        let reasoning = self
+            .reasoning_reveal
+            .tick(&self.streaming_reasoning, now, instant);
+        if text || reasoning {
+            window.request_animation_frame();
+        }
+        instant
+    }
+
+    /// Raw streamed input of a tool call in this transcript.
+    pub(crate) fn tool_input(&self, call_id: &str) -> Option<&str> {
+        self.items.iter().rev().find_map(|item| match item {
+            Item::Tool {
+                call_id: id, input, ..
+            } if id == call_id => Some(input.as_str()),
+            _ => None,
+        })
+    }
+
+    fn find_tool(&mut self, call_id: &str) -> Option<&mut Item> {
+        // The legacy harness protocol streams `tool_input` without an id. The
+        // bridge preserves that fact as an empty call_id, so associate those
+        // deltas with the most recent active call. Exact ids still win for
+        // modern providers and for overlapping completed calls.
+        if call_id.is_empty() {
+            return self
+                .items
+                .iter_mut()
+                .rev()
+                .find(|item| matches!(item, Item::Tool { done: false, .. }));
+        }
+        self.items.iter_mut().rev().find(
+            |item| matches!(item, Item::Tool { call_id: existing, .. } if existing == call_id),
+        )
+    }
+
+    fn insert_rendered_image(&mut self, image: jcode_sdk::RenderedImage) {
+        if self.items.iter().any(|item| {
+            matches!(item, Item::Image(existing)
+                if existing.anchor == image.anchor && existing.source == image.source
+                    && existing.media_type == image.media_type && existing.data == image.data)
+        }) {
+            return;
+        }
+        let insertion = match image.anchor.as_ref() {
+            Some(jcode_sdk::RenderedImageAnchor::ToolCall { id }) => self
+                .items
+                .iter()
+                .rposition(|item| matches!(item, Item::Tool { call_id, .. } if call_id == id))
+                .map(|index| {
+                    // A batch may return several images. Preserve their order
+                    // instead of inserting each one directly after the tool.
+                    index + 1
+                        + self.items[index + 1..]
+                            .iter()
+                            .take_while(|item| {
+                                matches!(item, Item::Image(existing) if existing.anchor == image.anchor)
+                            })
+                            .count()
+                }),
+            _ => None,
+        };
+        let insertion = insertion.unwrap_or_else(|| {
+            // Unanchored images still belong after already-streamed text,
+            // not before it when the stream is eventually flushed.
+            self.flush_reasoning();
+            self.flush_streaming();
+            self.items.len()
+        });
+        for index in &mut self.pending_users {
+            if *index >= insertion {
+                *index += 1;
+            }
+        }
+        self.accepted_users = std::mem::take(&mut self.accepted_users)
+            .into_iter()
+            .map(|(index, at)| (index + usize::from(index >= insertion), at))
+            .collect();
+        if let Some(selected) = &mut self.image_pane_selected {
+            if *selected >= insertion {
+                *selected += 1;
+            }
+        }
+        self.items.insert(
+            insertion,
+            Item::Image(TranscriptImage::from_rendered(image)),
+        );
+    }
+
+    fn flush_reasoning(&mut self) {
+        if !self.streaming_reasoning.trim().is_empty() {
+            self.transcript_measurements.dirty = true;
+            append_reasoning(
+                &mut self.items,
+                std::mem::take(&mut self.streaming_reasoning),
+            );
+        } else {
+            self.streaming_reasoning.clear();
+        }
+    }
+
+    pub fn is_busy(&self) -> bool {
+        self.status != "idle" || self.activity_active()
+    }
+
+    /// A compact, presentation-neutral summary for the workspace minimap.
+    /// The transcript remains the source of truth, so todo progress keeps
+    /// working across live updates without duplicating state in `Workspace`.
+    pub(crate) fn minimap_state(&self) -> MinimapSessionState {
+        let status = self.status.to_ascii_lowercase();
+        if status.contains("error")
+            || status.contains("crash")
+            || matches!(self.items.last(), Some(Item::Error(_)))
+        {
+            MinimapSessionState::Error
+        } else if !self.streaming_text.is_empty() || !self.streaming_reasoning.is_empty() {
+            MinimapSessionState::Streaming
+        } else if status != "idle" {
+            MinimapSessionState::Working
+        } else if self
+            .latest_todo_progress()
+            .is_some_and(|(completed, total)| total > 0 && completed == total)
+        {
+            MinimapSessionState::Complete
+        } else {
+            MinimapSessionState::Idle
+        }
+    }
+
+    pub(crate) fn latest_todo_progress(&self) -> Option<(usize, usize)> {
+        self.items.iter().rev().find_map(|item| {
+            let Item::Todos(payload) = item else {
+                return None;
+            };
+            Some((
+                payload
+                    .todos
+                    .iter()
+                    .filter(|todo| todo.status == "completed")
+                    .count(),
+                payload.todos.len(),
+            ))
+        })
+    }
+
+    pub fn message_failed(&mut self, message: String, cx: &mut Context<Self>) {
+        self.prompt_queue.paused = true;
+        self.sound_events.cancel();
+        if self.preview_state.is_none() {
+            crate::sounds::play(crate::sounds::Cue::Error, cx);
+        }
+        self.finish_response();
+        self.items.push(Item::Error(message));
+        self.status = "idle".into();
+        self.connection_phase.clear();
+        self.stick_to_bottom = true;
+        self.transcript_list.scroll_to_end();
+        cx.notify();
+    }
+
+    /// Prefer meaningful activity over transport bookkeeping.
+    fn status_line(&self) -> String {
+        let phase = self.connection_phase.trim();
+        if !phase.is_empty() && !matches!(phase, "connected" | "streaming") {
+            return activity_state::phase_label(phase);
+        }
+        if self.activity_active() {
+            // Buffers may still contain an earlier block. The latest semantic
+            // event remains authoritative even after ReasoningDone flushes it.
+            match self.status.as_str() {
+                "thinking" => return "Thinking".into(),
+                "streaming" => return "Responding".into(),
+                "running_tools" => return "Running tools".into(),
+                "compacting" => return "Compacting context".into(),
+                _ => {}
+            }
+            if !self.streaming_reasoning.is_empty() {
+                return "Thinking".into();
+            }
+            if !self.streaming_text.is_empty() {
+                return "Responding".into();
+            }
+            if phase == "streaming" && self.status != "running_tools" {
+                return "Responding".into();
+            }
+        }
+        match self.status.as_str() {
+            "idle" | "connected" => "Ready".into(),
+            "busy" | "running" => "Working".into(),
+            "generating" => "Working".into(),
+            "thinking" => "Thinking".into(),
+            "streaming" => "Responding".into(),
+            "running_tools" => "Running tools".into(),
+            "compacting" => "Compacting context".into(),
+            status => status.replace('_', " "),
+        }
+    }
+
+    fn activity_active(&self) -> bool {
+        let status = self.status.to_ascii_lowercase();
+        if status.contains("error") || status.contains("crash") || status.starts_with("lost:") {
+            return false;
+        }
+        // Historical transcript errors do not describe the current turn. A
+        // transport streaming event can also arrive before its session status.
+        !self.streaming_text.is_empty()
+            || !self.streaming_reasoning.is_empty()
+            || self.connection_phase.trim() == "streaming"
+            || activity_state::is_request_phase(&self.connection_phase)
+            || matches!(
+                status.as_str(),
+                "generating"
+                    | "running"
+                    | "busy"
+                    | "thinking"
+                    | "streaming"
+                    | "running_tools"
+                    | "compacting"
+            )
+    }
+
+    fn render_transcript_activity(&self) -> gpui::AnyElement {
+        div()
+            .debug_selector(|| "transcript-activity".into())
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap_2()
+            .min_w_0()
+            .px_3()
+            .pt(px(10.0))
+            .pb_2()
+            .child(self.activity_spinner.clone())
+            .into_any_element()
+    }
+
+    /// Refresh transcript applet placement from the shared runtime. Cards
+    /// anchored to a tool call render in that call's row. Everything else
+    /// (`end`, `after_message`, and tool anchors whose call is not in this
+    /// transcript, such as batch subcalls) is pinned at the position where
+    /// it first appeared so it scrolls with the conversation.
+    fn sync_applet_rows(&mut self, cx: &mut Context<Self>) {
+        use jcode_applet_types::{Placement, placement::Anchor};
+        let runtime = crate::applet_runtime::get(cx);
+        let generation = runtime.generation.get();
+        let key = (generation, self.items.len());
+        if key == self.applet_generation {
+            return;
+        }
+        self.applet_generation = key;
+        let host = runtime.host.borrow();
+        let mut rows = Vec::new();
+        let mut seen = HashSet::new();
+        for mounted in host.inline_for(&self.session_id) {
+            let id = mounted.instance.id.clone();
+            if let Placement::Inline {
+                anchor: Anchor::ToolCall { call_id },
+                ..
+            } = &mounted.instance.placement
+                && self
+                    .items
+                    .iter()
+                    .any(|item| matches!(item, Item::Tool { call_id: c, .. } if c == call_id))
+            {
+                continue;
+            }
+            let position = *self
+                .applet_positions
+                .entry(id.clone())
+                .or_insert(self.items.len());
+            seen.insert(id.clone());
+            rows.push((position, id));
+        }
+        drop(host);
+        self.applet_positions.retain(|id, _| seen.contains(id));
+        rows.sort_by_key(|(position, _)| *position);
+        // Any card change (mount, patch, close) can change row heights.
+        self.transcript_measurements.dirty = true;
+        self.applet_rows = rows;
+        self.applet_rows_version = self.applet_rows_version.wrapping_add(1);
+    }
+
+    /// Rows, pinnable prompt rows and the latest todo snapshot, rebuilt only
+    /// when the transcript, live text, applet rows or disclosure state change.
+    /// The selectable text document is synced on the same schedule.
+    fn transcript_derived(&mut self, cx: &mut Context<Self>) -> &TranscriptDerived {
+        use std::hash::{Hash, Hasher};
+        let streaming = {
+            let mut state = std::collections::hash_map::DefaultHasher::new();
+            self.reasoning_reveal
+                .visible(&self.streaming_reasoning)
+                .hash(&mut state);
+            self.text_reveal
+                .visible(&self.streaming_text)
+                .hash(&mut state);
+            state.finish()
+        };
+        let expansions = {
+            // Order-independent: both sets are small and unordered.
+            let mut sum = 0u64;
+            for entry in &self.expanded_prompts {
+                let mut state = std::collections::hash_map::DefaultHasher::new();
+                entry.hash(&mut state);
+                sum = sum.wrapping_add(state.finish());
+            }
+            for entry in &self.expanded_tools {
+                let mut state = std::collections::hash_map::DefaultHasher::new();
+                entry.hash(&mut state);
+                sum = sum.wrapping_add(state.finish().rotate_left(17));
+            }
+            sum ^ (self.expanded_prompts.len() as u64) << 32 ^ self.expanded_tools.len() as u64
+        };
+        let key = TranscriptDerivedKey {
+            items_revision: self.items.revision(),
+            applet_rows_version: self.applet_rows_version,
+            streaming,
+            expansions,
+            display: crate::config::display(),
+        };
+        if self
+            .transcript_derived
+            .as_ref()
+            .is_none_or(|derived| derived.key != key)
+        {
+            if self
+                .transcript_derived
+                .as_ref()
+                .is_some_and(|derived| derived.key.display != key.display)
+            {
+                self.transcript_measurements.dirty = true;
+            }
+            let rows = Arc::new(self.transcript_render_rows());
+            if let Some(document) = self.transcript_text_document.sync(
+                &self.items,
+                &rows,
+                &self.expanded_prompts,
+                &self.expanded_tools,
+            ) {
+                self.transcript_selection
+                    .update(cx, |selection, _| selection.set_document(document));
+            }
+            let prompt_rows = rows
+                .iter()
+                .enumerate()
+                .filter_map(|(row, entry)| match entry.source {
+                    TranscriptRowSource::Settled(index)
+                        if prompt::is_pinnable_prompt(&self.items[index]) =>
+                    {
+                        Some((row, index))
+                    }
+                    _ => None,
+                })
+                .collect();
+            self.transcript_derived = Some(TranscriptDerived {
+                key,
+                rows,
+                prompt_rows,
+                latest_todo: self.latest_todo_payload(),
+            });
+        }
+        self.transcript_derived.as_ref().unwrap()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_transcript_rows_ptr(&self) -> Option<usize> {
+        self.transcript_derived
+            .as_ref()
+            .map(|derived| Arc::as_ptr(&derived.rows) as usize)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_transcript_row_count(&self) -> usize {
+        self.transcript_derived
+            .as_ref()
+            .map_or(0, |derived| derived.rows.len())
+    }
+
+    fn transcript_render_rows(&self) -> Vec<TranscriptRenderRow> {
+        self.transcript_render_rows_with_display(&crate::config::display())
+    }
+
+    fn transcript_render_rows_with_display(
+        &self,
+        display: &crate::config::DisplayConfig,
+    ) -> Vec<TranscriptRenderRow> {
+        let mut rows: Vec<TranscriptRenderRow> = Vec::with_capacity(self.items.len() + 2);
+        let mut previous_role = None;
+        let mut applets = self.applet_rows.iter().enumerate().peekable();
+        let applet_row = |ordinal: usize, instance: &String| TranscriptRenderRow {
+            // Derived rows need indices that never collide with items or the
+            // live streaming sentinels at the top of the range.
+            index: usize::MAX / 2 + ordinal,
+            source: TranscriptRowSource::Owned(Box::new(Item::Applet(instance.clone()))),
+            role: None,
+            show_label: false,
+        };
+
+        for (index, item) in self.items.iter().enumerate() {
+            while let Some((ordinal, (_, instance))) =
+                applets.next_if(|(_, (position, _))| *position <= index)
+            {
+                rows.push(applet_row(ordinal, instance));
+            }
+            // Filter presentation only, never persisted items.
+            if matches!(item, Item::Reasoning(_))
+                && display.thinking_display != crate::config::ThinkingDisplay::Full
+            {
+                continue;
+            }
+            if display.screenshot_mode && matches!(item, Item::ResponseStats(_)) {
+                continue;
+            }
+            if matches!(item, Item::Todos(_))
+                || matches!(item, Item::Tool { name, .. } if name == "todo")
+            {
+                continue;
+            }
+
+            if let Item::Reasoning(text) = item
+                && let Some(previous) = rows.last_mut()
+            {
+                match &mut previous.source {
+                    TranscriptRowSource::Settled(previous_index) => {
+                        if let Item::Reasoning(existing) = &self.items[*previous_index] {
+                            let mut joined = existing.clone();
+                            append_reasoning_text(&mut joined, text);
+                            previous.source =
+                                TranscriptRowSource::Owned(Box::new(Item::Reasoning(joined)));
+                            continue;
+                        }
+                    }
+                    TranscriptRowSource::Owned(item) => {
+                        if let Item::Reasoning(existing) = item.as_mut() {
+                            append_reasoning_text(existing, text);
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            let role = role_of(item);
+            rows.push(TranscriptRenderRow {
+                index,
+                source: TranscriptRowSource::Settled(index),
+                role,
+                show_label: role.is_some() && role != previous_role,
+            });
+            previous_role = role.or(previous_role);
+        }
+
+        for (ordinal, (_, instance)) in applets {
+            rows.push(applet_row(ordinal, instance));
+        }
+
+        for (index, item) in [
+            (!self.streaming_reasoning.is_empty()
+                && display.thinking_display != crate::config::ThinkingDisplay::Off)
+                .then(|| {
+                    (
+                        usize::MAX - 1,
+                        Item::Reasoning(
+                            self.reasoning_reveal
+                                .visible(&self.streaming_reasoning)
+                                .to_owned(),
+                        ),
+                    )
+                }),
+            (!self.streaming_text.is_empty()).then(|| {
+                (
+                    usize::MAX,
+                    Item::Assistant(self.text_reveal.visible(&self.streaming_text).to_owned()),
+                )
+            }),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let role = role_of(&item);
+            rows.push(TranscriptRenderRow {
+                index,
+                source: TranscriptRowSource::Owned(Box::new(item)),
+                role,
+                show_label: role.is_some() && role != previous_role,
+            });
+            previous_role = role.or(previous_role);
+        }
+
+        rows
+    }
+
+    /// Compact elapsed time: ticking while a tool runs, final duration after.
+    fn render_tool_clock(
+        &self,
+        index: usize,
+        call_id: &str,
+        finished: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        let clock = div()
+            .debug_selector(|| "tool-elapsed".into())
+            .flex_none()
+            .text_size(px(11.0))
+            .text_color(Theme::global().TEXT_FAINT);
+        if finished {
+            let duration = self.tool_durations.get(call_id)?;
+            // Instant tools need no badge.
+            (duration.as_millis() >= 1_000).then(|| {
+                clock
+                    .child(format_tool_elapsed(*duration))
+                    .into_any_element()
+            })
+        } else {
+            let started = *self.tool_started.get(call_id)?;
+            let _ = index;
+            // Ticks in its own view: refreshing the clock must not rebuild
+            // the transcript around it.
+            let ticker = self.running_tool_tickers.borrow_mut().get(
+                &format!("clock:{call_id}"),
+                crate::pulse_text::Kind::Elapsed {
+                    since: started,
+                    format: format_tool_elapsed,
+                },
+                cx,
+            );
+            Some(clock.child(ticker).into_any_element())
+        }
+    }
+
+    fn render_item(
+        &self,
+        index: usize,
+        item: &Item,
+        _show_avatar: bool,
+        response_viewport_height: gpui::Pixels,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let display = crate::config::display();
+        if display.screenshot_mode && matches!(item, Item::Error(_) | Item::BackgroundTask { .. }) {
+            return div()
+                .px_1()
+                .text_size(px(11.))
+                .text_color(Theme::global().TEXT_DIM)
+                .child(if matches!(item, Item::Error(_)) {
+                    "Error details hidden"
+                } else {
+                    "Background task"
+                })
+                .into_any_element();
+        }
+        let notice_title = match item {
+            Item::Stopped(notice) => Some(notice.title.as_str()),
+            Item::CacheMiss(_) => Some("Cache miss"),
+            _ => None,
+        };
+        if display.screenshot_mode
+            && let Some(title) = notice_title
+        {
+            return div()
+                .px_2()
+                .py_1()
+                .text_size(px(11.))
+                .text_color(Theme::global().TEXT_DIM)
+                .child(title.to_owned())
+                .into_any_element();
+        }
+        match item {
+            Item::Applet(instance) => {
+                let selection = self.applet_selection.clone();
+                crate::applet_surface::card(instance, true, &selection, window, cx)
+                    .unwrap_or_else(|| div().into_any_element())
+            }
+            Item::Stopped(notice) => self.render_stop_notice(index, notice, window, cx),
+            Item::CacheMiss(notice) => self.render_cache_miss_notice(index, notice, window, cx),
+            Item::ResponseStats(stats) => stats.render(index).into_any_element(),
+            Item::User(text) if jcode_sdk::todo::is_auto_poke_message(text) => {
+                self.render_auto_poke_notice(index, text, window, cx)
+            }
+            Item::User(text) => self.render_user_prompt(index, text, false, window, cx),
+            Item::Image(image) => {
+                if self.image_pane_open && !display.screenshot_mode {
+                    return self.render_image_pane_link(index, image, cx);
+                }
+                let panel = cx.entity().downgrade();
+                let label = if display.screenshot_mode {
+                    "Image attachment".to_string()
+                } else {
+                    image
+                        .label
+                        .clone()
+                        .unwrap_or_else(|| "Image attachment".to_string())
+                };
+                div()
+                    .id(("transcript-image", index))
+                    .debug_selector(|| "transcript-image".into())
+                    .flex()
+                    .flex_col()
+                    .items_start()
+                    .gap_1()
+                    .when_some(image.preview.clone(), |el, preview| {
+                        let scroll_panel = panel.clone();
+                        let gesture_panel = panel.clone();
+                        el.child(
+                            crate::inline_image::InlineImage::new(index, preview)
+                                .metadata(label.clone())
+                                .on_fit_scroll(move |event, window, cx| {
+                                    let _ = scroll_panel.update(cx, |panel, cx| {
+                                        if panel.transcript_list.is_scrollbar_dragging() {
+                                            return;
+                                        }
+                                        let y = f32::from(
+                                            event.delta.pixel_delta(window.line_height()).y,
+                                        );
+                                        if y == 0.0 {
+                                            return;
+                                        }
+                                        if event.delta.precise() {
+                                            panel.glide_transcript_input(-y, true, cx);
+                                        } else {
+                                            panel.glide_transcript_wheel(-y, cx);
+                                        }
+                                    });
+                                })
+                                .on_gesture(move |_, cx| {
+                                    let _ = gesture_panel.update(cx, |panel, _| {
+                                        panel.cancel_transcript_momentum();
+                                    });
+                                }),
+                        )
+                    })
+                    .when(image.preview.is_none(), |el| {
+                        el.child(
+                            div()
+                                .text_size(px(11.0))
+                                .text_color(Theme::global().TEXT_DIM)
+                                .child(format!("{label} (could not display {})", image.media_type)),
+                        )
+                    })
+                    .into_any_element()
+            }
+            Item::Assistant(text) => div()
+                .debug_selector(|| "assistant-response".into())
+                .font_family(Theme::global().FONT_AI)
+                .px_1()
+                .text_color(Theme::global().TEXT)
+                .child(markdown::with_stream_fade(
+                    if index == usize::MAX {
+                        self.text_reveal.fade(&self.streaming_text)
+                    } else {
+                        markdown::StreamFade::default()
+                    },
+                    || {
+                        markdown::render_interactive(
+                            text,
+                            index,
+                            &self.transcript_selection,
+                            window,
+                            cx,
+                            false,
+                            self.media_preview_handler(cx),
+                        )
+                        .into_any_element()
+                    },
+                ))
+                .into_any_element(),
+            // Thinking is secondary transcript text, not a separate card. Keep
+            // the same presentation while streaming, settled, and restored.
+            // Never truncate it: there is deliberately no disclosure control.
+            Item::Reasoning(text) => div()
+                .debug_selector(|| "reasoning-inline".into())
+                .font_family(Theme::global().FONT_AI)
+                .flex_none()
+                .px_1()
+                .text_size(px(12.0))
+                .text_color(Theme::global().REASONING)
+                .child(markdown::with_stream_fade(
+                    if index == usize::MAX - 1 {
+                        self.reasoning_reveal.fade(&self.streaming_reasoning)
+                    } else {
+                        markdown::StreamFade::default()
+                    },
+                    || {
+                        markdown::render_interactive(
+                            text,
+                            index,
+                            &self.transcript_selection,
+                            window,
+                            cx,
+                            true,
+                            self.media_preview_handler(cx),
+                        )
+                        .into_any_element()
+                    },
+                ))
+                .into_any_element(),
+            Item::Todos(payload) => render_todo_card_with_style(
+                payload,
+                false,
+                &format!("todo-{index}"),
+                &self.transcript_selection,
+                window,
+                cx,
+            ),
+            Item::BackgroundTask {
+                task_id,
+                label,
+                summary,
+                percent,
+                done,
+            } => background_task::render(
+                index,
+                task_id,
+                label,
+                summary,
+                *percent,
+                *done,
+                &self.transcript_selection,
+                window,
+                cx,
+            )
+            .into_any_element(),
+            Item::Tool {
+                call_id,
+                name,
+                input,
+                output,
+                done,
+                error,
+            } => {
+                if let Some(response) = error
+                    .is_none()
+                    .then(|| user_response::parse(name, input))
+                    .flatten()
+                {
+                    return user_response::render(
+                        &response,
+                        index,
+                        response_viewport_height,
+                        &self.transcript_selection,
+                        self.media_preview_handler(cx),
+                        window,
+                        cx,
+                    );
+                }
+                if display.screenshot_mode {
+                    return div()
+                        .px_1()
+                        .text_size(px(12.))
+                        .text_color(Theme::global().TEXT_DIM)
+                        .child(format!(
+                            "{name} · {}",
+                            if *done { "finished" } else { "running" }
+                        ))
+                        .into_any_element();
+                }
+                let (offset, opacity, animating) = self
+                    .arriving_tools
+                    .get(call_id)
+                    .map(|started_at| {
+                        crate::transition::arrival_motion(
+                            *started_at,
+                            Instant::now(),
+                            crate::transition::policy(crate::transition::Transition::ToolArrival)
+                                .duration,
+                        )
+                    })
+                    .unwrap_or((0.0, 1.0, false));
+                if animating {
+                    window.request_animation_frame();
+                }
+                let tool_card = crate::applet_runtime::get(cx)
+                    .host
+                    .borrow()
+                    .tool_card(&self.session_id, call_id)
+                    .map(|mounted| mounted.instance.id.clone());
+                if let Some(instance) = tool_card {
+                    let selection = self.applet_selection.clone();
+                    if let Some(card) =
+                        crate::applet_surface::card(&instance, true, &selection, window, cx)
+                    {
+                        return div()
+                            .id(("tool", index))
+                            .debug_selector(|| "tool-applet".into())
+                            .flex_none()
+                            .ml(px(offset))
+                            .opacity(opacity)
+                            .child(card)
+                            .into_any_element();
+                    }
+                }
+                if name == "todo"
+                    && *done
+                    && error.is_none()
+                    && let Some(payload) = parse_todo_tool_output(output)
+                {
+                    return div()
+                        .ml(px(offset))
+                        .opacity(opacity)
+                        .child(render_todo_card_with_style(
+                            &payload,
+                            false,
+                            &format!("todo-{index}"),
+                            &self.transcript_selection,
+                            window,
+                            cx,
+                        ))
+                        .into_any_element();
+                }
+                if display.diff_display != crate::config::DiffDisplay::Off
+                    && let Some(preview) = self.render_edit_metadata(
+                        call_id,
+                        name,
+                        input,
+                        output,
+                        *done,
+                        error.as_deref(),
+                        cx,
+                    )
+                {
+                    return div()
+                        .id(("tool", index))
+                        .debug_selector(|| "tool-edit".into())
+                        .flex_none()
+                        .ml(px(offset))
+                        .opacity(opacity)
+                        .child(preview)
+                        .into_any_element();
+                }
+                if let Some(compose) = gmail_draft_card::parse(name, input) {
+                    let compose = gmail_draft_card::merge_output(compose, output, *done);
+                    let superseded = self.superseded_drafts().get(call_id).copied();
+                    let expanded = self.expanded_tools.contains(call_id);
+                    let toggle_id = call_id.clone();
+                    let card = gmail_draft_card::render(
+                        index,
+                        &compose,
+                        &gmail_draft_card::outcome(output, *done),
+                        error.as_deref(),
+                        tool_card_token_pill(output),
+                        superseded,
+                        expanded,
+                        cx.listener(move |this, _event, _window, cx| {
+                            cx.stop_propagation();
+                            if !this.expanded_tools.remove(&toggle_id) {
+                                this.expanded_tools.insert(toggle_id.clone());
+                            }
+                            this.transcript_measurements.dirty = true;
+                            cx.notify();
+                        }),
+                        &self.transcript_selection,
+                        window,
+                        cx,
+                    );
+                    return div()
+                        .id(("tool", index))
+                        .debug_selector(|| "tool-gmail-compose".into())
+                        .flex_none()
+                        .ml(px(offset))
+                        .opacity(opacity)
+                        .child(card)
+                        .into_any_element();
+                }
+                if let Some(view) =
+                    gmail_read_card::parse(name, input, output, *done, error.as_deref())
+                {
+                    let expanded = self.expanded_tools.contains(call_id);
+                    let toggle_id = call_id.clone();
+                    let card = gmail_read_card::render(
+                        index,
+                        &view,
+                        tool_card_token_pill(output),
+                        expanded,
+                        cx.listener(move |this, _event, _window, cx| {
+                            cx.stop_propagation();
+                            if !this.expanded_tools.remove(&toggle_id) {
+                                this.expanded_tools.insert(toggle_id.clone());
+                            }
+                            this.transcript_measurements.dirty = true;
+                            cx.notify();
+                        }),
+                        &self.transcript_selection,
+                        window,
+                        cx,
+                    );
+                    return div()
+                        .id(("tool", index))
+                        .debug_selector(|| "tool-gmail-read".into())
+                        .flex_none()
+                        .ml(px(offset))
+                        .opacity(opacity)
+                        .child(card)
+                        .into_any_element();
+                }
+                if let Some(view) =
+                    mcp_list_card::parse(name, input, output, *done, error.as_deref())
+                {
+                    let expanded = self.expanded_tools.contains(call_id);
+                    let toggle_id = call_id.clone();
+                    let card = mcp_list_card::render(
+                        index,
+                        &view,
+                        tool_card_token_pill(output),
+                        expanded,
+                        cx.listener(move |this, _event, _window, cx| {
+                            cx.stop_propagation();
+                            if !this.expanded_tools.remove(&toggle_id) {
+                                this.expanded_tools.insert(toggle_id.clone());
+                            }
+                            this.transcript_measurements.dirty = true;
+                            cx.notify();
+                        }),
+                        &self.transcript_selection,
+                        window,
+                        cx,
+                    );
+                    return div()
+                        .id(("tool", index))
+                        .debug_selector(|| "tool-mcp-list".into())
+                        .flex_none()
+                        .ml(px(offset))
+                        .opacity(opacity)
+                        .child(card)
+                        .into_any_element();
+                }
+                let expanded = self.expanded_tools.contains(call_id)
+                    ^ (name == "agentgrep" && display.show_agentgrep_output);
+                let detail_progress = self
+                    .tool_detail_motion
+                    .get(call_id)
+                    .map(|motion| {
+                        let mut motion = *motion;
+                        motion.sample(Instant::now())
+                    })
+                    .unwrap_or(if expanded { 1.0 } else { 0.0 });
+                let detail_visible = expanded || self.tool_detail_motion.contains_key(call_id);
+                let summary = if display.screenshot_mode {
+                    String::new()
+                } else {
+                    tool_summary(input)
+                };
+                // Pretty-printing the arguments and stripping ANSI from the
+                // whole output is the costly part of a tool row, and it was
+                // done for every collapsed row on every frame. The detail
+                // always has a header line, so only build it while it shows.
+                let has_detail = true;
+                let detail = (detail_visible && !display.screenshot_mode)
+                    .then(|| tool_detail(name, input, output));
+                let (token_label, token_color) = tool_output_token_badge(output);
+                let call_id = call_id.clone();
+                let running_veil = (!*done && error.is_none()).then(|| {
+                    gpui::AnyView::from(self.running_tool_tickers.borrow_mut().get(
+                        &format!("pulse:{call_id}"),
+                        crate::tool_icon::running_veil(
+                            Theme::global().panel_background(self.surface_focused),
+                        ),
+                        cx,
+                    ))
+                });
+                div()
+                    .id(("tool", index))
+                    .debug_selector(|| "tool-inline".into())
+                    .flex()
+                    .ml(px(offset))
+                    .opacity(opacity)
+                    // Transcript rows live in a fixed-height flex column. Once
+                    // it overflows, flex items shrink by default, which can
+                    // squash tool rows instead of letting the column scroll.
+                    .flex_none()
+                    .flex_col()
+                    .overflow_hidden()
+                    .child(crate::tool_icon::animate_running(
+                        div()
+                            .debug_selector(|| "tool-header".into())
+                            .flex()
+                            .flex_row()
+                            .gap_2()
+                            .items_center()
+                            .px_1()
+                            .py(px(2.0))
+                            .text_size(px(14.0))
+                            // Match the token pill's 14px line plus 2px padding per side.
+                            .line_height(px(18.0))
+                            .child(crate::tool_icon::render_badge_with_label(
+                                name,
+                                *done,
+                                error.is_some(),
+                                text_selection::plain(
+                                    self.transcript_selection.clone(),
+                                    format!("tool-name-{index}"),
+                                    name.clone(),
+                                    window,
+                                    cx,
+                                ),
+                            ))
+                            .when(!summary.is_empty(), |el| {
+                                el.child(
+                                    div()
+                                        .debug_selector(|| "tool-summary".into())
+                                        .flex_1()
+                                        .min_w_0()
+                                        .overflow_hidden()
+                                        .whitespace_nowrap()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(Theme::global().TOOL_TEXT)
+                                        .child(text_selection::plain(
+                                            self.transcript_selection.clone(),
+                                            format!("tool-summary-{index}"),
+                                            summary,
+                                            window,
+                                            cx,
+                                        )),
+                                )
+                            })
+                            .children(self.render_tool_clock(
+                                index,
+                                &call_id,
+                                *done || error.is_some(),
+                                cx,
+                            ))
+                            .when(!*done && error.is_none() && self.has_running_tool(), |el| {
+                                el.child(
+                                    div()
+                                        .id(("tool-background", index))
+                                        .debug_selector(|| "tool-background".into())
+                                        .flex_none()
+                                        .px_2()
+                                        .py(px(2.0))
+                                        .rounded_full()
+                                        .bg(Theme::global().INLINE_CODE_BG)
+                                        .hover(|style| style.bg(Theme::global().TOOL_BORDER))
+                                        .cursor_pointer()
+                                        .text_size(px(10.0))
+                                        .line_height(px(14.0))
+                                        .text_color(Theme::global().TEXT_FAINT)
+                                        .on_click(cx.listener(|this, _event, _window, cx| {
+                                            cx.stop_propagation();
+                                            this.background_running_tool(cx);
+                                        }))
+                                        .child("Background  Alt+B"),
+                                )
+                            })
+                            // The token pill is the sole expansion control,
+                            // including while a tool is still running.
+                            .when(has_detail, |el| {
+                                el.child(
+                                    div()
+                                        .id(("tool-output-toggle", index))
+                                        .debug_selector(|| "tool-output-size".into())
+                                        .flex_none()
+                                        .ml_auto()
+                                        .px_2()
+                                        .py(px(2.0))
+                                        .rounded_full()
+                                        .bg(Theme::global().INLINE_CODE_BG)
+                                        .hover(|style| style.bg(Theme::global().TOOL_BORDER))
+                                        .cursor_pointer()
+                                        .text_size(px(10.0))
+                                        .line_height(px(14.0))
+                                        .text_color(token_color)
+                                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                                            cx.stop_propagation();
+                                            let was_expanded = expanded;
+                                            if !this.expanded_tools.remove(&call_id) {
+                                                this.expanded_tools.insert(call_id.clone());
+                                            }
+                                            let duration = crate::transition::policy(
+                                                crate::transition::Transition::Overlay,
+                                            )
+                                            .duration;
+                                            if cx.reduce_motion() || duration.is_zero() {
+                                                this.tool_detail_motion.remove(&call_id);
+                                            } else {
+                                                this.tool_detail_motion
+                                                    .entry(call_id.clone())
+                                                    .or_insert_with(|| {
+                                                        crate::transition::AnimatedValue::new(
+                                                            if was_expanded { 1.0 } else { 0.0 },
+                                                            duration,
+                                                        )
+                                                    })
+                                                    .set(
+                                                        if was_expanded { 0.0 } else { 1.0 },
+                                                        Instant::now(),
+                                                    );
+                                            }
+                                            this.transcript_measurements.dirty = true;
+                                            cx.notify();
+                                        }))
+                                        .child(token_label),
+                                )
+                            }),
+                        *done,
+                        error.is_some(),
+                        running_veil,
+                    ))
+                    .when_some(detail.filter(|_| has_detail), |el, detail| {
+                        el.child(
+                            div()
+                                .debug_selector(|| "tool-detail".into())
+                                // Keep the collapsed header inline, and give
+                                // expanded output its own quiet card surface.
+                                .opacity(detail_progress)
+                                .relative()
+                                .left(px(6.0 * (1.0 - detail_progress)))
+                                .ml(px(24.0))
+                                .mt_1()
+                                .mb_1()
+                                .p_3()
+                                .rounded_lg()
+                                .bg(Theme::global().CODE_BG)
+                                .font_family(Theme::global().FONT_MONO)
+                                .text_size(px(11.5))
+                                .line_height(relative(1.45))
+                                .text_color(Theme::global().CODE_TEXT)
+                                .child(text_selection::plain(
+                                    self.transcript_selection.clone(),
+                                    format!("tool-detail-{index}"),
+                                    detail,
+                                    window,
+                                    cx,
+                                )),
+                        )
+                    })
+                    .children(error.clone().map(|message| {
+                        div()
+                            .debug_selector(|| "tool-error".into())
+                            .ml(px(24.0))
+                            .pr_1()
+                            .py_1()
+                            .text_size(px(11.5))
+                            .font_family(Theme::global().FONT_MONO)
+                            .text_color(Theme::global().ERROR)
+                            .child(text_selection::plain(
+                                self.transcript_selection.clone(),
+                                format!("tool-error-{index}"),
+                                condense(&strip_ansi(&message), 300),
+                                window,
+                                cx,
+                            ))
+                    }))
+                    .into_any_element()
+            }
+            Item::Error(message) => self.render_recovery_error(index, message, window, cx),
+        }
+    }
+
+    pub fn focus_input(&self, window: &mut Window, cx: &mut App) {
+        let handle = self.input_focus_handle(cx);
+        window.focus(&handle, cx);
+    }
+
+    pub fn input_focus_handle(&self, cx: &App) -> FocusHandle {
+        if let Some(handle) = self.login_input_focus_handle(cx) {
+            return handle;
+        }
+        if let Some(handle) = self.document_focus_handle(cx) {
+            return handle;
+        }
+        if self.image_preview.is_some() || self.diff_review.is_some() || self.is_accounts_panel() {
+            self.focus_handle.clone()
+        } else if let Some(terminal) = &self.terminal {
+            terminal.read(cx).focus_handle(cx)
+        } else if self.unfinished_work.is_some()
+            || self.orchestration.is_some()
+            || self.is_changelog()
+            || self.code_file.is_some()
+            || self.is_side_document()
+            || self.applet.is_some()
+        {
+            // Read-only panels do not render their prompt input. Focusing that
+            // detached handle prevents workspace actions such as FocusLeft from
+            // bubbling through the rendered panel tree.
+            self.focus_handle.clone()
+        } else {
+            self.input.read(cx).focus_handle.clone()
+        }
+    }
+
+    /// Whether `set_surface_focused(focused)` or the one-shot build footer would
+    /// change anything. Callers drawing a frame check this first, since GPUI
+    /// counts any update made while drawing as a change to the views reading it.
+    pub(crate) fn needs_surface_update(&self, focused: bool, cx: &App) -> bool {
+        self.show_build_footer
+            || self.surface_focused != focused
+            || (focused && self.finished_unseen)
+            || self
+                .terminal
+                .as_ref()
+                .is_some_and(|terminal| terminal.read(cx).surface_focused() != focused)
+    }
+
+    pub(crate) fn set_surface_focused(&mut self, focused: bool, cx: &mut Context<Self>) {
+        if self.surface_focused != focused {
+            self.surface_focused = focused;
+            cx.notify();
+        }
+        if focused && self.finished_unseen {
+            // Viewing the session reads its result.
+            self.finished_unseen = false;
+            cx.notify();
+        }
+        if let Some(terminal) = &self.terminal {
+            terminal.update(cx, |terminal, cx| terminal.set_surface_focused(focused, cx));
+        }
+    }
+
+    /// Opt-in workspace diagnostics for real-PTY terminal acceptance checks.
+    pub fn terminal_debug_snapshot(&self, cx: &App) -> Option<serde_json::Value> {
+        self.terminal
+            .as_ref()
+            .map(|terminal| terminal.read(cx).debug_snapshot())
+    }
+
+    #[cfg(test)]
+    pub fn test_terminal_contents(&self, cx: &App) -> Option<String> {
+        self.terminal
+            .as_ref()
+            .map(|terminal| terminal.read(cx).screen_contents())
+    }
+
+    /// The transcript's vertical scroll offset, so tests can prove a gesture
+    /// did or did not scroll it.
+    #[cfg(test)]
+    pub fn test_scroll_offset_y(&self) -> gpui::Pixels {
+        self.pending_history_scroll
+            .map(|(_, y)| px(y))
+            .unwrap_or_else(|| self.transcript_list.scroll_px_offset_for_scrollbar().y)
+    }
+
+    #[cfg(test)]
+    pub fn append_test_error(&mut self, message: impl Into<String>, cx: &mut Context<Self>) {
+        self.items.push(Item::Error(message.into()));
+        cx.notify();
+    }
+}
+
+/// Keep provider-level reasoning segments in one visual block. Some providers
+/// emit `ReasoningDone` between segments even though they belong to the same
+/// uninterrupted thinking phase.
+fn append_reasoning(items: &mut Vec<Item>, text: String) {
+    if let Some(Item::Reasoning(existing)) = items.last_mut() {
+        append_reasoning_text(existing, &text);
+    } else {
+        items.push(Item::Reasoning(text));
+    }
+}
+
+impl Render for Panel {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _render_scope = crate::render_stats::scope("Panel");
+        if std::mem::take(&mut self.focus_pending) {
+            self.focus_input(window, cx);
+        }
+        if !self.tool_detail_motion.is_empty() {
+            let now = Instant::now();
+            let reduce_motion = cx.reduce_motion() || crate::config::get().appearance.reduce_motion;
+            self.tool_detail_motion.retain(|_, motion| {
+                motion.sample(now);
+                !reduce_motion && motion.is_animating()
+            });
+            // Virtualized rows cache their geometry. Repaint during motion and
+            // remeasure once more when the exiting card is finally removed.
+            self.transcript_measurements.dirty = true;
+            if !self.tool_detail_motion.is_empty() {
+                window.request_animation_frame();
+            }
+        }
+        self.schedule_transcript_wheel_frame(window, cx);
+        #[cfg(test)]
+        crate::render_stats::test_renders::record(cx.entity_id());
+        if self.is_side_document() {
+            return self.render_side_document(window, cx);
+        }
+        if self.is_changelog() {
+            return self.render_changelog(window, cx);
+        }
+        if self.is_accounts_panel() {
+            return div()
+                .debug_selector(|| "accounts-panel".into())
+                .size_full()
+                .relative()
+                .track_focus(&self.focus_handle)
+                .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                    if event.keystroke.key == "escape" {
+                        this.close_login_picker(cx);
+                        cx.emit(AccountsPanelClosed);
+                        cx.stop_propagation();
+                    }
+                }))
+                .children(self.render_login_picker(window, cx))
+                .into_any_element();
+        }
+        if self.is_change_review() {
+            return div()
+                .size_full()
+                .relative()
+                .track_focus(&self.focus_handle)
+                .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                    if event.keystroke.key == "escape" {
+                        this.close_diff_review(window, cx);
+                        cx.stop_propagation();
+                    }
+                }))
+                .children(self.render_diff_review(cx))
+                .into_any_element();
+        }
+        if let Some(terminal) = &self.terminal {
+            return div()
+                .size_full()
+                .track_focus(&self.focus_handle)
+                .child(terminal.clone())
+                .into_any_element();
+        }
+        if let Some(file) = &self.code_file {
+            let path = file.path.display().to_string();
+            let mut body = div()
+                .id("code-file-contents")
+                .debug_selector(|| "code-file-contents".into())
+                .flex_1()
+                .min_h_0()
+                .overflow_scroll()
+                .font_family(Theme::global().FONT_MONO)
+                .text_size(px(12.0))
+                .py_2();
+            match &file.contents {
+                Ok(contents) => {
+                    if !contents.is_empty() {
+                        // One shaped leaf lets a drag span lines without copying
+                        // the separate, nonselectable line-number gutter.
+                        body = body.child(
+                            div()
+                                .flex()
+                                .min_w_full()
+                                .child(
+                                    div()
+                                        .w(px(52.0))
+                                        .flex_none()
+                                        .pr_3()
+                                        .text_align(gpui::TextAlign::Right)
+                                        .text_color(Theme::global().CODE_GUTTER)
+                                        .children(contents.lines().enumerate().map(
+                                            |(index, _)| div().child((index + 1).to_string()),
+                                        )),
+                                )
+                                .child(
+                                    div()
+                                        .pr_4()
+                                        .whitespace_nowrap()
+                                        .text_color(Theme::global().CODE_TEXT)
+                                        .child(text_selection::plain(
+                                            self.transcript_selection.clone(),
+                                            "code-file-text",
+                                            contents.clone(),
+                                            window,
+                                            cx,
+                                        )),
+                                ),
+                        );
+                    }
+                    if contents.is_empty() {
+                        body = body.child(
+                            div()
+                                .px_4()
+                                .text_color(Theme::global().TEXT_DIM)
+                                .child("empty file"),
+                        );
+                    }
+                }
+                Err(error) => {
+                    body = body.child(div().p_4().text_color(Theme::global().ERROR).child(
+                        text_selection::plain(
+                            self.transcript_selection.clone(),
+                            "code-file-error",
+                            error.clone(),
+                            window,
+                            cx,
+                        ),
+                    ));
+                }
+            }
+            return div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .overflow_hidden()
+                .track_focus(&self.focus_handle)
+                .child(
+                    div()
+                        .flex_none()
+                        .px_3()
+                        .py_2()
+                        .border_b_1()
+                        .border_color(Theme::global().CODE_BORDER)
+                        .bg(Theme::global().CODE_HEADER_BG)
+                        .font_family(Theme::global().FONT_MONO)
+                        .text_size(px(11.0))
+                        .text_color(Theme::global().TEXT_DIM)
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .child(text_selection::plain(
+                            self.transcript_selection.clone(),
+                            "code-file-path",
+                            path,
+                            window,
+                            cx,
+                        )),
+                )
+                .child(body)
+                .into_any_element();
+        }
+        if self.applet.is_some() {
+            return self.render_applet(window, cx);
+        }
+        if self.todoist.is_some() {
+            return self.render_todoist(window, cx);
+        }
+        if self.orchestration.is_some() {
+            return self.render_orchestration(window, cx);
+        }
+        if let Some(sessions) = &self.unfinished_work {
+            let mut list = div()
+                .id("unfinished-work-list")
+                .debug_selector(|| "unfinished-work-list".into())
+                .size_full()
+                .overflow_y_scroll()
+                .p_4()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .child(div().text_size(px(18.)).font_weight(gpui::FontWeight::SEMIBOLD).child("Unfinished work"))
+                .child(div().text_size(px(11.)).text_color(Theme::global().TEXT_DIM).child("Todos left in closed sessions. Open the session from the sidebar to continue."));
+            if sessions.is_empty() {
+                list = list.child(
+                    div()
+                        .mt_4()
+                        .text_color(Theme::global().TEXT_DIM)
+                        .child("You are all caught up."),
+                );
+            }
+            for (index, session) in sessions.iter().enumerate() {
+                let session_to_open = session.clone();
+                let open_session = self.unfinished_session_opener.clone();
+                let mut card = div()
+                    .id(("unfinished-session", index))
+                    .debug_selector(move || format!("unfinished-session-{index}").into())
+                    .p_3()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(Theme::global().PANEL_BORDER)
+                    .bg(Theme::global().HEADER_BG)
+                    .cursor_pointer()
+                    .hover(|card| {
+                        card.border_color(Theme::global().PANEL_BORDER_FOCUS)
+                            .bg(Theme::global().ACCENT_DIM)
+                    })
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        // Routing into the workspace can read or focus any panel,
+                        // including this one. Do not hold a Panel update lease via
+                        // cx.listener while invoking the opener.
+                        move |_event, window, cx| {
+                            if let Some(open_session) = &open_session {
+                                open_session(session_to_open.clone(), window, cx);
+                                cx.stop_propagation();
+                            }
+                        },
+                    )
+                    .on_mouse_up(gpui::MouseButton::Left, move |_event, _window, cx| {
+                        cx.stop_propagation();
+                    })
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(
+                        div()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .child(session.title.clone()),
+                    );
+                if let Some(dir) = &session.working_dir {
+                    card = card.child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(Theme::global().TEXT_FAINT)
+                            .child(dir.clone()),
+                    );
+                }
+                for todo in &session.todos {
+                    let marker = if todo.status.eq_ignore_ascii_case("in_progress") {
+                        "◐"
+                    } else {
+                        "○"
+                    };
+                    card = card.child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .text_size(px(12.))
+                            .child(marker)
+                            .child(todo.content.clone()),
+                    );
+                }
+                list = list.child(card);
+            }
+            return div()
+                .size_full()
+                .track_focus(&self.focus_handle)
+                .child(list)
+                .into_any_element();
+        }
+        let streaming = !self.streaming_text.is_empty();
+        let transcript_selection = self.transcript_selection.clone();
+        let transcript_selection_focus = transcript_selection.read(cx).focus_handle();
+        let transcript_shell = div()
+            .relative()
+            // Keyed descendants (including browser-backed image previews) must
+            // retain their entities when an unrelated streamed reply starts or
+            // ends. Only the debug selector reflects streaming state.
+            .id("transcript")
+            // Tagged so render tests can assert a streamed response painted.
+            .debug_selector(move || {
+                if streaming {
+                    "transcript-with-response".into()
+                } else {
+                    "transcript".into()
+                }
+            })
+            .key_context(TextSelection::key_context())
+            .track_focus(&transcript_selection_focus)
+            .on_action({
+                let transcript_selection = transcript_selection.clone();
+                move |_: &text_selection::Copy, _window, cx| {
+                    transcript_selection.update(cx, |selection, cx| selection.copy(cx));
+                }
+            })
+            .on_mouse_up(gpui::MouseButton::Left, move |_event, _window, cx| {
+                transcript_selection.update(cx, |selection, cx| {
+                    selection.finish();
+                    cx.notify();
+                });
+            })
+            .size_full()
+            .text_size(px(13.5))
+            .overflow_hidden()
+            // Clear and collect only this frame's painted leaf geometry before
+            // the virtual list paints. Logical text is maintained independently.
+            .child(text_selection::surface(
+                self.transcript_selection.clone(),
+                Some(self.transcript_list.clone()),
+            ));
+
+        // Live rows are appended after the settled ones and share the same
+        // renderer, so a streaming turn looks identical to a finished one.
+        // Todo state is persistent session chrome rather than transcript history.
+        // Keep only the latest snapshot pinned above the scroller instead of
+        // leaving stale cards interspersed through the conversation.
+        let instant_motion = self.tick_stream_reveal(window, cx);
+        self.sync_applet_rows(cx);
+        let derived = self.transcript_derived(cx);
+        let rows = derived.rows.clone();
+        let prompt_rows = derived.prompt_rows.clone();
+        let latest_todo = derived.latest_todo.clone();
+        // The publish tracker replaces the collapsible todo summary with
+        // fixed, always-visible pipeline stages fed by the same snapshot.
+        let publish_tracker = self.render_publish_tracker(latest_todo.as_ref());
+        let pinned_todo =
+            latest_todo.filter(|payload| !payload.todos.is_empty() && publish_tracker.is_none());
+        let has_pinned_todo = pinned_todo.is_some() || publish_tracker.is_some();
+        // A separate virtual row keeps activity below text, reasoning, and tools.
+        // Only the small Spinner entity ticks, never the transcript itself.
+        let row_count = rows.len() + usize::from(self.activity_active());
+        // Derive the empty state from session content, not the draft. Typing,
+        // pasting attachments, and reconnecting must not move the composer.
+        let fresh_session = !self.transcript_only
+            && !self.awaiting_persisted
+            && self.items.is_empty()
+            && row_count == 0
+            && !self.activity_active()
+            && !self
+                .startup_layout
+                .as_ref()
+                .is_some_and(|layout| layout.committed);
+        if !fresh_session && !self.items.is_empty() {
+            if let Some(layout) = &mut self.startup_layout {
+                layout.committed = true;
+            }
+        }
+        // The ordinary composer floats over the bottom of the transcript, so
+        // earlier history scrolls beneath its translucent veil instead of
+        // being cut off at a hard edge. The list pads its end by the dock.
+        let docked_composer =
+            !fresh_session && self.startup_layout.is_none() && !self.transcript_only;
+        let dock_pad = if docked_composer {
+            self.composer_dock_height + TRANSCRIPT_BOTTOM_GAP
+        } else {
+            0.0
+        };
+        let transcript_shell =
+            transcript_shell.when(!docked_composer, |el| el.pb(px(TRANSCRIPT_BOTTOM_GAP)));
+        if self
+            .input
+            .read(cx)
+            .needs_layout_update(false, composer::VOICE_TRAILING_SPACE)
+        {
+            self.input.update(cx, |input, cx| {
+                // The composer keeps one compact docked size everywhere,
+                // including the welcome screen, so it never changes shape
+                // when the conversation starts.
+                input.set_spacious(false, cx);
+                input.set_trailing_inset(composer::VOICE_TRAILING_SPACE, cx);
+            });
+        }
+        if self.input.read(cx).working_dir() != self.working_dir.as_deref() {
+            let working_dir = self.working_dir.clone();
+            self.input.update(cx, |input, _| {
+                input.set_working_dir(working_dir.as_deref());
+            });
+        }
+        let row_count_changed = row_count != self.transcript_row_count;
+        if row_count_changed {
+            if row_count > self.transcript_row_count {
+                self.transcript_list.splice(
+                    self.transcript_row_count..self.transcript_row_count,
+                    row_count - self.transcript_row_count,
+                );
+            } else {
+                // Streaming/activity rows can disappear or merge when a chunk
+                // settles. Resetting discards the reader's logical position.
+                // Trim only the tail so the visible history stays anchored.
+                self.transcript_list
+                    .splice(row_count..self.transcript_row_count, 0);
+            }
+            self.transcript_row_count = row_count;
+        }
+        let theme = Theme::global();
+        if let Some(range) = self.transcript_measurements.take_range(
+            self.items.len(),
+            row_count,
+            (
+                self.reasoning_reveal
+                    .visible(&self.streaming_reasoning)
+                    .len()
+                    + self.reasoning_reveal.fading(&self.streaming_reasoning),
+                self.text_reveal.visible(&self.streaming_text).len()
+                    + self.text_reveal.fading(&self.streaming_text),
+            ),
+            (theme.FONT_UI, theme.FONT_AI, theme.FONT_MONO),
+        ) {
+            self.transcript_list.remeasure_items(range);
+        }
+        if (self.transcript_end_pad - dock_pad).abs() > 0.5 {
+            self.transcript_end_pad = dock_pad;
+            if row_count > 0 {
+                self.transcript_list
+                    .remeasure_items(row_count - 1..row_count);
+            }
+        }
+        if row_count > 0 {
+            if let Some((_, y)) = self.pending_history_scroll.take() {
+                // Restore relative to the first row, not the scrollbar's
+                // partially measured total. The virtual list measures and
+                // clamps this logical position while laying out the history.
+                self.transcript_list.scroll_to(gpui::ListOffset {
+                    item_ix: 0,
+                    offset_in_item: px((-y).max(0.0)),
+                });
+                // Scrollbar geometry is available after this layout pass.
+                window.request_animation_frame();
+            }
+        }
+        let startup_preview = self.startup_prompt_preview();
+        // While the welcome viewport still grows with its content, following
+        // the tail would scroll a line up for one frame and then snap back
+        // when the composer moves down. Hold the top until the space fills.
+        if startup_preview || self.startup_growing() {
+            self.tail_glide.reset();
+            self.transcript_list.scroll_to(gpui::ListOffset::default());
+        } else if self.stick_to_bottom {
+            // Ease wrapped-line growth of live text instead of jumping a line.
+            self.follow_transcript_tail(instant_motion, row_count_changed, window);
+        } else {
+            self.tail_glide.reset();
+        }
+
+        let input_bounds = std::rc::Rc::new(std::cell::Cell::new(None));
+        let body_bounds = std::rc::Rc::new(std::cell::Cell::new(None));
+        let panel = cx.entity();
+        let wheel_panel = panel.clone();
+        let wheel_input_bounds = input_bounds.clone();
+        let list_rows = rows.clone();
+        let first_visible_row = std::rc::Rc::new(std::cell::Cell::new(None));
+        let row_first_visible = first_visible_row.clone();
+        let prompt_list = self.transcript_list.clone();
+        let end_visible = std::rc::Rc::new(std::cell::Cell::new(false));
+        let row_end_visible = end_visible.clone();
+        let end_list = self.transcript_list.clone();
+        let steady_cell = self.steady_activity.clone();
+        // Smooth the spinner only while it rides the gliding tail. Manual
+        // scrolling must move it exactly with the content.
+        let steady_enabled = self.stick_to_bottom
+            && !instant_motion
+            && !crate::config::get().appearance.reduce_motion;
+        let short_viewport = window.viewport_size().height < px(400.);
+        let transcript = if fresh_session {
+            div()
+                .debug_selector(|| "fresh-session".into())
+                .size_full()
+                .flex()
+                // Short windows anchor the composer (and its pill row below)
+                // to the bottom so it never spills into the footer.
+                .map(|el| {
+                    if short_viewport {
+                        el.items_end()
+                    } else {
+                        el.items_center()
+                    }
+                })
+                .justify_center()
+                .px_4()
+                .pb(px(if short_viewport { 8. } else { 64. }))
+                .child(
+                    div()
+                        .w_full()
+                        .max_w(px(760.0))
+                        .flex()
+                        .flex_col()
+                        .gap_4()
+                        .child(
+                            div()
+                                .text_size(px(22.0))
+                                .text_color(Theme::global().TEXT)
+                                .child("What would you like to work on?"),
+                        )
+                        .child(
+                            div()
+                                .relative()
+                                .flex()
+                                .flex_col()
+                                .gap_2()
+                                .children(self.render_prompt_queue(cx))
+                                .children(self.render_voice_pending())
+                                .child(self.render_composer(window, cx))
+                                .child(startup::input_marker(input_bounds.clone())),
+                        ),
+                )
+                .into_any_element()
+        } else if row_count == 0 {
+            transcript_shell.into_any_element()
+        } else {
+            // Capture before List mutably borrows its state during row rendering.
+            let response_viewport_height = (self.transcript_list.viewport_bounds().size.height
+                - px(dock_pad + prompt::PROMPT_TOP_PADDING))
+                .max(px(1.));
+            transcript_shell
+                .child(
+                    list(
+                        self.transcript_list.clone(),
+                        move |row_index, window, cx| {
+                            // The last row carries the floating composer's
+                            // height as padding, so the live end scrolls clear
+                            // of it while history passes beneath its veil.
+                            let end_pad = if row_index + 1 == row_count {
+                                dock_pad
+                            } else {
+                                0.0
+                            };
+                            if row_index == list_rows.len() {
+                                return div()
+                                    .relative()
+                                    .pb(px(end_pad))
+                                    .child(steady_activity::steady_row(
+                                        panel.read(cx).render_transcript_activity(),
+                                        steady_cell.clone(),
+                                        steady_enabled,
+                                        end_pad,
+                                    ))
+                                    .child(latest::end_marker(
+                                        row_end_visible.clone(),
+                                        end_list.clone(),
+                                    ))
+                                    .into_any_element();
+                            }
+                            let row = &list_rows[row_index];
+                            panel.update(cx, |panel, cx| {
+                                let item = match &row.source {
+                                    TranscriptRowSource::Settled(index) => &panel.items[*index],
+                                    TranscriptRowSource::Owned(item) => item,
+                                };
+                                // Keep message boundaries airy, but pack consecutive tool calls.
+                                let follows_tool =
+                                    row_index.checked_sub(1).is_some_and(|previous| {
+                                        let previous = match &list_rows[previous].source {
+                                            TranscriptRowSource::Settled(index) => {
+                                                &panel.items[*index]
+                                            }
+                                            TranscriptRowSource::Owned(item) => item,
+                                        };
+                                        matches!(previous, Item::Tool { .. })
+                                    });
+                                let display = crate::config::display();
+                                let top_padding = if display.compact_notifications
+                                    && matches!(item, Item::Stopped(_) | Item::CacheMiss(_))
+                                {
+                                    2.0
+                                } else if matches!(item, Item::ResponseStats(_)) {
+                                    2.0
+                                } else if matches!(item, Item::Tool { .. }) && follows_tool {
+                                    2.0
+                                } else {
+                                    prompt::PROMPT_TOP_PADDING
+                                };
+                                let element = panel.render_item(
+                                    row.index,
+                                    item,
+                                    row.show_label,
+                                    response_viewport_height,
+                                    window,
+                                    cx,
+                                );
+                                div()
+                                    .debug_selector(move || {
+                                        format!("transcript-row-{row_index}").into()
+                                    })
+                                    .relative()
+                                    .px_3()
+                                    .pt(px(top_padding))
+                                    .pb(px(end_pad))
+                                    .map(|el| match display.alignment {
+                                        crate::config::TextAlignment::Left => el.text_left(),
+                                        crate::config::TextAlignment::Center => el.text_center(),
+                                        crate::config::TextAlignment::Right => el.text_right(),
+                                    })
+                                    .when(display.debug_visual, |el| {
+                                        el.border_1().border_color(Theme::global().TOOL_BORDER)
+                                    })
+                                    .child(element)
+                                    .when(
+                                        display.tool_call_details && !display.screenshot_mode,
+                                        |el| {
+                                            if let Item::Tool {
+                                                call_id,
+                                                input,
+                                                done,
+                                                ..
+                                            } = item
+                                            {
+                                                el.child(
+                                                    div()
+                                                        .px_1()
+                                                        .text_size(px(10.))
+                                                        .text_color(Theme::global().TEXT_FAINT)
+                                                        .child(format!(
+                                                            "call {call_id} · {} · {input}",
+                                                            if *done {
+                                                                "finished"
+                                                            } else {
+                                                                "running"
+                                                            }
+                                                        )),
+                                                )
+                                            } else {
+                                                el
+                                            }
+                                        },
+                                    )
+                                    .when(row_index + 1 == row_count, |el| {
+                                        el.child(latest::end_marker(
+                                            row_end_visible.clone(),
+                                            end_list.clone(),
+                                        ))
+                                    })
+                                    .child(prompt::visibility_marker(
+                                        row_index,
+                                        prompt::is_pinnable_prompt(item),
+                                        row_first_visible.clone(),
+                                        prompt_list.clone(),
+                                    ))
+                                    .into_any_element()
+                            })
+                        },
+                    )
+                    .size_full(),
+                )
+                .into_any_element()
+        };
+
+        // Keep the same spacious editor at its measured welcome position.
+        // The transcript spends the blank space above it before the editor
+        // moves down. Blank space belongs to layout, never transcript rows.
+        let transcript = if !fresh_session {
+            if let Some(layout) = &self.startup_layout {
+                div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .h(px(layout.messages_height))
+                            .min_h_0()
+                            .flex_shrink_1()
+                            .child(transcript),
+                    )
+                    .child(
+                        div()
+                            .w_full()
+                            .flex_none()
+                            .px_4()
+                            .flex()
+                            .justify_center()
+                            .child(
+                                div()
+                                    .w_full()
+                                    .max_w(px(760.))
+                                    .relative()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_2()
+                                    .children(self.render_prompt_queue(cx))
+                                    .children(self.render_voice_pending())
+                                    .child(self.render_composer(window, cx))
+                                    .child(startup::input_marker(input_bounds.clone())),
+                            ),
+                    )
+                    .into_any_element()
+            } else {
+                transcript
+            }
+        } else {
+            transcript
+        };
+
+        let theme = Theme::global();
+        // The tail may sit a few pixels below the fold mid-glide. While the
+        // welcome layout is still growing, the end is only clipped for the
+        // frame before the composer moves down.
+        let startup_growing = self.startup_growing();
+        let show_jump_chip = row_count > 0
+            && !self.transcript_end_visible
+            && !self.tail_gliding()
+            && !startup_growing;
+
+        let chat = div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .when(self.image_pane_open, |el| {
+                el.flex_1()
+                    .min_w_0()
+                    .min_h_0()
+                    .when(self.image_pane_stacked, |el| el.h_auto())
+            })
+            .relative()
+            .overflow_hidden()
+            .track_focus(&self.focus_handle)
+            .key_context("ChatPanel")
+            // Files dragged in from the file manager: images attach like a
+            // paste, other files are referenced by path in the prompt.
+            .when(!self.transcript_only && !self.demo, |el| {
+                el.drag_over::<gpui::ExternalPaths>(|style, _, _, _| {
+                    style.bg(Theme::global().SELECTION)
+                })
+                .on_drop(cx.listener(
+                    |panel, paths: &gpui::ExternalPaths, window, cx| {
+                        // The input's change observer updates this panel, so
+                        // apply the drop after this panel update returns.
+                        let paths = paths.paths().to_vec();
+                        let input = panel.input.clone();
+                        window.defer(cx, move |window, cx| {
+                            input.update(cx, |input, cx| input.drop_files(&paths, window, cx));
+                        });
+                    },
+                ))
+            })
+            .on_action(cx.listener(|panel, _: &shortcuts::JumpToLatest, _, cx| {
+                panel.jump_to_latest(cx);
+            }))
+            .on_action(
+                cx.listener(|panel, _: &shortcuts::BackgroundRunningTool, _, cx| {
+                    panel.background_running_tool_if_any(cx);
+                }),
+            )
+            .on_action(
+                cx.listener(|panel, _: &shortcuts::JumpToLatestIfEmpty, _, cx| {
+                    panel.jump_to_latest_if_empty(cx);
+                }),
+            )
+            .on_action(cx.listener(|panel, _: &voice::ToggleVoice, _, cx| {
+                panel.toggle_voice(cx);
+            }))
+            .on_action(
+                cx.listener(|panel, _: &crate::effort::IncreaseEffort, _, cx| {
+                    panel.step_effort(1, cx);
+                }),
+            )
+            .on_action(
+                cx.listener(|panel, _: &crate::effort::DecreaseEffort, _, cx| {
+                    panel.step_effort(-1, cx);
+                }),
+            )
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if this.login.is_some() && event.keystroke.key == "escape" {
+                    this.close_login_picker(cx);
+                    this.focus_input(window, cx);
+                    cx.stop_propagation();
+                } else if this.recovery_picker_open && event.keystroke.key == "escape" {
+                    this.recovery_picker_open = false;
+                    this.focus_input(window, cx);
+                    cx.notify();
+                    cx.stop_propagation();
+                } else if this.diff_review.is_some() && event.keystroke.key == "escape" {
+                    this.close_diff_review(window, cx);
+                    cx.stop_propagation();
+                } else if this.image_preview.is_some() && event.keystroke.key == "escape" {
+                    this.close_image_preview(window, cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .children(crate::harness::remote_host(&self.session_id).map(|host| {
+                let machine = if host == crate::managed_cloud::HOST {
+                    "Jcode Cloud".to_string()
+                } else {
+                    format!("SSH · {host}")
+                };
+                let label = match self.working_dir.as_deref().filter(|d| !d.is_empty()) {
+                    Some(dir) => format!("Running on {machine} · {dir}"),
+                    None => format!("Running on {machine}"),
+                };
+                div()
+                    .debug_selector(|| "panel-remote-host".into())
+                    .flex_none()
+                    .px_3()
+                    .py_1()
+                    .text_size(px(11.0))
+                    .text_color(theme.ACCENT)
+                    .bg(theme.ACCENT_DIM)
+                    .truncate()
+                    .child(label)
+            }))
+            .children(publish_tracker)
+            .children(pinned_todo.map(|payload| {
+                div()
+                    .id("pinned-todo-scroll")
+                    .debug_selector(|| "pinned-todo-card".into())
+                    .flex_none()
+                    .px_3()
+                    .pt_1()
+                    .mb_2()
+                    .max_h(px(
+                        (f32::from(window.viewport_size().height) * 0.3).min(280.)
+                    ))
+                    .overflow_y_scroll()
+                    .child(render_todo_card_with_style(
+                        &payload,
+                        true,
+                        "pinned-todo",
+                        &self.transcript_selection,
+                        window,
+                        cx,
+                    ))
+            }))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .relative()
+                    .when(!has_pinned_todo, |body| body.mt_2())
+                    // Pace both wheel and touchpad movement on display frames.
+                    // Precise deltas use a much shorter smoothing window so
+                    // native gesture control stays responsive.
+                    .child(
+                        gpui::canvas(
+                            move |bounds, window, _| {
+                                window.insert_hitbox(bounds, gpui::HitboxBehavior::Normal)
+                            },
+                            move |_, hitbox, window, _| {
+                                let wheel_panel = wheel_panel.clone();
+                                let input_bounds = wheel_input_bounds.clone();
+                                window.on_mouse_event(
+                                    move |event: &gpui::ScrollWheelEvent, phase, window, cx| {
+                                        if phase != gpui::DispatchPhase::Capture
+                                            || !hitbox.should_handle_scroll(window)
+                                        {
+                                            return;
+                                        }
+                                        // Fresh/startup editors live inside this body. Let
+                                        // their own scroll containers receive wheel events.
+                                        if input_bounds.get().is_some_and(
+                                            |bounds: gpui::Bounds<gpui::Pixels>| {
+                                                bounds.contains(&event.position)
+                                            },
+                                        ) {
+                                            return;
+                                        }
+                                        let delta = event.delta.pixel_delta(window.line_height());
+                                        let y = f32::from(delta.y);
+                                        if y == 0.0 {
+                                            return;
+                                        }
+                                        let panel = wheel_panel.read(cx);
+                                        if panel.transcript_list.is_scrollbar_dragging() {
+                                            cx.stop_propagation();
+                                            return;
+                                        }
+                                        if panel.diff_review.is_some() {
+                                            return;
+                                        }
+                                        if panel.startup_layout.is_some()
+                                            && !panel
+                                                .transcript_list
+                                                .viewport_bounds()
+                                                .contains(&event.position)
+                                        {
+                                            return;
+                                        }
+                                        let precise = event.delta.precise();
+                                        let _ = wheel_panel.update(cx, |panel, cx| {
+                                            if precise {
+                                                panel.glide_transcript_input(-y, true, cx);
+                                            } else {
+                                                panel.glide_transcript_wheel(-y, cx);
+                                            }
+                                        });
+                                        cx.stop_propagation();
+                                    },
+                                );
+                            },
+                        )
+                        .absolute()
+                        .size_full(),
+                    )
+                    .child(transcript)
+                    .children(self.render_pinned_prompt(window, cx))
+                    .when(docked_composer, |el| {
+                        el.child(self.render_composer_dock(input_bounds.clone(), window, cx))
+                    })
+                    .child(startup::input_marker(body_bounds.clone()))
+                    .child(self.prompt_visibility_observer(prompt_rows, first_visible_row, cx))
+                    .child(self.transcript_end_observer(end_visible, row_count, cx))
+                    .child(self.tail_growth_observer(cx))
+                    .when(!startup_growing, |el| {
+                        el.child(crate::scrollbar::interactive_vertical_list_with_inset(
+                            &self.transcript_list,
+                            "transcript-scrollbar",
+                            dock_pad,
+                            {
+                                let panel = cx.entity().downgrade();
+                                move |_, cx| {
+                                    let _ = panel.update(cx, |panel, cx| {
+                                        panel.cancel_transcript_momentum();
+                                        panel.release_startup_preview();
+                                        panel.stick_to_bottom = false;
+                                        cx.notify();
+                                    });
+                                }
+                            },
+                            {
+                                let panel = cx.entity().downgrade();
+                                move |_, cx| {
+                                    let _ = panel.update(cx, |panel, cx| {
+                                        panel.resume_transcript_follow_after_scroll(cx);
+                                        cx.notify();
+                                    });
+                                }
+                            },
+                        ))
+                    })
+                    // Float catch-up activity above the composer, centered in the
+                    // transcript rather than tucked into the scrollbar corner.
+                    .when(show_jump_chip, |el| {
+                        el.child(
+                            div()
+                                .debug_selector(|| "latest-pill-anchor".into())
+                                .absolute()
+                                .map(|el| {
+                                    if self.startup_layout.is_some() {
+                                        let height = f32::from(
+                                            self.transcript_list.viewport_bounds().size.height,
+                                        );
+                                        el.top(px((height - 32.).max(0.)))
+                                    } else {
+                                        el.bottom(px(dock_pad + 8.))
+                                    }
+                                })
+                                .left_3()
+                                .right_3()
+                                .flex()
+                                .justify_center()
+                                .child(
+                                    div()
+                                        .id("jump-to-latest")
+                                        .debug_selector(|| "jump-to-latest".into())
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .px_2p5()
+                                        .py_1()
+                                        .rounded_full()
+                                        .bg(Theme::global().HEADER_BG)
+                                        .border_1()
+                                        .border_color(Theme::global().PANEL_BORDER)
+                                        .text_size(px(10.5))
+                                        .font_family(Theme::global().FONT_MONO)
+                                        .text_color(Theme::global().TEXT_DIM)
+                                        .cursor_pointer()
+                                        .hover(|el| el.text_color(Theme::global().TEXT))
+                                        .occlude()
+                                        .on_mouse_down(
+                                            gpui::MouseButton::Left,
+                                            cx.listener(|this, _event, _window, cx| {
+                                                this.jump_to_latest(cx);
+                                            }),
+                                        )
+                                        .when(self.activity_active(), |el| {
+                                            el.child(
+                                                div()
+                                                    .debug_selector(|| "latest-activity".into())
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_2()
+                                                    .text_color(Theme::global().ACCENT)
+                                                    .child(self.latest_activity_spinner.clone()),
+                                            )
+                                        })
+                                        .child("↓")
+                                        .child(shortcuts::jump_to_latest_keycaps(
+                                            Theme::global().TEXT_DIM.into(),
+                                        )),
+                                ),
+                        )
+                    }),
+            )
+            .when(self.recovery_picker_open && !docked_composer, |el| {
+                el.child(self.render_recovery_model_picker(cx))
+            })
+            .when(!docked_composer, |el| {
+                el.children(self.render_voice_overlay(window, cx))
+                    .children(self.render_preview_badge(cx))
+            })
+            // The docked composer floats over the transcript body above.
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(|this, _event, window, cx| {
+                    // A read-only preview must not steal focus from its host.
+                    if !this.transcript_only {
+                        this.focus_input(window, cx);
+                    }
+                    cx.notify();
+                }),
+            )
+            .child(self.startup_layout_observer(
+                fresh_session,
+                input_bounds.clone(),
+                body_bounds,
+                cx,
+            ))
+            .child(flicker::observer(
+                self.flicker_diagnostics.clone(),
+                self.transcript_list.clone(),
+                input_bounds,
+                self.offscreen_prompt.is_some(),
+                cx.entity().entity_id(),
+            ))
+            .child(self.input.read(cx).paste_preview_panel_marker())
+            .children(self.render_image_preview(window, cx))
+            .children(self.render_diff_review(cx))
+            .children(self.render_login_picker(window, cx))
+            .into_any_element();
+
+        // Inline mode retains the existing chat layout and event ancestry.
+        if !self.image_pane_open {
+            return chat;
+        }
+        div()
+            .size_full()
+            .relative()
+            .flex()
+            .when(self.image_pane_stacked, |el| el.flex_col())
+            .overflow_hidden()
+            .child(self.image_pane_layout_observer(cx))
+            .child(chat)
+            .children(self.render_image_pane(cx))
+            .into_any_element()
+    }
+}
+
+/// Session tabs and sidebar rows share one label, never an internal session ID.
+pub(crate) fn folder_session_title(session_id: &str, title: &str) -> SharedString {
+    custom_session_title(session_id, title)
+        .unwrap_or("New session")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .into()
+}
+
+fn custom_session_title<'a>(session_id: &str, title: &'a str) -> Option<&'a str> {
+    let title = title.trim();
+    (!title.is_empty() && title != session_id && title != short_id(session_id)).then_some(title)
+}
+
+/// Give a new conversation an immediate, useful label while the agent is still
+/// working out the more durable todo/plan title.
+fn first_prompt_title(prompt: &str) -> Option<String> {
+    const MAX_CHARS: usize = 64;
+    let normalized = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() || normalized.starts_with('/') {
+        return None;
+    }
+    let mut chars = normalized.chars();
+    let title = chars.by_ref().take(MAX_CHARS).collect::<String>();
+    Some(if chars.next().is_some() {
+        format!("{}…", title.trim_end())
+    } else {
+        title
+    })
+}
+
+/// Defensive render-time grouping for transcripts assembled from more than one
+/// event source. Streaming normally merges reasoning as it arrives, but a
+/// reconnect or provider boundary can leave adjacent reasoning items behind.
+/// They are one uninterrupted visual phase and should therefore paint as one
+/// card. Keep the first index so expansion state remains stable.
+#[cfg(test)]
+fn coalesce_reasoning_rows(rows: Vec<(usize, Item)>) -> Vec<(usize, Item)> {
+    let mut grouped: Vec<(usize, Item)> = Vec::with_capacity(rows.len());
+    for (index, item) in rows {
+        match (grouped.last_mut(), item) {
+            (Some((_, Item::Reasoning(existing))), Item::Reasoning(text)) => {
+                append_reasoning_text(existing, &text);
+            }
+            (_, item) => grouped.push((index, item)),
+        }
+    }
+    grouped
+}
+
+fn append_reasoning_text(existing: &mut String, text: &str) {
+    let separated = existing
+        .chars()
+        .next_back()
+        .is_some_and(char::is_whitespace)
+        || text.chars().next().is_some_and(char::is_whitespace);
+    if !separated {
+        existing.push_str("\n\n");
+    }
+    existing.push_str(text);
+}
+
+impl Focusable for Panel {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+fn short_id(session_id: &str) -> String {
+    let tail: String = session_id
+        .chars()
+        .rev()
+        .take(8)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("session {tail}")
+}
+
+/// Which speaker a row belongs to, or None for rows that carry no caption.
+fn role_of(item: &Item) -> Option<&'static str> {
+    match item {
+        Item::User(_) => Some("you"),
+        Item::Assistant(_) => Some("jcode"),
+        Item::Image(_)
+        | Item::ResponseStats(_)
+        | Item::Reasoning(_)
+        | Item::Tool { .. }
+        | Item::BackgroundTask { .. }
+        | Item::Todos(_)
+        | Item::Stopped(_)
+        | Item::CacheMiss(_)
+        | Item::Applet(_)
+        | Item::Error(_) => None,
+    }
+}
+
+/// Provider a bare `/reset` targets: Claude for Anthropic sessions, otherwise
+/// OpenAI, which matches the TUI default.
+fn reset_provider_for(panel: &Panel) -> crate::accounts::ResetProvider {
+    let is_claude = |value: Option<&str>| {
+        value.is_some_and(|value| {
+            let value = value.to_ascii_lowercase();
+            value.contains("anthropic") || value.contains("claude")
+        })
+    };
+    if is_claude(panel.provider.as_deref())
+        || (panel.provider.is_none() && is_claude(panel.model.as_deref()))
+    {
+        crate::accounts::ResetProvider::Claude
+    } else {
+        crate::accounts::ResetProvider::OpenAi
+    }
+}
+
+/// The credential route serving `model`, phrased for humans.
+/// Fallback for daemons that do not report the resolved credential. A model
+/// can have both an API key and an OAuth route, so the first match is not the
+/// serving one: prefer an available route, and OAuth over API key, matching
+/// the daemon's own auto rule.
+fn auth_method_for_model(
+    model: Option<&str>,
+    routes: &[jcode_sdk::ModelRouteInfo],
+) -> Option<String> {
+    let model = model?;
+    let route = routes
+        .iter()
+        .filter(|route| route.model == model)
+        .max_by_key(|route| {
+            (
+                route.available,
+                route.api_method.to_ascii_lowercase().contains("oauth"),
+            )
+        })?;
+    Some(human_auth_method(&route.api_method))
+}
+
+/// `oauth`, `api_key`, or a route id such as `claude-oauth`, phrased for the
+/// account label.
+fn human_auth_method(method: &str) -> String {
+    let method = method.to_lowercase();
+    if method.contains("oauth") {
+        "oauth".to_string()
+    } else if method.contains("api-key") || method.contains("api_key") || method.ends_with("-api") {
+        "api key".to_string()
+    } else {
+        method
+    }
+}
+
+fn available_model_names(routes: &[jcode_sdk::ModelRouteInfo]) -> Vec<String> {
+    let mut models: Vec<String> = routes
+        .iter()
+        .filter(|route| route.available)
+        .map(|route| route.model.clone())
+        .collect();
+    models.sort();
+    models.dedup();
+    models
+}
+
+/// Label the account control with the current provider and credential method.
+/// Keep account setup discoverable before runtime identity arrives.
+/// "4s", "1m 12s", "1h 03m". Whole seconds keep the row width stable.
+fn format_tool_elapsed(elapsed: Duration) -> String {
+    let secs = elapsed.as_secs();
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m {:02}s", secs / 60, secs % 60)
+    } else {
+        format!("{}h {:02}m", secs / 3600, secs % 3600 / 60)
+    }
+}
+
+fn account_method_label(provider: Option<&str>, auth_method: Option<&str>) -> String {
+    let provider = provider
+        .map(str::trim)
+        .filter(|provider| !provider.is_empty())
+        .map(pretty_provider_name);
+    let method = auth_method
+        .map(str::trim)
+        .filter(|method| !method.is_empty())
+        .map(pretty_auth_method);
+    match (provider, method) {
+        (Some(provider), Some(method)) => format!("{provider} · {method}"),
+        (Some(provider), None) => provider,
+        (None, Some(method)) => method,
+        (None, None) => "Accounts".into(),
+    }
+}
+
+pub(crate) use crate::accounts::pretty_provider_name;
+
+fn pretty_auth_method(method: &str) -> String {
+    match method.to_ascii_lowercase().as_str() {
+        "oauth" => "OAuth".into(),
+        "api key" | "api-key" | "api_key" => "API key".into(),
+        other => other.to_string(),
+    }
+}
+
+fn context_usage_label(model: Option<&str>, context_tokens: Option<u64>) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(used) = context_tokens {
+        match model.and_then(context_window_for_model) {
+            Some(window) => {
+                let percent = (used as f64 / window as f64 * 100.0).min(100.0);
+                parts.push(format!(
+                    "{} / {} ({percent:.0}%)",
+                    format_tokens(used),
+                    format_tokens(window)
+                ));
+            }
+            None => parts.push(format!("{} tokens", format_tokens(used))),
+        }
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    Some(parts.join("  ·  "))
+}
+
+/// Shorten a home-relative path for the footer.
+fn compact_dir(path: &str) -> String {
+    match crate::platform_dirs::tilde(path) {
+        home if home == "~" => "~ (home)".to_string(),
+        shortened => shortened,
+    }
+}
+
+/// Use the same model capacity catalog as the CLI instead of desktop-only guesses.
+fn context_window_for_model(model: &str) -> Option<u64> {
+    jcode_base::provider::context_limit_for_model_with_provider(model, None).map(|n| n as u64)
+}
+
+/// Match the TUI's output-token estimate and thresholds, using desktop theme
+/// colors. The tilde distinguishes the estimate from provider-billed usage.
+fn tool_output_token_badge(output: &str) -> (String, gpui::Rgba) {
+    use jcode_core::util::{
+        ApproxTokenSeverity, approx_tool_output_token_severity, estimate_tokens,
+        format_approx_token_count,
+    };
+    let tokens = estimate_tokens(output).max(usize::from(!output.is_empty()));
+    let theme = Theme::global();
+    let color = match approx_tool_output_token_severity(tokens) {
+        ApproxTokenSeverity::Normal => theme.OK,
+        ApproxTokenSeverity::Warning => theme.WARN,
+        ApproxTokenSeverity::Danger => theme.ERROR,
+    };
+    // MCP results over budget arrive trimmed with a note giving the original
+    // size. Show both, so the badge says what the server actually returned.
+    if let Some(original) = trimmed_mcp_original_tokens(output) {
+        return (
+            format!(
+                "~{} of {}",
+                format_approx_token_count(tokens),
+                format_approx_token_count(original).trim_end_matches(" tok")
+            ),
+            theme.WARN,
+        );
+    }
+    (format!("~{}", format_approx_token_count(tokens)), color)
+}
+
+/// The original token count stated by the SDK's MCP trim note, if present.
+fn trimmed_mcp_original_tokens(output: &str) -> Option<usize> {
+    const PREFIX: &str = "[MCP result trimmed from ";
+    let rest = &output[output.rfind(PREFIX)? + PREFIX.len()..];
+    rest.split_once(" to ")?.0.parse().ok()
+}
+
+/// The token badge custom tool cards show in their header, matching the
+/// generic tool row.
+pub(crate) fn tool_card_token_pill(output: &str) -> Option<gpui::Div> {
+    if output.trim().is_empty() {
+        return None;
+    }
+    let (label, color) = tool_output_token_badge(output);
+    Some(
+        div()
+            .debug_selector(|| "tool-card-tokens".into())
+            .flex_none()
+            .px_2()
+            .py(px(2.0))
+            .rounded_full()
+            .bg(Theme::global().INLINE_CODE_BG)
+            .text_size(px(10.0))
+            .line_height(px(14.0))
+            .text_color(color)
+            .child(label),
+    )
+}
+
+/// `12500` -> `12.5k`, `1048576` -> `1.0m`; small counts stay exact.
+fn format_tokens(count: u64) -> String {
+    if count >= 1_000_000 {
+        format!("{:.1}m", count as f64 / 1_000_000.0)
+    } else if count >= 1_000 {
+        format!("{:.1}k", count as f64 / 1_000.0)
+    } else {
+        count.to_string()
+    }
+}
+
+/// Collapse whitespace and clip to a readable length.
+fn condense(text: &str, limit: usize) -> String {
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() <= limit {
+        return flat;
+    }
+    let clipped: String = flat.chars().take(limit).collect();
+    format!("{}…", clipped.trim_end())
+}
+
+/// Like `condense`, but keeps the end: while reasoning streams, the newest
+/// words are the ones worth reading.
+fn condense_tail(text: &str, limit: usize) -> String {
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let count = flat.chars().count();
+    if count <= limit {
+        return flat;
+    }
+    let clipped: String = flat.chars().skip(count - limit).collect();
+    format!("…{}", clipped.trim_start())
+}
+
+/// Drop ANSI escape sequences (colors, cursor moves) so terminal output
+/// renders as text instead of garbage.
+fn strip_ansi(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            output.push(c);
+            continue;
+        }
+        match chars.peek() {
+            // CSI: ESC [ ... final byte in @-~
+            Some('[') => {
+                chars.next();
+                for c in chars.by_ref() {
+                    if ('@'..='~').contains(&c) {
+                        break;
+                    }
+                }
+            }
+            // OSC: ESC ] ... BEL or ESC \
+            Some(']') => {
+                chars.next();
+                while let Some(c) = chars.next() {
+                    if c == '\u{7}' {
+                        break;
+                    }
+                    if c == '\u{1b}' && chars.peek() == Some(&'\\') {
+                        chars.next();
+                        break;
+                    }
+                }
+            }
+            // Two-character sequences like ESC ( B.
+            Some(_) => {
+                chars.next();
+            }
+            None => {}
+        }
+    }
+    output
+}
+
+/// Parse the todo tool's concatenated output format. The tool emits the item
+/// array first, followed by optional `Plan:` and `Goals:` JSON sections.
+fn parse_todo_tool_output(output: &str) -> Option<TodoCardPayload> {
+    let mut stream =
+        serde_json::Deserializer::from_str(output.trim_start()).into_iter::<Vec<TodoCardItem>>();
+    let todos = stream.next()?.ok()?;
+    let mut remainder = output
+        .trim_start()
+        .get(stream.byte_offset()..)?
+        .trim_start();
+    let plan = if let Some(json) = remainder.strip_prefix("Plan:") {
+        let json = json.trim_start();
+        let mut plan_stream = serde_json::Deserializer::from_str(json).into_iter::<TodoCardPlan>();
+        let plan = plan_stream.next().and_then(Result::ok).unwrap_or_default();
+        remainder = json
+            .get(plan_stream.byte_offset()..)
+            .unwrap_or_default()
+            .trim_start();
+        plan
+    } else {
+        TodoCardPlan::default()
+    };
+    let goals = remainder
+        .strip_prefix("Goals:")
+        .and_then(|json| {
+            serde_json::Deserializer::from_str(json.trim_start())
+                .into_iter::<Vec<jcode_base::todo::TodoGoal>>()
+                .next()
+                .and_then(Result::ok)
+        })
+        .unwrap_or_default();
+    Some(TodoCardPayload { todos, plan, goals })
+}
+
+fn todo_status_color(todo: &TodoCardItem) -> gpui::Rgba {
+    if !todo.blocked_by.is_empty() && todo.status != "completed" {
+        Theme::global().WARN
+    } else {
+        match todo.status.as_str() {
+            "completed" => Theme::global().OK,
+            "in_progress" => Theme::global().ACCENT,
+            "cancelled" => Theme::global().ERROR,
+            _ => Theme::global().TEXT_FAINT,
+        }
+    }
+}
+
+fn todoist_priority_color(priority: u8) -> gpui::Rgba {
+    match priority {
+        4 => Theme::global().ERROR,
+        3 => Theme::global().WARN,
+        2 => Theme::global().ACCENT,
+        _ => Theme::global().TEXT_FAINT,
+    }
+}
+
+fn todoist_named_color(color: Option<&str>) -> gpui::Rgba {
+    match color.unwrap_or_default() {
+        "berry_red" | "red" => Theme::global().ERROR,
+        "orange" | "yellow" => Theme::global().WARN,
+        "blue" | "light_blue" | "teal" => Theme::global().ACCENT,
+        "green" | "lime_green" | "mint_green" => Theme::global().AI_ACCENT,
+        "purple" | "violet" | "magenta" | "lavender" => Theme::global().USER_ACCENT,
+        _ => Theme::global().TEXT_FAINT,
+    }
+}
+
+/// The evidence state a row's color encodes: what was achieved for completed
+/// work, the planning confidence otherwise.
+fn todo_effective_confidence(todo: &TodoCardItem) -> Option<jcode_base::todo::ConfidenceState> {
+    if todo.status == "completed" {
+        todo.completion_confidence.or(todo.confidence)
+    } else {
+        todo.confidence
+    }
+}
+
+/// Confidence palette, a red to green ramp: speculative red, plausible
+/// amber, validated lime, verified green.
+fn todo_confidence_color(state: jcode_base::todo::ConfidenceState) -> gpui::Rgba {
+    use jcode_base::todo::ConfidenceState as C;
+    let theme = Theme::global();
+    let mix = |a: gpui::Rgba, b: gpui::Rgba, t: f32| gpui::Rgba {
+        r: a.r + (b.r - a.r) * t,
+        g: a.g + (b.g - a.g) * t,
+        b: a.b + (b.b - a.b) * t,
+        a: a.a + (b.a - a.a) * t,
+    };
+    match state {
+        C::Speculative => theme.ERROR,
+        C::Plausible => theme.WARN,
+        C::Validated => mix(theme.WARN, theme.OK, 0.6),
+        C::Verified => theme.OK,
+    }
+}
+
+/// Status is the marker's shape (empty ring, inner dot, filled) and
+/// confidence its color, so rows need no trailing text label. Blocked and
+/// cancelled rows keep their status colors. Hovering names the confidence.
+fn render_todo_marker(todo: &TodoCardItem, id: String) -> impl IntoElement {
+    let blocked = !todo.blocked_by.is_empty() && todo.status != "completed";
+    let confidence = todo_effective_confidence(todo);
+    let color = match confidence {
+        _ if todo.status == "cancelled" => Theme::global().TEXT_FAINT,
+        Some(state) if !blocked => todo_confidence_color(state),
+        _ => todo_status_color(todo),
+    };
+    let label = todo_confidence_label(todo);
+    div()
+        .id(gpui::SharedString::from(id))
+        .when(label.is_some(), |marker| {
+            marker.debug_selector(|| "todo-row-confidence".into())
+        })
+        .flex_none()
+        .w(px(13.0))
+        .h(px(13.0))
+        .rounded_full()
+        .border_1()
+        .border_color(color)
+        .p(px(2.0))
+        .when(todo.status == "completed", |marker| {
+            marker.child(div().size_full().rounded_full().bg(color))
+        })
+        .when(todo.status == "in_progress", |marker| {
+            let dot = if confidence.is_some() { color } else { Theme::global().ACCENT };
+            marker
+                .p(px(3.0))
+                .child(div().size_full().rounded_full().bg(dot))
+        })
+        .when_some(label, |marker, label| {
+            let tip = format!("Confidence: {label}");
+            marker.tooltip(move |_, cx| {
+                cx.new(|_| crate::panel::usage::MeterTooltip(tip.clone()))
+                    .into()
+            })
+        })
+}
+
+/// Severity of one todo assessment value, mirroring the TUI todo card palette.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TodoTone {
+    Ok,
+    Warn,
+    Fail,
+}
+
+fn todo_tone_color(tone: TodoTone) -> gpui::Rgba {
+    match tone {
+        TodoTone::Ok => Theme::global().OK,
+        TodoTone::Warn => Theme::global().WARN,
+        TodoTone::Fail => Theme::global().ERROR,
+    }
+}
+
+/// One labeled gate value shown under a todo group, such as `Coverage main_paths`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TodoGateSegment {
+    label: &'static str,
+    state: String,
+    tone: TodoTone,
+}
+
+/// The goal's quality gates as the TUI shows them: only failing gates are
+/// listed, a single passing line otherwise, and delivery progress last.
+fn todo_goal_gate_segments(goal: &jcode_base::todo::TodoGoal) -> Vec<TodoGateSegment> {
+    use jcode_base::todo as t;
+    fn gate<S: Copy>(
+        label: &'static str,
+        state: Option<S>,
+        name: impl Fn(S) -> &'static str,
+        severe: impl Fn(S) -> bool,
+    ) -> TodoGateSegment {
+        match state {
+            None => TodoGateSegment {
+                label,
+                state: "missing".into(),
+                tone: TodoTone::Fail,
+            },
+            Some(state) => TodoGateSegment {
+                label,
+                state: name(state).into(),
+                tone: if severe(state) {
+                    TodoTone::Fail
+                } else {
+                    TodoTone::Warn
+                },
+            },
+        }
+    }
+
+    let mut segments = Vec::new();
+    if !t::feedback_loop_passes(goal.closed_feedback_loop) {
+        segments.push(gate(
+            "Closed feedback loop",
+            goal.closed_feedback_loop,
+            |s| s.as_str(),
+            |s| s <= t::FeedbackLoopState::Weak,
+        ));
+    }
+    if !t::feedback_loop_relevance_passes(goal) {
+        segments.push(gate(
+            "Relevance",
+            goal.feedback_loop_relevance,
+            |s| s.as_str(),
+            |s| s == t::FeedbackLoopRelevance::Indirect,
+        ));
+    }
+    if !t::feedback_loop_coverage_passes(goal) {
+        segments.push(gate(
+            "Coverage",
+            goal.feedback_loop_coverage,
+            |s| s.as_str(),
+            |s| s == t::FeedbackLoopCoverage::Narrow,
+        ));
+    }
+    if !t::feedback_loop_traceability_passes(goal) {
+        segments.push(gate(
+            "Traceability",
+            goal.feedback_loop_traceability,
+            |s| s.as_str(),
+            |s| s == t::FeedbackLoopTraceability::Unmapped,
+        ));
+    }
+    if segments.is_empty() {
+        segments.push(TodoGateSegment {
+            label: "",
+            state: "✓ All quality gates passing".into(),
+            tone: TodoTone::Ok,
+        });
+    }
+    if let Some(state) = goal.delivery_state {
+        segments.push(TodoGateSegment {
+            label: "Delivery",
+            state: state.as_str().into(),
+            tone: if state >= t::DeliveryState::WorkflowValidated {
+                TodoTone::Ok
+            } else if state == t::DeliveryState::Integrated {
+                TodoTone::Warn
+            } else {
+                TodoTone::Fail
+            },
+        });
+    }
+    segments
+}
+
+fn todo_goal_for_group<'a>(
+    goals: &'a [jcode_base::todo::TodoGoal],
+    group: Option<&str>,
+) -> Option<&'a jcode_base::todo::TodoGoal> {
+    let key = group.map(str::trim).filter(|value| !value.is_empty());
+    goals.iter().find(|goal| {
+        goal.group
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            == key
+    })
+}
+
+/// Evidence label for a todo row, matching the TUI: completed rows show how
+/// planning confidence moved, others their current confidence.
+fn todo_confidence_label(todo: &TodoCardItem) -> Option<String> {
+    if todo.status == "completed" {
+        if let (Some(planning), Some(completed)) = (todo.confidence, todo.completion_confidence)
+            && planning != completed
+        {
+            return Some(format!("{}→{}", planning.as_str(), completed.as_str()));
+        }
+        return todo
+            .completion_confidence
+            .or(todo.confidence)
+            .map(|state| state.as_str().to_string());
+    }
+    todo.confidence.map(|state| state.as_str().to_string())
+}
+
+/// The gate row as one text run with colored spans, so it truncates with an
+/// ellipsis on a single line like task rows instead of wrapping.
+fn todo_gate_row_text(
+    goal: &jcode_base::todo::TodoGoal,
+) -> (String, Vec<(std::ops::Range<usize>, gpui::HighlightStyle)>) {
+    let theme = Theme::global();
+    let mut text = String::new();
+    let mut highlights = Vec::new();
+    let mut push = |text: &mut String, part: &str, color: gpui::Rgba| {
+        let start = text.len();
+        text.push_str(part);
+        highlights.push((
+            start..text.len(),
+            gpui::HighlightStyle {
+                color: Some(color.into()),
+                ..Default::default()
+            },
+        ));
+    };
+    for (index, segment) in todo_goal_gate_segments(goal).into_iter().enumerate() {
+        if index > 0 {
+            push(&mut text, " · ", theme.TEXT_FAINT);
+        }
+        if !segment.label.is_empty() {
+            push(&mut text, segment.label, theme.TEXT_DIM);
+            push(&mut text, " ", theme.TEXT_DIM);
+        }
+        push(&mut text, &segment.state, todo_tone_color(segment.tone));
+    }
+    (text, highlights)
+}
+
+fn render_todo_gate_row(goal: &jcode_base::todo::TodoGoal) -> impl IntoElement {
+    let (text, highlights) = todo_gate_row_text(goal);
+    div()
+        .debug_selector(|| "todo-goal-gates".into())
+        .w_full()
+        .min_w_0()
+        .pl(px(19.0))
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .text_ellipsis()
+        .text_size(px(11.0))
+        .child(gpui::StyledText::new(text).with_highlights(highlights))
+}
+
+fn intent_understanding_tone(state: jcode_base::todo::IntentUnderstanding) -> TodoTone {
+    use jcode_base::todo::IntentUnderstanding as I;
+    match state {
+        I::Uncertain => TodoTone::Fail,
+        I::Partial => TodoTone::Warn,
+        I::Clear | I::Complete => TodoTone::Ok,
+    }
+}
+
+fn render_todo_card_with_style(
+    payload: &TodoCardPayload,
+    pinned: bool,
+    key: &str,
+    selection: &Entity<TextSelection>,
+    window: &Window,
+    cx: &App,
+) -> gpui::AnyElement {
+    let intention = payload
+        .plan
+        .user_intention
+        .as_deref()
+        .map(str::trim)
+        .filter(|intention| !intention.is_empty())
+        .map(str::to_owned);
+    let total = payload.todos.len();
+    let completed = payload
+        .todos
+        .iter()
+        .filter(|todo| todo.status == "completed")
+        .count();
+    let progress = if total == 0 {
+        0.0
+    } else {
+        completed as f32 / total as f32
+    };
+
+    let mut groups: Vec<(Option<&str>, Vec<&TodoCardItem>)> = Vec::new();
+    for todo in &payload.todos {
+        let group = todo
+            .group
+            .as_deref()
+            .map(str::trim)
+            .filter(|g| !g.is_empty());
+        if let Some((_, items)) = groups.iter_mut().find(|(known, _)| *known == group) {
+            items.push(todo);
+        } else {
+            groups.push((group, vec![todo]));
+        }
+    }
+    groups.sort_by_key(|(group, _)| group.is_none());
+
+    let mut body = div()
+        .id("todo-card-body-scroll")
+        .debug_selector(|| "todo-card-body".into())
+        .flex()
+        .flex_col()
+        .w_full()
+        .gap_0p5()
+        .when(!pinned, |body| body.max_h(px(132.0)).overflow_y_scroll());
+    if payload.todos.is_empty() {
+        body = body.child(
+            div()
+                .py_1()
+                .text_size(px(12.0))
+                .text_color(Theme::global().TEXT_DIM)
+                .child("No tasks yet. Jcode will populate them as work is planned."),
+        );
+    } else {
+        for (group_index, (group, todos)) in groups.into_iter().enumerate() {
+            let done = todos
+                .iter()
+                .filter(|todo| todo.status == "completed")
+                .count();
+            // GPUI does not always stretch nested flex rows through a scrolling
+            // column. Give every level an explicit width so each row's flex_1
+            // text child receives space instead of collapsing to zero width.
+            let mut section = div().flex().flex_col().w_full();
+            let has_any_group = payload.todos.iter().any(|todo| todo.group.is_some());
+            if group.is_some() || has_any_group {
+                section = section.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .text_size(px(10.0))
+                        .pt_0p5()
+                        .child(
+                            div()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .text_ellipsis()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(Theme::global().ACCENT_MUTED)
+                                .child(text_selection::plain(
+                                    selection.clone(),
+                                    format!("{key}-group-{group_index}"),
+                                    group.unwrap_or("Other").to_uppercase(),
+                                    window,
+                                    cx,
+                                )),
+                        )
+                        .child(
+                            div()
+                                .text_color(Theme::global().TEXT_FAINT)
+                                .child(format!("{done}/{}", todos.len())),
+                        ),
+                );
+            }
+            if let Some(goal) = todo_goal_for_group(&payload.goals, group) {
+                section = section.child(render_todo_gate_row(goal));
+            }
+            for (todo_index, todo) in todos.into_iter().enumerate() {
+                section = section.child(
+                    div()
+                        .debug_selector(|| "todo-row".into())
+                        .flex()
+                        .w_full()
+                        .items_center()
+                        .gap_1p5()
+                        .child(render_todo_marker(
+                            todo,
+                            format!("{key}-marker-{group_index}-{todo_index}"),
+                        ))
+                        .child(
+                            div()
+                                .debug_selector(|| "todo-row-content".into())
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .text_ellipsis()
+                                .text_size(px(if pinned { 12.0 } else { 12.5 }))
+                                .text_color(if todo.status == "completed" {
+                                    Theme::global().TEXT_DIM
+                                } else if pinned {
+                                    Theme::global().TEXT_USER
+                                } else {
+                                    Theme::global().TEXT
+                                })
+                                .child(text_selection::plain(
+                                    selection.clone(),
+                                    format!("{key}-task-{group_index}-{todo_index}"),
+                                    todo.content.clone(),
+                                    window,
+                                    cx,
+                                )),
+                        ),
+                );
+            }
+            body = body.child(section);
+        }
+    }
+
+    if pinned {
+        return div()
+            .debug_selector(|| "pinned-todo-details-paper".into())
+            .flex()
+            .flex_col()
+            .gap_1()
+            .rounded(px(8.0))
+            .bg(Theme::global().prompt_background(0))
+            .px_2()
+            .py_1p5()
+            .child(
+                div()
+                    .debug_selector(|| "pinned-todo-intent-row".into())
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .text_size(px(12.0))
+                    .when_some(payload.plan.understands_user_intent, |line, state| {
+                        // Mirror the TUI: "Intent clear: <intention>".
+                        line.child(
+                            div()
+                                .debug_selector(|| "pinned-todo-intent-state".into())
+                                .flex_none()
+                                .flex()
+                                .child(
+                                    div()
+                                        .text_color(Theme::global().TEXT_DIM)
+                                        .child("Intent\u{00a0}"),
+                                )
+                                .child(
+                                    div()
+                                        .text_color(todo_tone_color(
+                                            intent_understanding_tone(state),
+                                        ))
+                                        .child(state.as_str()),
+                                )
+                                .child(
+                                    div().text_color(Theme::global().TEXT_DIM).child(":"),
+                                ),
+                        )
+                    })
+                    .child(
+                        div()
+                            .debug_selector(|| "pinned-todo-intention".into())
+                            .min_w_0()
+                            .flex_1()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .text_color(Theme::global().TEXT_USER)
+                            .when_some(intention, |line, intention| {
+                                line.child(text_selection::plain(
+                                    selection.clone(),
+                                    format!("{key}-intention"),
+                                    intention,
+                                    window,
+                                    cx,
+                                ))
+                            }),
+                    )
+                    .child(
+                        div()
+                            .debug_selector(|| "pinned-todo-count".into())
+                            .flex_none()
+                            .font_family(Theme::global().FONT_MONO)
+                            .text_size(px(10.5))
+                            .text_color(Theme::global().TEXT_DIM)
+                            .child({
+                                // Cancelled work is not outstanding progress.
+                                let active = payload
+                                    .todos
+                                    .iter()
+                                    .filter(|todo| todo.status != "cancelled")
+                                    .count();
+                                format!("{completed}/{active}")
+                            }),
+                    ),
+            )
+            .child(body)
+            .into_any_element();
+    }
+
+    div()
+        .debug_selector(|| "todo-card".into())
+        .flex()
+        .flex_none()
+        .flex_col()
+        .gap_1()
+        .rounded_md()
+        .border_1()
+        .border_color(Theme::global().TOOL_BORDER)
+        .bg(Theme::global().TOOL_BG)
+        .px_2()
+        .py_1p5()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap_2()
+                .child(crate::tool_icon::render_status("todo", true, false))
+                .when_some(intention, |header, intention| {
+                    header.child(
+                        div()
+                            .min_w_0()
+                            .flex_1()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(Theme::global().HEADING)
+                            .child(text_selection::plain(
+                                selection.clone(),
+                                format!("{key}-intention"),
+                                intention,
+                                window,
+                                cx,
+                            )),
+                    )
+                })
+                .child(
+                    div()
+                        .text_size(px(10.5))
+                        .text_color(Theme::global().TEXT_DIM)
+                        .child(format!("{completed} of {total} complete")),
+                ),
+        )
+        .child(
+            div()
+                .h(px(3.0))
+                .w_full()
+                .rounded_full()
+                .bg(Theme::global().CODE_BORDER)
+                .overflow_hidden()
+                .child(
+                    div()
+                        .h_full()
+                        .w(relative(progress))
+                        .rounded_full()
+                        .bg(Theme::global().OK),
+                ),
+        )
+        .child(body)
+        .into_any_element()
+}
+
+/// The human-readable intent of a tool call, with a useful argument fallback.
+fn tool_summary(input: &str) -> String {
+    if let Some(summary) = tool_streaming::summary(input) {
+        return condense(&summary, 90);
+    }
+    if serde_json::from_str::<serde_json::Value>(input).is_ok() {
+        condense(input, 90)
+    } else {
+        // The name already identifies the tool. Do not fill its header with
+        // unfinished JSON while waiting for a useful argument to complete.
+        String::new()
+    }
+}
+
+fn json_scalar(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(text) => Some(text.clone()),
+        serde_json::Value::Number(number) => Some(number.to_string()),
+        serde_json::Value::Bool(flag) => Some(flag.to_string()),
+        _ => None,
+    }
+}
+
+/// Expanded tool detail: the exact invocation plus a clipped output tail.
+fn tool_detail(name: &str, input: &str, output: &str) -> String {
+    let arguments = if input.trim().is_empty() {
+        "{}"
+    } else {
+        input.trim()
+    };
+    let pretty = serde_json::from_str::<serde_json::Value>(arguments)
+        .ok()
+        .and_then(|value| serde_json::to_string_pretty(&value).ok())
+        .unwrap_or_else(|| arguments.to_string());
+    let mut parts = vec![format!(
+        "Tool call\n{}\n{}",
+        name.trim(),
+        clip_lines(&pretty, 40)
+    )];
+    if !output.trim().is_empty() {
+        parts.push(format!(
+            "Output\n{}",
+            clip_lines(strip_ansi(output).trim(), 40)
+        ));
+    }
+    parts.join("\n\n")
+}
+
+/// Keep a block short from the top, noting how much was hidden.
+fn acknowledge_next(
+    pending: &mut VecDeque<usize>,
+    accepted: &mut HashMap<usize, Instant>,
+    now: Instant,
+) {
+    if let Some(index) = pending.pop_front() {
+        accepted.insert(index, now);
+    }
+}
+
+/// Keep a block short by keeping its head and tail: for command output the
+/// end (results, errors) usually matters more than the middle.
+fn clip_lines(text: &str, max_lines: usize) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.len() <= max_lines {
+        return text.to_string();
+    }
+    let head = max_lines * 2 / 3;
+    let tail = max_lines - head;
+    let hidden = lines.len() - head - tail;
+    let mut kept = lines[..head].join("\n");
+    kept.push_str(&format!("\n… {hidden} lines hidden …\n"));
+    kept.push_str(&lines[lines.len() - tail..].join("\n"));
+    kept
+}
+
+#[cfg(test)]
+#[path = "panel_fresh_session_tests.rs"]
+mod fresh_session_tests;
+#[cfg(test)]
+#[path = "panel_image_flicker_tests.rs"]
+mod image_flicker_tests;
+#[cfg(test)]
+#[path = "panel_image_transcript_tests.rs"]
+mod image_transcript_tests;
+#[cfg(test)]
+#[path = "panel_startup_lifecycle_tests.rs"]
+mod startup_lifecycle_tests;
+#[cfg(test)]
+#[path = "panel_turn_completion_tests.rs"]
+mod turn_completion_tests;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[gpui::test]
+    fn transcript_scroll_handler_does_not_keep_closed_panel_alive(cx: &mut gpui::TestAppContext) {
+        let panel = cx.update(|cx| {
+            cx.new(|cx| {
+                Panel::new(
+                    "lifecycle".into(),
+                    None,
+                    None,
+                    crate::harness::spawn_inert(),
+                    cx,
+                )
+            })
+        });
+        let weak = panel.downgrade();
+        drop(panel);
+        cx.run_until_parked();
+        assert!(
+            weak.upgrade().is_none(),
+            "a panel must not own itself through its scroll handler"
+        );
+    }
+
+    #[gpui::test]
+    fn replacing_window_root_releases_rendered_workspace(cx: &mut gpui::TestAppContext) {
+        use crate::workspace::Workspace;
+        let window = cx.update(|cx| {
+            cx.open_window(gpui::WindowOptions::default(), |_, cx| {
+                cx.new(|cx| {
+                    let mut workspace = Workspace::for_test(crate::learning::Coach::new(), cx);
+                    workspace.push_test_panel("retired-panel", cx);
+                    workspace
+                })
+            })
+            .unwrap()
+        });
+        cx.run_until_parked();
+        let old = window
+            .update(cx, |_, _, cx| cx.entity().downgrade())
+            .unwrap();
+        window
+            .update(cx, |_, window, cx| {
+                window.replace_root(cx, |_, cx| {
+                    Workspace::for_test(crate::learning::Coach::new(), cx)
+                });
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert!(
+            old.upgrade().is_none(),
+            "hot reload must release the old workspace and its background tasks"
+        );
+    }
+
+    #[gpui::test]
+    fn tab_glows_done_until_seen_and_clears_on_a_new_turn(cx: &mut gpui::TestAppContext) {
+        use super::tab_outline::TabMode;
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.push_test_panel("tab-focused", cx);
+            workspace.push_test_panel("tab-done", cx);
+            workspace
+        });
+        let panel = workspace
+            .read_with(vcx, |workspace, _| workspace.test_panel(1))
+            .expect("panel exists");
+        let status = |status: &str| ApiEvent::SessionStatus {
+            session_id: "tab-done".into(),
+            status: status.into(),
+            pending_soft_interrupts: None,
+        };
+        let mode = |vcx: &mut gpui::VisualTestContext| {
+            panel.read_with(vcx, |panel, _| panel.tab_ring().map(|ring| ring.mode))
+        };
+        // Panel 1 sits beside the selected panel, out of view.
+        panel.update(vcx, |panel, cx| panel.apply(&status("running"), cx));
+        assert_eq!(mode(vcx), Some(TabMode::Working));
+        panel.update(vcx, |panel, cx| panel.apply(&status("idle"), cx));
+        assert_eq!(mode(vcx), Some(TabMode::Done), "finished out of view");
+        // A new turn replaces the glow with the working fill.
+        panel.update(vcx, |panel, cx| panel.apply(&status("running"), cx));
+        assert_eq!(mode(vcx), Some(TabMode::Working));
+        panel.update(vcx, |panel, cx| panel.apply(&status("idle"), cx));
+        assert_eq!(mode(vcx), Some(TabMode::Done));
+        // Viewing the session reads it.
+        panel.update(vcx, |panel, cx| panel.set_surface_focused(true, cx));
+        assert_eq!(mode(vcx), None);
+        // A turn that finishes while watched never glows.
+        panel.update(vcx, |panel, cx| {
+            panel.set_surface_focused(true, cx);
+            panel.apply(&status("running"), cx);
+            panel.apply(&status("idle"), cx);
+        });
+        assert_eq!(mode(vcx), None);
+    }
+
+    #[gpui::test]
+    fn minimap_state_covers_session_lifecycle_and_latest_todo_progress(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.push_test_panel("minimap-state", cx);
+            workspace
+        });
+        let panel = workspace
+            .read_with(vcx, |workspace, _| workspace.test_panel(0))
+            .expect("panel exists");
+
+        panel.update(vcx, |panel, _| {
+            panel.status = "idle".into();
+            panel.items.clear();
+            assert_eq!(panel.minimap_state(), MinimapSessionState::Idle);
+            assert_eq!(panel.latest_todo_progress(), None);
+
+            panel.status = "running_tools".into();
+            assert_eq!(panel.minimap_state(), MinimapSessionState::Working);
+
+            panel.streaming_text = "live token".into();
+            assert_eq!(panel.minimap_state(), MinimapSessionState::Streaming);
+            panel.streaming_text.clear();
+            panel.status = "idle".into();
+
+            panel.items.push(Item::Todos(TodoCardPayload {
+                todos: vec![
+                    TodoCardItem {
+                        content: "done".into(),
+                        status: "completed".into(),
+                        group: None,
+                        blocked_by: vec![],
+                        confidence: None,
+                        completion_confidence: None,
+                    },
+                    TodoCardItem {
+                        content: "next".into(),
+                        status: "pending".into(),
+                        group: None,
+                        blocked_by: vec![],
+                        confidence: None,
+                        completion_confidence: None,
+                    },
+                ],
+                plan: TodoCardPlan::default(),
+                goals: Vec::new(),
+            }));
+            assert_eq!(panel.latest_todo_progress(), Some((1, 2)));
+            assert_eq!(panel.minimap_state(), MinimapSessionState::Idle);
+
+            panel.items.push(Item::Todos(TodoCardPayload {
+                todos: vec![TodoCardItem {
+                    content: "finished".into(),
+                    status: "completed".into(),
+                    group: None,
+                    blocked_by: vec![],
+                    confidence: None,
+                    completion_confidence: None,
+                }],
+                plan: TodoCardPlan::default(),
+                goals: Vec::new(),
+            }));
+            assert_eq!(panel.latest_todo_progress(), Some((1, 1)));
+            assert_eq!(panel.minimap_state(), MinimapSessionState::Complete);
+
+            panel.items.push(Item::Error("provider failed".into()));
+            assert_eq!(panel.minimap_state(), MinimapSessionState::Error);
+
+            // A coarse crash status must win even when no error transcript row
+            // was emitted, which covers disconnected or abruptly ended turns.
+            panel.items.clear();
+            panel.status = "crashed".into();
+            assert_eq!(panel.minimap_state(), MinimapSessionState::Error);
+        });
+    }
+
+    #[gpui::test]
+    fn minimap_paints_live_state_and_todo_progress_through_the_workspace_surface(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let assert_no_tab_status_dot = |vcx: &mut gpui::VisualTestContext| {
+            assert!(vcx.debug_bounds("live-session-tab-0").is_some());
+            for selector in [
+                "live-session-tab-0-idle",
+                "live-session-tab-0-working",
+                "live-session-tab-0-streaming",
+                "live-session-tab-0-complete",
+                "live-session-tab-0-error",
+            ] {
+                assert!(
+                    vcx.debug_bounds(selector).is_none(),
+                    "tabs must not paint the redundant status dot: {selector}"
+                );
+            }
+        };
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.enable_test_minimap();
+            workspace.push_test_panel("minimap-render-state", cx);
+            workspace
+        });
+        let panel = workspace
+            .read_with(vcx, |workspace, _| workspace.test_panel(0))
+            .expect("panel exists");
+
+        vcx.run_until_parked();
+        assert!(
+            vcx.debug_bounds("minimap-panel-0-idle").is_some(),
+            "the public workspace surface must paint the idle state"
+        );
+        assert_no_tab_status_dot(vcx);
+
+        panel.update(vcx, |panel, cx| {
+            panel.status = "running_tools".into();
+            cx.notify();
+        });
+        workspace.update(vcx, |_, cx| cx.notify());
+        vcx.run_until_parked();
+        assert!(
+            vcx.debug_bounds("minimap-panel-0-working").is_some(),
+            "the public workspace surface must paint the working state"
+        );
+        assert_no_tab_status_dot(vcx);
+
+        panel.update(vcx, |panel, cx| {
+            panel.status = "idle".into();
+            panel.items.push(Item::Error("visible failure".into()));
+            cx.notify();
+        });
+        workspace.update(vcx, |_, cx| cx.notify());
+        vcx.run_until_parked();
+        assert!(
+            vcx.debug_bounds("minimap-panel-0-error").is_some(),
+            "the public workspace surface must paint the error state"
+        );
+        assert_no_tab_status_dot(vcx);
+
+        panel.update(vcx, |panel, cx| {
+            panel.items.clear();
+            panel.status = "streaming".into();
+            panel.streaming_text = "visible live response".into();
+            cx.notify();
+        });
+        workspace.update(vcx, |_, cx| cx.notify());
+        vcx.run_until_parked();
+        assert!(
+            vcx.debug_bounds("minimap-panel-0-streaming").is_some(),
+            "the public workspace surface must paint the streaming state"
+        );
+        assert_no_tab_status_dot(vcx);
+
+        panel.update(vcx, |panel, cx| {
+            panel.streaming_text.clear();
+            panel.status = "idle".into();
+            panel.items.push(Item::Todos(TodoCardPayload {
+                todos: vec![
+                    TodoCardItem {
+                        content: "finished".into(),
+                        status: "completed".into(),
+                        group: None,
+                        blocked_by: vec![],
+                        confidence: None,
+                        completion_confidence: None,
+                    },
+                    TodoCardItem {
+                        content: "remaining".into(),
+                        status: "pending".into(),
+                        group: None,
+                        blocked_by: vec![],
+                        confidence: None,
+                        completion_confidence: None,
+                    },
+                ],
+                plan: TodoCardPlan::default(),
+                goals: Vec::new(),
+            }));
+            cx.notify();
+        });
+        workspace.update(vcx, |_, cx| cx.notify());
+        vcx.run_until_parked();
+        assert!(
+            vcx.debug_bounds("minimap-panel-0-idle").is_some(),
+            "a partially complete idle session keeps its idle state color"
+        );
+        assert_no_tab_status_dot(vcx);
+        let partial = vcx
+            .debug_bounds("minimap-panel-0-todo-progress")
+            .expect("partial todo progress indicator is painted");
+        let idle_panel = vcx
+            .debug_bounds("minimap-panel-0-idle")
+            .expect("idle minimap panel is painted");
+        assert!(
+            (f32::from(partial.size.width) - f32::from(idle_panel.size.width) / 2.0).abs() < 0.6,
+            "one of two completed todos fills half the minimap progress footline"
+        );
+
+        panel.update(vcx, |panel, cx| {
+            panel.items.push(Item::Todos(TodoCardPayload {
+                todos: vec![TodoCardItem {
+                    content: "finished".into(),
+                    status: "completed".into(),
+                    group: None,
+                    blocked_by: vec![],
+                    confidence: None,
+                    completion_confidence: None,
+                }],
+                plan: TodoCardPlan::default(),
+                goals: Vec::new(),
+            }));
+            cx.notify();
+        });
+        workspace.update(vcx, |_, cx| cx.notify());
+        vcx.run_until_parked();
+        assert!(
+            vcx.debug_bounds("minimap-panel-0-complete").is_some(),
+            "the public workspace surface must paint completed sessions"
+        );
+        assert_no_tab_status_dot(vcx);
+        let progress = vcx
+            .debug_bounds("minimap-panel-0-todo-progress")
+            .expect("completed todo progress indicator is painted");
+        let panel_bounds = vcx
+            .debug_bounds("minimap-panel-0-complete")
+            .expect("completed minimap panel is painted");
+        assert_eq!(
+            progress.size.width, panel_bounds.size.width,
+            "a fully complete todo set fills the minimap progress footline"
+        );
+    }
+
+    #[gpui::test]
+    fn restored_scroll_is_not_replaced_when_history_reattaches(cx: &mut gpui::TestAppContext) {
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.push_test_panel("session-a", cx);
+            workspace
+        });
+        let panel = workspace
+            .read_with(vcx, |workspace, _| workspace.test_panel(0))
+            .expect("panel exists");
+        let mut saved = panel.read_with(vcx, |panel, cx| panel.snapshot(cx));
+        saved.scroll_y = -137.0;
+        saved.stick_to_bottom = false;
+
+        panel.update(vcx, |panel, cx| {
+            panel.restore_snapshot(saved, cx);
+            panel.load_history(Vec::new(), Vec::new(), cx);
+            assert_eq!(f32::from(panel.test_scroll_offset_y()), -137.0);
+            assert!(!panel.stick_to_bottom);
+        });
+    }
+
+    #[gpui::test]
+    fn a_few_tall_restored_messages_keep_their_measured_scroll(cx: &mut gpui::TestAppContext) {
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.push_test_panel("session-a", cx);
+            workspace
+        });
+        let panel = workspace
+            .read_with(vcx, |workspace, _| workspace.test_panel(0))
+            .expect("panel exists");
+
+        panel.update(vcx, |panel, cx| {
+            let mut snapshot = panel.snapshot(cx);
+            snapshot.scroll_y = -137.0;
+            snapshot.stick_to_bottom = false;
+            panel.restore_snapshot(snapshot, cx);
+            panel.load_history(
+                vec![
+                    jcode_sdk::HistoryMessage {
+                        response_stats: None,
+                        role: "user".into(),
+                        content: (0..80)
+                            .map(|line| format!("Detailed request line {line}"))
+                            .collect::<Vec<_>>()
+                            .join("\n\n"),
+                    },
+                    jcode_sdk::HistoryMessage {
+                        response_stats: None,
+                        role: "assistant".into(),
+                        content: (0..80)
+                            .map(|line| format!("Detailed response line {line}"))
+                            .collect::<Vec<_>>()
+                            .join("\n\n"),
+                    },
+                ],
+                Vec::new(),
+                cx,
+            );
+        });
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            window.simulate_next_frame(cx);
+        });
+        vcx.run_until_parked();
+
+        panel.read_with(vcx, |panel, _| {
+            assert!(panel.pending_history_scroll.is_none());
+            assert_eq!(f32::from(panel.test_scroll_offset_y()), -137.0);
+            assert!(!panel.stick_to_bottom);
+        });
+    }
+
+    #[gpui::test]
+    fn short_restored_history_discards_stale_offscreen_scroll(cx: &mut gpui::TestAppContext) {
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.push_test_panel("session-a", cx);
+            workspace
+        });
+        let panel = workspace
+            .read_with(vcx, |workspace, _| workspace.test_panel(0))
+            .expect("panel exists");
+
+        panel.update(vcx, |panel, cx| {
+            let mut snapshot = panel.snapshot(cx);
+            snapshot.scroll_y = -10_000.0;
+            snapshot.stick_to_bottom = false;
+            panel.restore_snapshot(snapshot, cx);
+            panel.load_history(
+                vec![
+                    jcode_sdk::HistoryMessage {
+                        response_stats: None,
+                        role: "user".into(),
+                        content: "Fix the rendering".into(),
+                    },
+                    jcode_sdk::HistoryMessage {
+                        response_stats: None,
+                        role: "assistant".into(),
+                        content: "Fixed.".into(),
+                    },
+                ],
+                Vec::new(),
+                cx,
+            );
+        });
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            window.simulate_next_frame(cx);
+        });
+        vcx.run_until_parked();
+        panel.read_with(vcx, |panel, _| {
+            assert!(panel.pending_history_scroll.is_none());
+            assert_eq!(f32::from(panel.test_scroll_offset_y()), 0.0);
+        });
+        assert!(
+            vcx.debug_bounds("transcript").is_some(),
+            "short restored history remains visible after measured clamping"
+        );
+    }
+
+    /// Measures frame construction, not GPU presentation, with realistic history
+    /// sizes. Run explicitly with `transcript_repaint_profile -- --ignored --nocapture`.
+    #[gpui::test]
+    #[ignore = "manual transcript repaint profiler"]
+    fn transcript_repaint_profile(cx: &mut gpui::TestAppContext) {
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.push_test_panel("profile-transcript", cx);
+            workspace
+        });
+        let panel = workspace
+            .read_with(vcx, |workspace, _| workspace.test_panel(0))
+            .expect("panel exists");
+        for count in [100, 1_000, 10_000] {
+            panel.update(vcx, |panel, cx| {
+                *panel.items = (0..count)
+                    .map(|index| {
+                        let text = format!("Message {index}: **formatted** text and `inline code`.\n\nA second paragraph for layout.");
+                        if index % 2 == 0 {
+                            Item::User(text)
+                        } else {
+                            Item::Assistant(text)
+                        }
+                    })
+                    .collect();
+                cx.notify();
+            });
+            vcx.run_until_parked();
+            let row_started = std::time::Instant::now();
+            for _ in 0..1_000 {
+                panel.read_with(vcx, |panel, _| {
+                    std::hint::black_box(panel.transcript_render_rows());
+                });
+            }
+            println!(
+                "TRANSCRIPT_ROWS rows={count} descriptor_bytes={} mean_us={:.3}",
+                std::mem::size_of::<TranscriptRenderRow>(),
+                row_started.elapsed().as_secs_f64() * 1_000.0,
+            );
+            let mut samples = Vec::new();
+            for iteration in 0..60 {
+                let started = std::time::Instant::now();
+                panel.update(vcx, |_, cx| cx.notify());
+                vcx.run_until_parked();
+                if iteration >= 10 {
+                    samples.push(started.elapsed().as_secs_f64() * 1_000.0);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            assert_eq!(
+                panel.read_with(vcx, |panel, _| panel.transcript_row_count),
+                count
+            );
+            assert!(
+                vcx.debug_bounds("transcript").is_some(),
+                "transcript must paint"
+            );
+            println!(
+                "TRANSCRIPT_REPAINT rows={count} p50={:.3}ms p95={:.3}ms",
+                samples[25], samples[47]
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn restored_alternating_history_still_overflows_and_scrolls(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| crate::bind_workspace_keys(cx));
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.push_test_panel("session-a", cx);
+            workspace
+        });
+        let panel = workspace
+            .read_with(vcx, |workspace, _| workspace.test_panel(0))
+            .expect("panel exists");
+
+        // Reload restores the scroll handle before Watch returns history. Paint
+        // that empty intermediate state, matching the real asynchronous handoff.
+        panel.update(vcx, |panel, cx| {
+            panel.items.clear();
+            let mut snapshot = panel.snapshot(cx);
+            snapshot.scroll_y = -137.0;
+            snapshot.stick_to_bottom = false;
+            panel.restore_snapshot(snapshot, cx);
+            cx.notify();
+        });
+        vcx.run_until_parked();
+
+        panel.update(vcx, |panel, cx| {
+            let history = (0..80)
+                .map(|index| jcode_sdk::HistoryMessage {
+                    response_stats: None,
+                    role: if index % 2 == 0 { "user" } else { "assistant" }.into(),
+                    content: format!("restored message {index}"),
+                })
+                .collect();
+            panel.load_history(history, Vec::new(), cx);
+        });
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            window.simulate_next_frame(cx);
+        });
+        vcx.run_until_parked();
+
+        assert!(
+            vcx.debug_bounds("transcript-scrollbar").is_some(),
+            "restored alternating history must produce scrollable overflow"
+        );
+        let before = panel.read_with(vcx, |panel, _| panel.test_scroll_offset_y());
+        let transcript = vcx.debug_bounds("transcript").expect("transcript painted");
+        vcx.simulate_event(gpui::ScrollWheelEvent {
+            position: transcript.center(),
+            // Physical mouse wheels arrive as non-precise line deltas, unlike
+            // the precise pixel delta used by a touchpad.
+            delta: gpui::ScrollDelta::Lines(gpui::point(0.0, 3.0)),
+            modifiers: gpui::Modifiers::default(),
+            touch_phase: gpui::TouchPhase::Moved,
+        });
+        let (during_dispatch, glide_started) = panel.read_with(vcx, |panel, _| {
+            (
+                panel.test_scroll_offset_y(),
+                panel.transcript_wheel_frame.is_some(),
+            )
+        });
+        assert_eq!(during_dispatch, before, "restored history must not jump");
+        assert!(glide_started, "restored history starts a momentum glide");
+        panel.update(vcx, |panel, cx| {
+            panel.transcript_wheel_frame = None;
+            assert!(panel.advance_transcript_wheel(cx));
+        });
+        let after = panel.read_with(vcx, |panel, _| panel.test_scroll_offset_y());
+        assert_ne!(after, before, "wheel input must move restored history");
+    }
+
+    #[gpui::test]
+    fn large_transcripts_only_paint_the_visible_tail(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| crate::bind_workspace_keys(cx));
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.push_test_panel("session-a", cx);
+            workspace
+        });
+        let panel = workspace
+            .read_with(vcx, |workspace, _| workspace.test_panel(0))
+            .expect("panel exists");
+
+        panel.update(vcx, |panel, cx| {
+            *panel.items = (0..1_000)
+                .map(|index| Item::Assistant(format!("message {index}")))
+                .collect();
+            panel.stick_to_bottom = true;
+            cx.notify();
+        });
+        vcx.run_until_parked();
+
+        assert!(
+            vcx.debug_bounds("transcript-row-999").is_some(),
+            "the newest row should be painted while following the tail"
+        );
+        assert!(
+            vcx.debug_bounds("transcript-row-0").is_none(),
+            "offscreen rows must not be painted"
+        );
+    }
+
+    #[test]
+    fn tool_elapsed_labels_are_compact() {
+        assert_eq!(format_tool_elapsed(Duration::from_millis(900)), "0s");
+        assert_eq!(format_tool_elapsed(Duration::from_secs(42)), "42s");
+        assert_eq!(format_tool_elapsed(Duration::from_secs(72)), "1m 12s");
+        assert_eq!(format_tool_elapsed(Duration::from_secs(3_780)), "1h 03m");
+    }
+
+    #[test]
+    fn message_acceptance_promotes_the_oldest_pending_prompt() {
+        let now = Instant::now();
+        let mut pending = VecDeque::from([4, 7]);
+        let mut accepted = HashMap::new();
+        acknowledge_next(&mut pending, &mut accepted, now);
+        assert_eq!(pending, VecDeque::from([7]));
+        assert_eq!(accepted.get(&4), Some(&now));
+    }
+
+    #[test]
+    fn tool_summary_prefers_intent_over_implementation_details() {
+        assert_eq!(
+            tool_summary(r#"{"intent":"look","command":"cargo test"}"#),
+            "look"
+        );
+        assert_eq!(tool_summary(r#"{"command":"cargo test"}"#), "cargo test");
+        assert_eq!(tool_summary(r#"{"other":1}"#), r#"{"other":1}"#);
+    }
+
+    #[test]
+    fn condense_flattens_and_clips() {
+        assert_eq!(condense("a\n  b\tc", 90), "a b c");
+        assert_eq!(condense("abcdef", 3), "abc…");
+    }
+
+    #[test]
+    fn folder_header_defaults_to_new_session_until_named() {
+        let session_id = "01JABCDEF0123456789";
+        let fallback = short_id(session_id);
+
+        assert_eq!(
+            custom_session_title(session_id, "Plan the release"),
+            Some("Plan the release")
+        );
+        assert_eq!(custom_session_title(session_id, &fallback), None);
+        assert_eq!(custom_session_title(session_id, "  "), None);
+        assert_eq!(
+            folder_session_title(session_id, "Plan the release").as_ref(),
+            "Plan the release"
+        );
+        assert_eq!(
+            folder_session_title(session_id, &fallback).as_ref(),
+            "New session"
+        );
+        assert_eq!(
+            folder_session_title(session_id, "  ").as_ref(),
+            "New session"
+        );
+        assert_eq!(folder_session_title(session_id, "").as_ref(), "New session");
+        assert_eq!(
+            folder_session_title("startup://draft/123-0", "New session").as_ref(),
+            "New session"
+        );
+    }
+
+    #[test]
+    fn first_prompt_becomes_a_compact_provisional_title() {
+        assert_eq!(
+            first_prompt_title("  help me   improve the session sidebar\nplease ").as_deref(),
+            Some("help me improve the session sidebar please")
+        );
+        assert_eq!(first_prompt_title(" /model gpt-5.6 "), None);
+        assert!(first_prompt_title(&"x".repeat(80)).unwrap().ends_with('…'));
+    }
+
+    #[test]
+    fn tool_detail_pretty_prints_and_clips() {
+        let detail = tool_detail("bash", r#"{"a":1}"#, "line1\nline2");
+        assert!(detail.starts_with("Tool call\nbash\n"));
+        assert!(detail.contains("\"a\": 1"));
+        assert!(detail.contains("\n\nOutput\nline1\nline2"));
+        assert!(detail.contains("line2"));
+        let long: String = (0..50).map(|n| format!("l{n}\n")).collect();
+        let clipped = tool_detail("bash", "{}", &long);
+        assert!(clipped.contains("Tool call\nbash\n{}"));
+        assert!(clipped.contains("lines hidden"));
+        // The tail survives: results and errors live at the end of output.
+        assert!(clipped.contains("l49"));
+        assert!(clipped.contains("l0"));
+    }
+
+    #[test]
+    fn reasoning_tail_keeps_the_newest_words() {
+        assert_eq!(condense_tail("short", 200), "short");
+        let tail = condense_tail(&"word ".repeat(100), 20);
+        assert!(tail.starts_with('…'));
+        assert!(tail.ends_with("word"));
+    }
+
+    #[gpui::test]
+    fn full_live_reasoning_is_preserved_after_it_settles(cx: &mut gpui::TestAppContext) {
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.push_test_panel("session-a", cx);
+            workspace
+        });
+        let panel = workspace
+            .read_with(vcx, |workspace, _| workspace.test_panel(0))
+            .expect("panel exists");
+
+        panel.update(vcx, |panel, _| {
+            panel.items.clear();
+            let complete_thought = "a complete train of thought ".repeat(12);
+            panel.streaming_reasoning = complete_thought.clone();
+            panel.flush_reasoning();
+
+            assert!(panel.streaming_reasoning.is_empty());
+            assert!(matches!(panel.items.as_slice(), [Item::Reasoning(text)] if text == &complete_thought));
+        });
+    }
+
+    #[test]
+    fn adjacent_reasoning_segments_share_one_visual_block() {
+        let mut items = vec![Item::Reasoning("first thought".into())];
+        append_reasoning(&mut items, "second thought".into());
+
+        assert_eq!(items.len(), 1);
+        assert!(matches!(
+            &items[0],
+            Item::Reasoning(text) if text == "first thought\n\nsecond thought"
+        ));
+    }
+
+    #[gpui::test]
+    fn transcript_rows_stay_compact_and_preserve_sources(cx: &mut gpui::TestAppContext) {
+        assert!(
+            std::mem::size_of::<TranscriptRenderRow>() <= 6 * std::mem::size_of::<usize>(),
+            "settled rows must not reserve storage for the largest transcript Item"
+        );
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.push_test_panel("compact-rows", cx);
+            workspace
+        });
+        let panel = workspace.read_with(vcx, |w, _| w.test_panel(0).unwrap());
+        panel.update(vcx, |panel, _| {
+            *panel.items = vec![
+                Item::User("Question".into()),
+                Item::Reasoning("First α".into()),
+                Item::Todos(TodoCardPayload::default()),
+                Item::Reasoning("Second β".into()),
+                Item::Reasoning("Third γ".into()),
+                Item::Assistant("Answer".into()),
+                Item::Reasoning("Separate thought".into()),
+            ];
+            panel.streaming_reasoning = "Live δ".into();
+            panel.streaming_text = "Live answer".into();
+            let rows = panel.transcript_render_rows();
+            assert_eq!(rows.len(), 6);
+            assert!(matches!(rows[0].source, TranscriptRowSource::Settled(0)));
+            assert_eq!(rows[0].role, Some("you"));
+            assert!(rows[0].show_label);
+            assert_eq!(rows[1].index, 1);
+            assert!(matches!(&rows[1].source, TranscriptRowSource::Owned(item)
+                if matches!(item.as_ref(), Item::Reasoning(text) if text == "First α\n\nSecond β\n\nThird γ")));
+            assert!(matches!(rows[2].source, TranscriptRowSource::Settled(5)));
+            assert!(rows[2].show_label);
+            assert!(matches!(rows[3].source, TranscriptRowSource::Settled(6)));
+            assert_eq!(rows[4].index, usize::MAX - 1);
+            assert!(matches!(&rows[4].source, TranscriptRowSource::Owned(item)
+                if matches!(item.as_ref(), Item::Reasoning(text) if text == "Live δ")));
+            assert_eq!(rows[5].index, usize::MAX);
+            assert!(matches!(&rows[5].source, TranscriptRowSource::Owned(item)
+                if matches!(item.as_ref(), Item::Assistant(text) if text == "Live answer")));
+            for index in [1, 3, 4] {
+                assert_eq!(rows[index].role, None);
+                assert!(!rows[index].show_label);
+            }
+            assert!(!rows[5].show_label, "same speaker after reasoning stays unlabelled");
+            assert!(matches!(&panel.items[1], Item::Reasoning(text) if text == "First α"));
+        });
+    }
+
+    #[gpui::test]
+    fn reasoning_rows_never_get_role_captions(cx: &mut gpui::TestAppContext) {
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.push_test_panel("session-a", cx);
+            workspace
+        });
+        let panel = workspace
+            .read_with(vcx, |workspace, _| workspace.test_panel(0))
+            .unwrap();
+        panel.update(vcx, |panel, _| {
+            *panel.items = vec![
+                Item::Reasoning("First row".into()),
+                Item::User("Question".into()),
+                Item::Reasoning("After a user".into()),
+                Item::Reasoning("Another restored segment".into()),
+                Item::Assistant("Answer".into()),
+                Item::Reasoning("After an answer".into()),
+            ];
+            panel.streaming_reasoning = "Live segment".into();
+            let rows = panel.transcript_render_rows();
+            let mut thoughts = 0;
+            for row in rows {
+                let item = match &row.source {
+                    TranscriptRowSource::Settled(index) => &panel.items[*index],
+                    TranscriptRowSource::Owned(item) => item,
+                };
+                if matches!(item, Item::Reasoning(_)) {
+                    thoughts += 1;
+                    assert_eq!(row.role, None);
+                    assert!(!row.show_label, "thinking must never gain a role caption");
+                } else {
+                    assert!(row.show_label, "normal speaker labels are preserved");
+                }
+            }
+            assert_eq!(thoughts, 4);
+        });
+    }
+
+    #[gpui::test]
+    fn inline_reasoning_paints_full_markdown_live_and_settled(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| crate::bind_workspace_keys(cx));
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.push_test_panel("session-a", cx);
+            workspace
+        });
+        let panel = workspace
+            .read_with(vcx, |workspace, _| workspace.test_panel(0))
+            .unwrap();
+        let thought = format!(
+            "## A quiet heading\n\n{}\n\nThe **final sentence** is still here.",
+            "A complete thought, not a truncated preview. ".repeat(8)
+        );
+        panel.update(vcx, |panel, cx| {
+            panel.items.clear();
+            panel.apply(
+                &ApiEvent::ReasoningDelta {
+                    session_id: "session-a".into(),
+                    text: thought.clone(),
+                },
+                cx,
+            );
+        });
+        vcx.run_until_parked();
+        let live_bounds = vcx.debug_bounds("reasoning-inline").unwrap();
+        assert!(live_bounds.size.height > px(0.0));
+        let live_tail_selector =
+            Box::leak(format!("selectable-text-{}-2", usize::MAX - 1).into_boxed_str());
+        assert!(vcx.debug_bounds(live_tail_selector).is_some());
+
+        panel.update(vcx, |panel, cx| {
+            panel.apply(
+                &ApiEvent::ReasoningDone {
+                    session_id: "session-a".into(),
+                    duration_secs: None,
+                },
+                cx,
+            );
+        });
+        vcx.run_until_parked();
+        let settled_bounds = vcx.debug_bounds("reasoning-inline").unwrap();
+        assert_eq!(
+            live_bounds.size, settled_bounds.size,
+            "settling must not collapse thinking"
+        );
+        let heading = vcx.debug_bounds("selectable-text-0-0").unwrap();
+        let last_line = vcx.debug_bounds("selectable-text-0-2").unwrap();
+        assert!(
+            heading.size.height > last_line.size.height,
+            "thinking headings read as subsection titles above quieter body text"
+        );
+
+        // A quadruple click selects the entire Markdown leaf, not card chrome.
+        vcx.simulate_event(gpui::MouseDownEvent {
+            button: gpui::MouseButton::Left,
+            position: last_line.center(),
+            modifiers: gpui::Modifiers::default(),
+            click_count: 4,
+            first_mouse: false,
+        });
+        panel.update(vcx, |panel, cx| {
+            panel
+                .transcript_selection
+                .update(cx, |selection, cx| selection.copy(cx));
+        });
+        let copied = vcx
+            .update(|_, cx| cx.read_from_clipboard())
+            .and_then(|item| item.text());
+        assert_eq!(copied.as_deref(), Some("The final sentence is still here."));
+        assert_eq!(
+            vcx.debug_bounds("reasoning-inline").unwrap().size,
+            settled_bounds.size
+        );
+    }
+
+    #[test]
+    fn adjacent_reasoning_rows_are_coalesced_before_rendering() {
+        let rows = vec![
+            (4, Item::Reasoning("first thought".into())),
+            (5, Item::Reasoning("second thought".into())),
+            (usize::MAX - 1, Item::Reasoning("live thought".into())),
+        ];
+
+        let grouped = coalesce_reasoning_rows(rows);
+        assert_eq!(grouped.len(), 1);
+        assert!(matches!(
+            &grouped[0],
+            (4, Item::Reasoning(text))
+                if text == "first thought\n\nsecond thought\n\nlive thought"
+        ));
+    }
+
+    #[gpui::test]
+    fn reasoning_after_streamed_text_starts_a_new_block_below_it(cx: &mut gpui::TestAppContext) {
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.push_test_panel("session-a", cx);
+            workspace
+        });
+        let panel = workspace
+            .read_with(vcx, |workspace, _| workspace.test_panel(0))
+            .unwrap();
+        panel.update(vcx, |panel, cx| {
+            panel.items.clear();
+            let session_id = "session-a".to_string();
+            for event in [
+                ApiEvent::ReasoningDelta {
+                    session_id: session_id.clone(),
+                    text: "first thought".into(),
+                },
+                ApiEvent::TextDelta {
+                    session_id: session_id.clone(),
+                    text: "partial answer".into(),
+                    message_id: None,
+                },
+                ApiEvent::ReasoningDelta {
+                    session_id: session_id.clone(),
+                    text: "second thought".into(),
+                },
+            ] {
+                panel.apply(&event, cx);
+            }
+            // While live, the new thought paints after the text, not above it.
+            let rows = panel.transcript_render_rows();
+            let kinds: Vec<_> = rows
+                .iter()
+                .map(|row| match &row.source {
+                    TranscriptRowSource::Settled(index) => &panel.items[*index],
+                    TranscriptRowSource::Owned(item) => item.as_ref(),
+                })
+                .map(|item| match item {
+                    Item::Reasoning(text) => format!("thinking:{text}"),
+                    Item::Assistant(text) => format!("text:{text}"),
+                    _ => "other".into(),
+                })
+                .collect();
+            assert_eq!(
+                kinds,
+                [
+                    "thinking:first thought",
+                    "text:partial answer",
+                    "thinking:second thought"
+                ]
+            );
+
+            panel.apply(
+                &ApiEvent::ReasoningDone {
+                    session_id: session_id.clone(),
+                    duration_secs: None,
+                },
+                cx,
+            );
+            assert!(matches!(
+                panel.items.as_slice(),
+                [Item::Reasoning(a), Item::Assistant(b), Item::Reasoning(c)]
+                    if a == "first thought" && b == "partial answer" && c == "second thought"
+            ));
+        });
+    }
+
+    #[test]
+    fn reasoning_after_another_item_starts_a_new_block() {
+        let mut items = vec![Item::Assistant("answer".into())];
+        append_reasoning(&mut items, "new thought".into());
+
+        assert_eq!(items.len(), 2);
+        assert!(matches!(&items[1], Item::Reasoning(text) if text == "new thought"));
+    }
+
+    #[test]
+    fn ansi_escapes_are_stripped_from_tool_output() {
+        assert_eq!(strip_ansi("\u{1b}[1;32mok\u{1b}[0m done"), "ok done");
+        assert_eq!(strip_ansi("\u{1b}]0;title\u{7}text"), "text");
+        assert_eq!(strip_ansi("plain"), "plain");
+        assert!(tool_detail("bash", "{}", "\u{1b}[31mred\u{1b}[0m").contains("red"));
+        assert!(!tool_detail("bash", "{}", "\u{1b}[31mred\u{1b}[0m").contains('\u{1b}'));
+    }
+
+    fn route(model: &str, api_method: &str) -> jcode_sdk::ModelRouteInfo {
+        jcode_sdk::ModelRouteInfo {
+            usage: None,
+            model: model.into(),
+            provider: "openai".into(),
+            api_method: api_method.into(),
+            available: true,
+            detail: String::new(),
+        }
+    }
+
+    #[test]
+    fn auth_method_is_read_from_the_current_models_route() {
+        let routes = vec![
+            route("gpt-5.6-sol", "openai-oauth"),
+            route("claude-fable-5", "anthropic-api-key"),
+        ];
+        assert_eq!(
+            auth_method_for_model(Some("gpt-5.6-sol"), &routes).as_deref(),
+            Some("oauth")
+        );
+        assert_eq!(
+            auth_method_for_model(Some("claude-fable-5"), &routes).as_deref(),
+            Some("api key")
+        );
+        // Unknown model or no model: nothing to claim.
+        assert_eq!(auth_method_for_model(Some("other"), &routes), None);
+        assert_eq!(auth_method_for_model(None, &routes), None);
+    }
+
+    #[test]
+    fn model_picker_only_offers_available_routes() {
+        let mut unavailable = route("luna", "openai-api-key");
+        unavailable.available = false;
+        let routes = vec![
+            unavailable,
+            route("gpt-5.6-sol", "openai-api-key"),
+            route("gpt-5.6-sol", "openai-oauth"),
+            route("claude-fable-5", "anthropic-api-key"),
+        ];
+
+        assert_eq!(
+            available_model_names(&routes),
+            vec!["claude-fable-5", "gpt-5.6-sol"]
+        );
+    }
+
+    #[gpui::test]
+    fn runtime_catalog_only_populates_picker_with_available_routes(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| crate::bind_workspace_keys(cx));
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.push_test_panel("session-a", cx);
+            workspace
+        });
+
+        workspace.update(vcx, |workspace, cx| {
+            let panel = workspace.test_panel(0).expect("panel exists");
+            panel.update(cx, |panel, cx| {
+                let mut unavailable = route("luna", "openai-api-key");
+                unavailable.available = false;
+                panel.apply(
+                    &ApiEvent::RuntimeInfo {
+                        session_id: "session-a".into(),
+                        provider: Some("openai".into()),
+                        model: Some("gpt-5.6-sol".into()),
+                        reasoning_effort: None,
+                        auth_method: None,
+                        routes: vec![unavailable, route("gpt-5.6-sol", "openai-api-key")],
+                    },
+                    cx,
+                );
+                assert_eq!(
+                    panel.input.read(cx).command_models(),
+                    &["openai-api:gpt-5.6-sol"],
+                    "an unavailable Luna route must not reach the visible picker"
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn account_label_follows_the_serving_credential_not_the_first_route() {
+        // A Claude model lists its API key route before its OAuth route.
+        let routes = vec![
+            route("claude-opus-5-5", "claude-api"),
+            route("claude-opus-5-5", "claude-oauth"),
+        ];
+        // Without a daemon report, OAuth wins like the daemon's auto rule.
+        assert_eq!(
+            auth_method_for_model(Some("claude-opus-5-5"), &routes).as_deref(),
+            Some("oauth")
+        );
+        // An unavailable OAuth route does not serve the session.
+        let mut no_login = routes.clone();
+        no_login[1].available = false;
+        assert_eq!(
+            auth_method_for_model(Some("claude-opus-5-5"), &no_login).as_deref(),
+            Some("api key")
+        );
+        assert_eq!(human_auth_method("oauth"), "oauth");
+        assert_eq!(human_auth_method("api_key"), "api key");
+        assert_eq!(human_auth_method("claude-api"), "api key");
+    }
+
+    #[gpui::test]
+    fn runtime_info_auth_method_overrides_route_guessing(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| crate::bind_workspace_keys(cx));
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.push_test_panel("session-a", cx);
+            workspace
+        });
+
+        workspace.update(vcx, |workspace, cx| {
+            let panel = workspace.test_panel(0).expect("panel exists");
+            panel.update(cx, |panel, cx| {
+                panel.apply(
+                    &ApiEvent::RuntimeInfo {
+                        session_id: "session-a".into(),
+                        provider: Some("Claude".into()),
+                        model: Some("claude-opus-5-5".into()),
+                        reasoning_effort: None,
+                        auth_method: Some("api_key".into()),
+                        routes: vec![
+                            route("claude-opus-5-5", "claude-api"),
+                            route("claude-opus-5-5", "claude-oauth"),
+                        ],
+                    },
+                    cx,
+                );
+                assert_eq!(panel.auth_method.as_deref(), Some("api key"));
+                // A same-model credential switch reported by the daemon.
+                panel.apply(
+                    &ApiEvent::ModelInfo {
+                        session_id: "session-a".into(),
+                        provider: Some("Claude".into()),
+                        model: Some("claude-opus-5-5".into()),
+                        reasoning_effort: None,
+                        auth_method: Some("oauth".into()),
+                    },
+                    cx,
+                );
+                assert_eq!(panel.auth_method.as_deref(), Some("oauth"));
+            });
+        });
+    }
+
+    #[test]
+    fn compact_directory_marks_home_but_not_its_children() {
+        let home = std::env::var("HOME").expect("test home");
+        assert_eq!(compact_dir(&home), "~ (home)");
+        assert_eq!(compact_dir(&format!("{home}/project")), "~/project");
+        assert_eq!(
+            compact_dir(&format!("{home}-other")),
+            format!("{home}-other")
+        );
+    }
+
+    #[test]
+    fn footer_labels_keep_model_account_and_context_separate() {
+        assert_eq!(
+            account_method_label(Some("openai"), Some("oauth")),
+            "OpenAI · OAuth"
+        );
+        assert_eq!(
+            account_method_label(Some("anthropic"), Some("api key")),
+            "Anthropic · API key"
+        );
+        assert_eq!(
+            account_method_label(Some("Anthropic API"), Some("api key")),
+            "Anthropic · API key"
+        );
+        assert_eq!(
+            account_method_label(Some("claude-api"), Some("api key")),
+            "Anthropic · API key"
+        );
+        assert_eq!(account_method_label(Some("OpenAI API"), None), "OpenAI");
+        assert_eq!(
+            account_method_label(Some("My Local Router"), Some("custom-acp")),
+            "My Local Router · custom-acp"
+        );
+        assert_eq!(account_method_label(None, Some("oauth")), "OAuth");
+        assert_eq!(account_method_label(Some("openai"), None), "OpenAI");
+        assert_eq!(account_method_label(None, None), "Accounts");
+        assert_eq!(account_method_label(Some(""), Some("")), "Accounts");
+        assert_eq!(context_usage_label(None, None), None);
+        assert_eq!(
+            context_usage_label(Some("gpt-5.6-sol"), Some(100_000)).as_deref(),
+            Some("100.0k / 272.0k (37%)")
+        );
+        assert_eq!(
+            context_usage_label(Some("mystery-model"), Some(1_500)).as_deref(),
+            Some("1.5k tokens")
+        );
+    }
+
+    #[test]
+    fn context_windows_match_the_families_jcode_uses() {
+        assert_eq!(context_window_for_model("gpt-5.6-sol"), Some(272_000));
+        assert_eq!(context_window_for_model("gpt-5.4-alto"), Some(1_000_000));
+        assert_eq!(
+            context_window_for_model("gpt-5.2-chat-latest"),
+            Some(128_000)
+        );
+        assert_eq!(
+            context_window_for_model("claude-sonnet-4-20250514"),
+            Some(200_000)
+        );
+        assert_eq!(context_window_for_model("gemini-3-pro"), Some(1_000_000));
+        assert_eq!(context_window_for_model("mystery"), None);
+    }
+
+    #[test]
+    fn token_counts_format_compactly() {
+        assert_eq!(format_tokens(950), "950");
+        assert_eq!(format_tokens(12_500), "12.5k");
+        assert_eq!(format_tokens(1_048_576), "1.0m");
+    }
+
+    #[test]
+    fn discrete_wheel_glide_eases_and_preserves_the_full_distance() {
+        let mut glide = WheelGlide::default();
+        glide.push(120.0);
+        let first = glide
+            .take_step(Duration::from_millis(16))
+            .expect("wheel input starts a glide");
+        assert!(first > 0.0 && first < 120.0);
+
+        let mut traveled = first;
+        while let Some(step) = glide.take_step(Duration::from_millis(16)) {
+            traveled += step;
+        }
+        assert!((traveled - 120.0).abs() <= WheelGlide::SETTLE);
+    }
+
+    #[test]
+    fn reversing_the_wheel_cancels_old_direction_momentum() {
+        let mut glide = WheelGlide::default();
+        glide.push(120.0);
+        let _ = glide.take_step(Duration::from_millis(16));
+        glide.push(-40.0);
+        assert!(
+            glide
+                .take_step(Duration::from_millis(16))
+                .is_some_and(|step| step < 0.0)
+        );
+    }
+
+    /// The acceptance path for the scroll-lock fix: a real wheel event over a
+    /// real painted transcript releases stick-to-bottom, the "↓ latest" chip
+    /// paints, and clicking the chip re-engages following. Before the fix the
+    /// panel yanked the view back down on every streamed event.
+    #[gpui::test]
+    fn scrolling_up_releases_follow_mode_and_the_chip_restores_it(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| crate::bind_workspace_keys(cx));
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.push_test_panel("session-a", cx);
+            workspace
+        });
+        vcx.run_until_parked();
+        let panel = workspace
+            .read_with(vcx, |workspace, _| workspace.test_panel(0))
+            .expect("panel exists");
+
+        // A long transcript, so the scroll region actually overflows.
+        panel.update(vcx, |panel, cx| {
+            for n in 0..80 {
+                panel.items.push(Item::Assistant(format!("message {n}")));
+            }
+            cx.notify();
+        });
+        vcx.run_until_parked();
+        // Scroll metrics are produced during layout. Repaint once with those
+        // measured metrics, as the running app does on its next frame.
+        panel.update(vcx, |_panel, cx| cx.notify());
+        vcx.run_until_parked();
+        assert!(
+            panel.read_with(vcx, |panel, _| panel.stick_to_bottom),
+            "a fresh panel follows the stream"
+        );
+        assert!(
+            vcx.debug_bounds("jump-to-latest").is_none(),
+            "no chip while following"
+        );
+        let scrollbar_before = vcx
+            .debug_bounds("transcript-scrollbar")
+            .expect("an overflowing transcript paints a scrollbar");
+        assert_eq!(scrollbar_before.size.width, px(3.0));
+        assert!(scrollbar_before.size.height >= px(28.0));
+
+        // A real discrete upward wheel event over the transcript. Unlike a
+        // touchpad pixel delta, it must be captured and animated rather than
+        // moving the list by the full notch distance in this dispatch.
+        let transcript = vcx.debug_bounds("transcript").expect("transcript painted");
+        let offset_before = panel.read_with(vcx, |panel, _| panel.test_scroll_offset_y());
+        vcx.simulate_event(gpui::ScrollWheelEvent {
+            position: transcript.center(),
+            delta: gpui::ScrollDelta::Lines(gpui::point(0.0, 3.0)),
+            modifiers: gpui::Modifiers::default(),
+            touch_phase: gpui::TouchPhase::Moved,
+        });
+        let (offset_during_dispatch, glide_started) = panel.read_with(vcx, |panel, _| {
+            (
+                panel.test_scroll_offset_y(),
+                panel.transcript_wheel_frame.is_some(),
+            )
+        });
+        assert_eq!(
+            offset_during_dispatch, offset_before,
+            "a wheel notch is eased instead of jumping immediately"
+        );
+        assert!(
+            glide_started,
+            "the painted transcript starts a momentum glide"
+        );
+        panel.update(vcx, |panel, cx| {
+            panel.transcript_wheel_frame = None;
+            assert!(panel.advance_transcript_wheel(cx));
+        });
+        let offset_after_frame = panel.read_with(vcx, |panel, _| panel.test_scroll_offset_y());
+        assert_ne!(
+            offset_after_frame, offset_before,
+            "one eased frame moves the real transcript list state"
+        );
+        vcx.run_until_parked();
+        panel.update(vcx, |_panel, cx| cx.notify());
+        vcx.run_until_parked();
+        assert!(
+            !panel.read_with(vcx, |panel, _| panel.stick_to_bottom),
+            "scrolling up must release follow mode"
+        );
+        let scrollbar_after = vcx
+            .debug_bounds("transcript-scrollbar")
+            .expect("the scrollbar remains visible after scrolling");
+        assert_eq!(scrollbar_after.size.width, px(3.0));
+        let chip = vcx
+            .debug_bounds("jump-to-latest")
+            .expect("the catch-up chip paints once detached");
+        assert!(chip.size.width > px(0.) && chip.size.height > px(0.));
+
+        // While detached, streamed events must not yank the view back down.
+        let offset_before = panel.read_with(vcx, |panel, _| panel.test_scroll_offset_y());
+        panel.update(vcx, |panel, cx| {
+            panel.apply(
+                &ApiEvent::TextDelta {
+                    message_id: None,
+                    session_id: "session-a".into(),
+                    text: "more streamed text".into(),
+                },
+                cx,
+            );
+        });
+        vcx.run_until_parked();
+        let offset_after = panel.read_with(vcx, |panel, _| panel.test_scroll_offset_y());
+        assert_eq!(
+            offset_before, offset_after,
+            "streaming must not move a detached viewport"
+        );
+
+        // Clicking the chip re-engages following and removes the chip.
+        vcx.simulate_click(chip.center(), gpui::Modifiers::default());
+        vcx.run_until_parked();
+        assert!(
+            panel.read_with(vcx, |panel, _| panel.stick_to_bottom),
+            "the chip must restore follow mode"
+        );
+        assert!(
+            vcx.debug_bounds("jump-to-latest").is_none(),
+            "the chip disappears once following again"
+        );
+    }
+
+    /// The acceptance path for the code-copy affordance: the button paints in
+    /// a real assistant message and a real click puts the code body (not the
+    /// fence syntax) on the clipboard.
+    #[gpui::test]
+    fn clicking_copy_on_a_code_block_fills_the_clipboard(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| crate::bind_workspace_keys(cx));
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.push_test_panel("session-a", cx);
+            workspace
+        });
+        vcx.run_until_parked();
+        let panel = workspace
+            .read_with(vcx, |workspace, _| workspace.test_panel(0))
+            .expect("panel exists");
+        panel.update(vcx, |panel, cx| {
+            panel.items.push(Item::Assistant(
+                "```rust\nfn main() {\n    println!(\"hi\");\n}\n```".into(),
+            ));
+            cx.notify();
+        });
+        vcx.run_until_parked();
+
+        let button = vcx
+            .debug_bounds("code-copy")
+            .expect("the copy button paints on a fenced block");
+        vcx.simulate_click(button.center(), gpui::Modifiers::default());
+        vcx.run_until_parked();
+
+        let copied = vcx
+            .update(|_, cx| cx.read_from_clipboard())
+            .and_then(|item| item.text())
+            .expect("clicking copy fills the clipboard");
+        assert_eq!(copied, "fn main() {\n    println!(\"hi\");\n}");
+    }
+
+    /// Progress reuses a quiet row, then finishes as a compact result card.
+    #[gpui::test]
+    fn background_progress_updates_one_native_card(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| crate::bind_workspace_keys(cx));
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.push_test_panel("session-a", cx);
+            workspace
+        });
+        vcx.run_until_parked();
+        let panel = workspace
+            .read_with(vcx, |workspace, _| workspace.test_panel(0))
+            .expect("panel exists");
+
+        for (percent, summary, done) in [
+            (Some(35.0), "35% · Running tests", false),
+            (
+                None,
+                "Compiling dependencies and waiting for the linker to finish a very long build\nAdditional output stays in the tooltip",
+                false,
+            ),
+            (None, "✓ completed · 8.2s · exit 0", true),
+        ] {
+            panel.update(vcx, |panel, cx| {
+                panel.apply(
+                    &ApiEvent::BackgroundProgress {
+                        session_id: "session-a".into(),
+                        task_id: "task-42".into(),
+                        label: "Workspace tests".into(),
+                        percent,
+                        summary: summary.into(),
+                        done,
+                    },
+                    cx,
+                );
+            });
+            vcx.run_until_parked();
+            let row = vcx
+                .debug_bounds("background-task-card")
+                .expect("task row paints");
+            if done {
+                assert!(vcx.debug_bounds("background-task-completed").is_some());
+                assert!(
+                    row.size.height > px(28.0) && row.size.height <= px(100.0),
+                    "finished tasks use a compact result card: {row:?}"
+                );
+            } else {
+                assert!(vcx.debug_bounds("background-task-completed").is_none());
+                assert!(
+                    row.size.height <= px(28.0),
+                    "running tasks stay one compact row: {row:?}"
+                );
+            }
+        }
+
+        assert!(vcx.debug_bounds("background-task-card").is_some());
+        panel.read_with(vcx, |panel, _| {
+            let tasks: Vec<_> = panel
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    Item::BackgroundTask {
+                        task_id,
+                        summary,
+                        percent,
+                        done,
+                        ..
+                    } => Some((task_id, summary, percent, done)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(tasks.len(), 1, "progress ticks update rather than append");
+            assert_eq!(tasks[0].0, "task-42");
+            assert_eq!(tasks[0].1, "✓ completed · 8.2s · exit 0");
+            assert_eq!(*tasks[0].2, None);
+            assert!(*tasks[0].3);
+        });
+    }
+
+    #[test]
+    fn tool_token_badge_estimates_output_and_colors_severity_boundaries() {
+        let theme = Theme::global();
+        for (tokens, label, color) in [
+            (0, "~0 tok", theme.OK),
+            (1_900, "~1.9k tok", theme.OK),
+            (3_999, "~3.9k tok", theme.OK),
+            (4_000, "~4k tok", theme.WARN),
+            (11_999, "~11k tok", theme.WARN),
+            (12_000, "~12k tok", theme.ERROR),
+        ] {
+            assert_eq!(
+                tool_output_token_badge(&"x".repeat(tokens * 4)),
+                (label.into(), color)
+            );
+        }
+        assert_eq!(tool_output_token_badge("x").0, "~1 tok");
+        assert_eq!(
+            tool_output_token_badge(&"xxx\n".repeat(1_900)).0,
+            "~1.9k tok"
+        );
+    }
+
+    #[test]
+    fn tool_token_badge_reports_the_original_size_of_trimmed_mcp_results() {
+        let output = format!(
+            "{}\n\n[MCP result trimmed from 46210 to 7980 tokens to fit the context budget. \
+             Pass accept_large_output: true for the full result, or narrow the request.]",
+            "x".repeat(31_900)
+        );
+        let (label, _) = tool_output_token_badge(&output);
+        assert_eq!(label, "~8k tok of 46k");
+        assert_eq!(trimmed_mcp_original_tokens("plain output"), None);
+    }
+
+    fn settle_tool_details(panel: &Entity<Panel>, cx: &mut gpui::VisualTestContext) {
+        panel.update(cx, |panel, cx| {
+            for motion in panel.tool_detail_motion.values_mut() {
+                motion.sample(Instant::now() + Duration::from_secs(1));
+            }
+            cx.notify();
+        });
+        cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn tool_token_badge_paints_for_empty_and_single_line_results(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| crate::bind_workspace_keys(cx));
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.push_test_panel("session-a", cx);
+            workspace
+        });
+        let panel = workspace
+            .read_with(vcx, |workspace, _| workspace.test_panel(0))
+            .unwrap();
+        for (done, output, failed) in [
+            (false, "", false),
+            (true, "", false),
+            (true, "ok", false),
+            (true, "failed", true),
+            (false, "failed", true),
+        ] {
+            panel.update(vcx, |panel, cx| {
+                *panel.items = vec![Item::Tool {
+                    call_id: "token-visibility".into(),
+                    name: "bash".into(),
+                    input: r#"{"command":"true"}"#.into(),
+                    output: output.into(),
+                    done,
+                    error: failed.then(|| "Tool failed".into()),
+                }];
+                cx.notify();
+            });
+            vcx.run_until_parked();
+            let button = vcx
+                .debug_bounds("tool-output-size")
+                .expect("running and finished tools expose their output toggle");
+            assert!(
+                vcx.debug_bounds("tool-name").is_some(),
+                "tool names persist after completion"
+            );
+            assert_eq!(
+                vcx.debug_bounds("tool-row-running").is_some(),
+                !done && !failed
+            );
+            for selector in ["tool-identity-pill", "tool-summary"] {
+                let text = vcx.debug_bounds(selector).expect("tool label paints");
+                assert_eq!(
+                    text.size.height, button.size.height,
+                    "{selector} fills the pill height"
+                );
+                assert_eq!(
+                    text.origin.y, button.origin.y,
+                    "{selector} aligns with the pill"
+                );
+            }
+            let pill = vcx.debug_bounds("tool-identity-pill").unwrap();
+            let name = vcx.debug_bounds("tool-name").unwrap();
+            let glyph = vcx.debug_bounds("tool-type-icon").unwrap();
+            assert!(pill.left() < glyph.left() && name.right() < pill.right());
+            assert!(glyph.right() < name.left());
+            assert!((f32::from(glyph.center().y - name.center().y)).abs() < 1.0);
+            vcx.simulate_click(pill.center(), gpui::Modifiers::default());
+            vcx.run_until_parked();
+            assert!(
+                vcx.debug_bounds("tool-detail").is_none(),
+                "identity pill is not an expansion control"
+            );
+            let status_selector = if failed {
+                "tool-icon-failed"
+            } else if done {
+                "tool-icon-succeeded"
+            } else {
+                "tool-icon-running"
+            };
+            assert!(vcx.debug_bounds(status_selector).is_some());
+            let icon = vcx
+                .debug_bounds("tool-type-icon")
+                .expect("tool icon paints");
+            let name = vcx.debug_bounds("tool-summary").unwrap();
+            assert_eq!(icon.size, gpui::size(px(14.0), px(14.0)));
+            assert!(icon.right() <= name.left(), "icon precedes the intent");
+            assert!((f32::from(icon.center().y - name.center().y)).abs() < 1.0);
+            vcx.simulate_click(button.center(), gpui::Modifiers::default());
+            vcx.run_until_parked();
+            assert!(vcx.debug_bounds("tool-detail").is_some());
+            settle_tool_details(&panel, vcx);
+            let button = vcx.debug_bounds("tool-output-size").unwrap();
+            vcx.simulate_click(button.center(), gpui::Modifiers::default());
+            vcx.run_until_parked();
+            settle_tool_details(&panel, vcx);
+            assert!(vcx.debug_bounds("tool-detail").is_none());
+        }
+    }
+
+    #[gpui::test]
+    fn only_the_token_button_toggles_the_tool_output_card(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| crate::bind_workspace_keys(cx));
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.push_test_panel("session-a", cx);
+            workspace
+        });
+        // Keep the long expanded card and its header inside the viewport.
+        // Otherwise bottom anchoring can clip the header behind workspace chrome,
+        // and a debug-bounds click hits the chrome rather than the tool row.
+        let handle = vcx.update(|window, _| window.window_handle());
+        vcx.simulate_window_resize(handle, gpui::size(px(1200.), px(1400.)));
+        vcx.run_until_parked();
+        let panel = workspace
+            .read_with(vcx, |workspace, _| workspace.test_panel(0))
+            .expect("panel exists");
+
+        // A finished call with long, ANSI-colored output: the shapes the
+        // clipping and stripping paths exist for.
+        let output: String = (0..60)
+            .map(|n| format!("\u{1b}[32mline {n}\u{1b}[0m\n"))
+            .collect();
+        panel.update(vcx, |panel, cx| {
+            panel.items.push(Item::Tool {
+                call_id: "call-1".into(),
+                name: "bash".into(),
+                input: r#"{"command":"make build","intent":"compile"}"#.into(),
+                output,
+                done: true,
+                error: None,
+            });
+            cx.notify();
+        });
+        vcx.run_until_parked();
+
+        // Collapsed: the size hint paints, the detail does not.
+        let hint = vcx
+            .debug_bounds("tool-output-size")
+            .expect("a collapsed finished call shows its output size");
+        assert!(hint.size.width > px(0.));
+        assert!(
+            vcx.debug_bounds("tool-detail").is_none(),
+            "detail stays hidden until expanded"
+        );
+
+        // The row itself is no longer an expansion target.
+        // The compact header's center may land on the token button.
+        // Click the intent to exercise the non-interactive part of the row.
+        let name = vcx.debug_bounds("tool-summary").unwrap();
+        vcx.simulate_click(name.center(), gpui::Modifiers::default());
+        vcx.run_until_parked();
+        assert!(vcx.debug_bounds("tool-detail").is_none());
+        vcx.simulate_click(hint.center(), gpui::Modifiers::default());
+        vcx.run_until_parked();
+        settle_tool_details(&panel, vcx);
+        let detail = vcx
+            .debug_bounds("tool-detail")
+            .expect("clicking the token button expands the output card");
+        assert!(detail.size.height > px(0.));
+        let header = vcx.debug_bounds("tool-header").unwrap();
+        assert_eq!(detail.left(), header.left() + px(24.));
+        assert!(detail.top() >= header.bottom() + px(4.));
+        assert!(
+            vcx.debug_bounds("tool-output-size").is_some(),
+            "token cost remains visible alongside the expanded detail"
+        );
+        // The rendered detail is the formatted string: ANSI-free, head and
+        // tail kept around the fold marker.
+        let rendered = panel.read_with(vcx, |panel, _| match &panel.items[0] {
+            Item::Tool {
+                name,
+                input,
+                output,
+                ..
+            } => tool_detail(name, input, output),
+            other => panic!("expected the tool row, got {other:?}"),
+        });
+        assert!(!rendered.contains('\u{1b}'), "detail must be ANSI-free");
+        assert!(rendered.contains("Tool call\nbash\n"));
+        assert!(rendered.contains("\"command\": \"make build\""));
+        assert!(rendered.contains("\n\nOutput\n"));
+        assert!(rendered.contains("line 0") && rendered.contains("line 59"));
+        assert!(rendered.contains("lines hidden"));
+
+        // Clicking the header or output card leaves it open.
+        // The compact header's center may land on the token button.
+        // Click the intent to exercise the non-interactive part of the row.
+        let name = vcx.debug_bounds("tool-summary").unwrap();
+        vcx.simulate_click(name.center(), gpui::Modifiers::default());
+        vcx.run_until_parked();
+        assert!(vcx.debug_bounds("tool-detail").is_some());
+        vcx.simulate_click(detail.center(), gpui::Modifiers::default());
+        vcx.run_until_parked();
+        assert!(vcx.debug_bounds("tool-detail").is_some());
+
+        // Only a second click on the token button collapses it again.
+        let button = vcx.debug_bounds("tool-output-size").unwrap();
+        vcx.simulate_click(button.center(), gpui::Modifiers::default());
+        vcx.run_until_parked();
+        assert!(
+            vcx.debug_bounds("tool-detail").is_some(),
+            "closing card remains mounted during exit"
+        );
+        panel.read_with(vcx, |panel, _| {
+            assert!(!panel.expanded_tools.contains("call-1"));
+            assert!(panel.tool_detail_motion.contains_key("call-1"));
+        });
+        // Reverse a closing card without unmounting it or jumping back to zero.
+        vcx.simulate_click(button.center(), gpui::Modifiers::default());
+        vcx.run_until_parked();
+        assert!(vcx.debug_bounds("tool-detail").is_some());
+        settle_tool_details(&panel, vcx);
+        assert!(panel.read_with(vcx, |panel, _| panel.expanded_tools.contains("call-1")));
+        let button = vcx.debug_bounds("tool-output-size").unwrap();
+        vcx.simulate_click(button.center(), gpui::Modifiers::default());
+        vcx.run_until_parked();
+        settle_tool_details(&panel, vcx);
+        assert!(
+            vcx.debug_bounds("tool-detail").is_none(),
+            "the exit unmounts after its final frame"
+        );
+
+        vcx.update(|_, cx| cx.set_reduce_motion(true));
+        let button = vcx.debug_bounds("tool-output-size").unwrap();
+        vcx.simulate_click(button.center(), gpui::Modifiers::default());
+        vcx.run_until_parked();
+        assert!(vcx.debug_bounds("tool-detail").is_some());
+        assert!(panel.read_with(vcx, |panel, _| panel.tool_detail_motion.is_empty()));
+        let button = vcx.debug_bounds("tool-output-size").unwrap();
+        vcx.simulate_click(button.center(), gpui::Modifiers::default());
+        vcx.run_until_parked();
+        assert!(vcx.debug_bounds("tool-detail").is_none());
+    }
+
+    #[gpui::test]
+    fn inline_tool_rows_keep_status_errors_and_edit_previews(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| crate::bind_workspace_keys(cx));
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.push_test_panel("session-a", cx);
+            workspace
+        });
+        vcx.run_until_parked();
+        let panel = workspace
+            .read_with(vcx, |workspace, _| workspace.test_panel(0))
+            .expect("panel exists");
+
+        for (name, input, done, error, preview) in [
+            ("bash", r#"{"command":"cargo test"}"#, false, None, false),
+            (
+                "bash",
+                r#"{"command":"cargo test"}"#,
+                true,
+                Some("build failed"),
+                false,
+            ),
+            (
+                "edit",
+                r#"{"intent":"Clarify navigation","file_path":"src/main.rs","old_string":"old","new_string":"new"}"#,
+                true,
+                None,
+                true,
+            ),
+            (
+                "edit",
+                r#"{"intent":"Clarify navigation","file_path":"src/main.rs","old_string":"old","new_string":"new"}"#,
+                false,
+                None,
+                true,
+            ),
+            (
+                "edit",
+                r#"{"intent":"Clarify navigation","file_path":"src/main.rs","old_string":"old","new_string":"new"}"#,
+                true,
+                Some("original text not found"),
+                true,
+            ),
+            (
+                "edit",
+                r#"{"intent":"Clarify navigation","file_path":"#,
+                false,
+                None,
+                false,
+            ),
+        ] {
+            panel.update(vcx, |panel, cx| {
+                *panel.items = vec![Item::Tool {
+                    call_id: "inline-call".into(),
+                    name: name.into(),
+                    input: input.into(),
+                    output: String::new(),
+                    done,
+                    error: error.map(str::to_owned),
+                }];
+                cx.notify();
+            });
+            vcx.run_until_parked();
+            assert_eq!(vcx.debug_bounds("tool-error").is_some(), error.is_some());
+            assert_eq!(vcx.debug_bounds("code-edit-preview").is_some(), preview);
+            if preview {
+                assert!(vcx.debug_bounds("tool-type-icon").is_some());
+                let card = vcx
+                    .debug_bounds("edit-preview-card-0")
+                    .expect("edit card paints");
+                for selector in [
+                    "tool-inline",
+                    "tool-header",
+                    "tool-output-size",
+                    "tool-detail",
+                ] {
+                    assert!(
+                        vcx.debug_bounds(selector).is_none(),
+                        "no duplicate {selector}"
+                    );
+                }
+                for selector in [
+                    "edit-preview-intent-0",
+                    "edit-preview-footer-0",
+                    "tool-error",
+                ] {
+                    if matches!(selector, "tool-error" | "edit-preview-footer-0") && error.is_none()
+                    {
+                        assert!(vcx.debug_bounds(selector).is_none());
+                        continue;
+                    }
+                    let content = vcx.debug_bounds(selector).expect("card content paints");
+                    assert!(content.origin.x >= card.origin.x);
+                    assert!(content.right() <= card.right());
+                    assert!(content.origin.y >= card.origin.y);
+                    assert!(content.bottom() <= card.bottom());
+                }
+                continue;
+            }
+            let row = vcx.debug_bounds("tool-inline").expect("inline row paints");
+            assert!(vcx.debug_bounds("tool-type-icon").is_some());
+            let header = vcx
+                .debug_bounds("tool-header")
+                .expect("status header paints");
+            assert!(row.size.height >= header.size.height);
+            assert!(vcx.debug_bounds("tool-card").is_none());
+            assert_eq!(vcx.debug_bounds("tool-error").is_some(), error.is_some());
+            assert_eq!(vcx.debug_bounds("code-edit-preview").is_some(), preview);
+            for selector in ["tool-error", "code-edit-preview"] {
+                if let Some(body) = vcx.debug_bounds(selector) {
+                    assert_eq!(body.origin.x, header.origin.x + px(24.0));
+                    assert!(body.origin.y >= header.bottom());
+                }
+            }
+        }
+    }
+
+    /// Legacy harness input deltas have no call id. Exercise the real event and
+    /// paint path so an intent cannot silently disappear between transport and
+    /// the visible tool header again.
+    #[gpui::test]
+    fn legacy_tool_input_renders_its_intent_in_the_tool_header(cx: &mut gpui::TestAppContext) {
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.push_test_panel("session-a", cx);
+            workspace
+        });
+        vcx.run_until_parked();
+        let panel = workspace
+            .read_with(vcx, |workspace, _| workspace.test_panel(0))
+            .expect("panel exists");
+
+        panel.update(vcx, |panel, cx| {
+            panel.apply(
+                &ApiEvent::ToolStart {
+                    session_id: "session-a".into(),
+                    call_id: "call-1".into(),
+                    name: "bash".into(),
+                },
+                cx,
+            );
+            panel.apply(
+                &ApiEvent::ToolInputDelta {
+                    session_id: "session-a".into(),
+                    call_id: String::new(),
+                    delta: r#"{"intent":"check the build","command":"cargo test"}"#.into(),
+                },
+                cx,
+            );
+        });
+        vcx.run_until_parked();
+
+        let summary = panel.read_with(vcx, |panel, _| match &panel.items[0] {
+            Item::Tool { input, .. } => tool_summary(input),
+            other => panic!("expected the tool row, got {other:?}"),
+        });
+        assert_eq!(summary, "check the build");
+        let rendered = vcx
+            .debug_bounds("tool-summary")
+            .expect("the intent summary paints in the tool header");
+        assert!(rendered.size.width > px(0.) && rendered.size.height > px(0.));
+    }
+
+    #[gpui::test]
+    fn consecutive_tool_rows_use_compact_spacing(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| crate::bind_workspace_keys(cx));
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.push_test_panel("session-a", cx);
+            workspace
+        });
+        vcx.run_until_parked();
+        let panel = workspace
+            .read_with(vcx, |workspace, _| workspace.test_panel(0))
+            .expect("panel exists");
+        panel.update(vcx, |panel, cx| {
+            *panel.items = (0..2)
+                .map(|index| Item::Tool {
+                    call_id: format!("call-{index}"),
+                    name: "bash".into(),
+                    input: r#"{"command":"echo hello"}"#.into(),
+                    output: "hello".into(),
+                    done: true,
+                    error: None,
+                })
+                .collect();
+            cx.notify();
+        });
+        vcx.run_until_parked();
+        let first = vcx
+            .debug_bounds("transcript-row-0")
+            .expect("first tool row");
+        let second = vcx
+            .debug_bounds("transcript-row-1")
+            .expect("second tool row");
+        assert_eq!(
+            first.size.height - second.size.height,
+            px(8.0),
+            "adjacent tools use 2px padding instead of the 10px message boundary"
+        );
+        let header = vcx.debug_bounds("tool-header").expect("tool header");
+        assert!(header.size.height < px(24.0), "tool header stays compact");
+    }
+
+    /// Inline tools must retain their intrinsic row height when enough of them
+    /// are appended to make the transcript scroll. Without `flex_none`, the
+    /// transcript's flex layout distributes the height deficit across every
+    /// row and visibly squashes their headers.
+    #[gpui::test]
+    fn tool_rows_do_not_shrink_when_the_transcript_overflows(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| crate::bind_workspace_keys(cx));
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.push_test_panel("session-a", cx);
+            workspace
+        });
+        vcx.run_until_parked();
+        let panel = workspace
+            .read_with(vcx, |workspace, _| workspace.test_panel(0))
+            .expect("panel exists");
+
+        panel.update(vcx, |panel, cx| {
+            *panel.items = vec![Item::Tool {
+                call_id: "call-0".into(),
+                name: "bash".into(),
+                input: r#"{"command":"echo 0"}"#.into(),
+                output: "done".into(),
+                done: true,
+                error: None,
+            }];
+            cx.notify();
+        });
+        vcx.run_until_parked();
+        let baseline_height = vcx
+            .debug_bounds("tool-inline")
+            .expect("an inline tool paints before the transcript overflows")
+            .size
+            .height;
+
+        panel.update(vcx, |panel, cx| {
+            panel.items.extend((1..30).map(|index| Item::Tool {
+                call_id: format!("call-{index}"),
+                name: "bash".into(),
+                input: format!(r#"{{"command":"echo {index}"}}"#),
+                output: "done".into(),
+                done: true,
+                error: None,
+            }));
+            cx.notify();
+        });
+        vcx.run_until_parked();
+
+        let overflowing_height = vcx
+            .debug_bounds("tool-inline")
+            .expect("an overflowing transcript still paints an inline tool")
+            .size
+            .height;
+        assert_eq!(
+            overflowing_height, baseline_height,
+            "overflow changed tool-row height from {baseline_height:?} to {overflowing_height:?}"
+        );
+    }
+
+    /// The review fixture itself must paint: every transcript shape the demo
+    /// seeds (user, reasoning, running and finished tools with ANSI output,
+    /// full markdown, error) renders together in one painted window without
+    /// panicking, and the signature regions all occupy space.
+    #[gpui::test]
+    fn the_demo_transcript_paints_every_item_shape(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| crate::bind_workspace_keys(cx));
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.push_test_panel("session-a", cx);
+            workspace
+        });
+        vcx.run_until_parked();
+        let panel = workspace
+            .read_with(vcx, |workspace, _| workspace.test_panel(0))
+            .expect("panel exists");
+
+        // The same items JCODE_DESKTOP_DEMO_TRANSCRIPT=1 seeds, minus the
+        // env-var gate so the test is hermetic.
+        panel.update(vcx, |panel, cx| {
+            *panel.items = demo_item_fixtures();
+            assert!(panel.items.len() >= 6, "demo covers every item shape");
+            cx.notify();
+        });
+        vcx.run_until_parked();
+
+        let selectors = ["tool-header", "tool-output-size", "md-quote", "code-copy"];
+        let mut painted = std::collections::HashSet::new();
+        let row_count = panel.read_with(vcx, |panel, _| panel.transcript_list.item_count());
+        // A virtualized transcript intentionally omits off-screen rows. Check
+        // the initial tail, then reveal each item rather than requiring every
+        // shape to fit simultaneously inside the panel's usable viewport.
+        for row in 0..=row_count {
+            if row > 0 {
+                panel.update(vcx, |panel, cx| {
+                    panel.stick_to_bottom = false;
+                    panel.transcript_list.scroll_to(gpui::ListOffset {
+                        item_ix: row - 1,
+                        offset_in_item: px(0.),
+                    });
+                    cx.notify();
+                });
+                vcx.run_until_parked();
+            }
+            for selector in selectors {
+                if let Some(bounds) = vcx.debug_bounds(selector) {
+                    assert!(
+                        bounds.size.width > px(0.) && bounds.size.height > px(0.),
+                        "{selector} must occupy space"
+                    );
+                    painted.insert(selector);
+                }
+            }
+        }
+        for selector in selectors {
+            assert!(
+                painted.contains(selector),
+                "{selector} should paint in the demo"
+            );
+        }
+    }
+
+    /// Blockquotes paint as a distinct region in a real assistant message.
+    #[gpui::test]
+    fn blockquotes_paint_in_a_real_transcript(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| crate::bind_workspace_keys(cx));
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.push_test_panel("session-a", cx);
+            workspace
+        });
+        vcx.run_until_parked();
+        let panel = workspace
+            .read_with(vcx, |workspace, _| workspace.test_panel(0))
+            .expect("panel exists");
+        panel.update(vcx, |panel, cx| {
+            panel
+                .items
+                .push(Item::Assistant("> a quoted line\n> and another".into()));
+            cx.notify();
+        });
+        vcx.run_until_parked();
+        let quote = vcx
+            .debug_bounds("md-quote")
+            .expect("the quote region paints");
+        assert!(quote.size.width > px(0.) && quote.size.height > px(0.));
+    }
+
+    #[gpui::test]
+    fn working_directory_does_not_add_a_chat_header(cx: &mut gpui::TestAppContext) {
+        let (panel, vcx) = cx.add_window_view(|_, cx| {
+            Panel::new(
+                "directory-label".into(),
+                None,
+                Some("/srv/projects/jcode-desktop".into()),
+                crate::harness::spawn_inert(),
+                cx,
+            )
+        });
+        let handle = vcx.update(|window, _| window.window_handle());
+        for width in [320., 800.] {
+            vcx.simulate_window_resize(handle, gpui::size(px(width), px(600.)));
+            for dir in [
+                Some("/srv/projects/jcode-desktop"),
+                Some("/"),
+                None,
+                Some(""),
+            ] {
+                panel.update(vcx, |panel, cx| {
+                    panel.working_dir = dir.map(str::to_owned);
+                    cx.notify();
+                });
+                vcx.run_until_parked();
+                assert!(vcx.debug_bounds("panel-working-directory").is_none());
+                assert!(vcx.debug_bounds("panel-directory-name").is_none());
+                assert!(vcx.debug_bounds("panel-directory-path").is_none());
+                assert!(vcx.debug_bounds("fresh-session").is_some());
+                assert!(vcx.debug_bounds("panel-meta").is_some());
+            }
+        }
+    }
+
+    /// The acceptance path: real events land in a real panel inside a painted
+    /// window, and the footer element occupies space on screen. Without this,
+    /// the tests above only prove the string is right, not that anyone sees it.
+    #[gpui::test]
+    fn the_identity_footer_paints_after_runtime_info_and_token_events(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| crate::bind_workspace_keys(cx));
+        let (workspace, vcx) = cx.add_window_view(|window, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.push_test_panel("session-a", cx);
+            let _ = window;
+            workspace
+        });
+        vcx.run_until_parked();
+
+        // The footer owns stable layout space even before runtime identity
+        // arrives, so the composer does not jump when attach completes.
+        assert!(
+            vcx.debug_bounds("panel-meta").is_some(),
+            "identity footer reserves layout space before metadata arrives"
+        );
+
+        // The events the harness worker forwards after attach and during a turn.
+        workspace.update(vcx, |workspace, cx| {
+            let panel = workspace.test_panel(0).expect("panel exists");
+            panel.update(cx, |panel, cx| {
+                panel.status = "connected".into();
+                assert_eq!(panel.status_line(), "Ready");
+                panel.status = "running_tools".into();
+                assert_eq!(panel.status_line(), "Running tools");
+                panel.connection_phase = "connected".into();
+                assert_eq!(panel.status_line(), "Running tools");
+                panel.connection_phase = "Retrying request".into();
+                assert_eq!(panel.status_line(), "Retrying request");
+                panel.connection_phase.clear();
+                panel.status = "idle".into();
+                assert_eq!(panel.status_line(), "Ready");
+                panel.apply(
+                    &ApiEvent::RuntimeInfo {
+                        session_id: "session-a".into(),
+                        provider: Some("openai".into()),
+                        model: Some("gpt-5.6-sol".into()),
+                        auth_method: None,
+                        routes: vec![jcode_sdk::ModelRouteInfo {
+                            usage: None,
+                            model: "gpt-5.6-sol".into(),
+                            provider: "openai".into(),
+                            api_method: "openai-oauth".into(),
+                            available: true,
+                            detail: String::new(),
+                        }],
+                        reasoning_effort: None,
+                    },
+                    cx,
+                );
+                panel.apply(
+                    &ApiEvent::TokenUsage {
+                        session_id: "session-a".into(),
+                        input: 100_000,
+                        output: 8_000,
+                        cache_read_input: Some(28_000),
+                        cache_creation_input: None,
+                    },
+                    cx,
+                );
+                assert_eq!(panel.model.as_deref(), Some("gpt-5.6-sol"));
+                assert_eq!(panel.provider.as_deref(), Some("openai"));
+                assert_eq!(panel.auth_method.as_deref(), Some("oauth"));
+
+                // Repeating the current model must not wipe the still-correct
+                // auth label. A real switch to another model invalidates it.
+                panel.apply(
+                    &ApiEvent::ModelInfo {
+                        session_id: "session-a".into(),
+                        provider: Some("openai".into()),
+                        model: Some("gpt-5.6-sol".into()),
+                        reasoning_effort: None,
+                        auth_method: None,
+                    },
+                    cx,
+                );
+                assert_eq!(
+                    panel.auth_method.as_deref(),
+                    Some("oauth"),
+                    "same-model broadcast must not clear the auth label"
+                );
+                panel.apply(
+                    &ApiEvent::ModelInfo {
+                        session_id: "session-a".into(),
+                        provider: Some("anthropic".into()),
+                        model: Some("claude-fable-5".into()),
+                        reasoning_effort: None,
+                        auth_method: None,
+                    },
+                    cx,
+                );
+                assert_eq!(
+                    panel.auth_method, None,
+                    "a real model switch invalidates the auth label"
+                );
+            });
+        });
+        vcx.run_until_parked();
+
+        let bounds = vcx
+            .debug_bounds("panel-meta")
+            .expect("the identity footer should have painted");
+        assert!(
+            bounds.size.width > gpui::px(0.) && bounds.size.height > gpui::px(0.),
+            "the footer must occupy real space, got {bounds:?}"
+        );
+        assert!(
+            vcx.debug_bounds("panel-build").is_none(),
+            "build metadata belongs in the workspace header, not each panel"
+        );
+        let identity = vcx
+            .debug_bounds("panel-identity")
+            .expect("identity tabs paint");
+        let status = vcx.debug_bounds("panel-status").expect("status paints");
+        let input = vcx.debug_bounds("prompt-input").expect("input paints");
+        // Identity pills and status share one row directly below the input.
+        assert!(identity.top() >= input.bottom());
+        assert!((f32::from(identity.center().y - bounds.center().y)).abs() < 1.);
+        assert!(identity.right() <= bounds.left() + gpui::px(1.));
+        assert!(status.right() <= bounds.right());
+        assert!(vcx.debug_bounds("panel-status-pulse").is_none());
+    }
+
+    #[gpui::test]
+    fn reconnect_history_recovers_a_response_missed_by_the_event_stream(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.push_test_panel("session-a", cx);
+            workspace
+        });
+        let mut panel = None;
+        workspace.update(vcx, |workspace, _| panel = workspace.test_panel(0));
+        let panel = panel.expect("test panel exists");
+
+        panel.update(vcx, |panel, cx| {
+            panel.history_loaded = true;
+            *panel.items = vec![Item::User("hello".into())];
+            panel.load_history(
+                vec![
+                    jcode_sdk::HistoryMessage {
+                        response_stats: None,
+                        role: "user".into(),
+                        content: "hello".into(),
+                    },
+                    jcode_sdk::HistoryMessage {
+                        response_stats: None,
+                        role: "assistant".into(),
+                        content: "recovered response".into(),
+                    },
+                ],
+                Vec::new(),
+                cx,
+            );
+            panel.apply(&ApiEvent::SessionStatus { session_id: "session-a".into(), status: "idle".into(), pending_soft_interrupts: None }, cx);
+            assert!(matches!(
+                panel.items.last(),
+                Some(Item::Assistant(text)) if text == "recovered response"
+            ));
+
+            *panel.items = vec![Item::User("next".into())];
+            panel.streaming_text = "partial".into();
+            panel.load_history(
+                vec![jcode_sdk::HistoryMessage { role: "user".into(), content: "next".into(), response_stats: None }, jcode_sdk::HistoryMessage {
+                    response_stats: None,
+                    role: "assistant".into(),
+                    content: "partial response completed".into(),
+                }],
+                Vec::new(),
+                cx,
+            );
+            assert_eq!(panel.streaming_text, "partial", "history must not duplicate queued deltas");
+            panel.apply(&ApiEvent::SessionStatus { session_id: "session-a".into(), status: "idle".into(), pending_soft_interrupts: None }, cx);
+            assert!(matches!(panel.items.last(), Some(Item::Assistant(text)) if text == "partial response completed"));
+        });
+    }
+
+    #[gpui::test]
+    fn model_read_images_are_anchored_and_deduplicated_in_the_transcript(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.push_test_panel("session-a", cx);
+            workspace
+        });
+        let mut panel = None;
+        workspace.update(vcx, |workspace, _| panel = workspace.test_panel(0));
+        let panel = panel.expect("test panel exists");
+
+        panel.update(vcx, |panel, cx| {
+            *panel.items = vec![Item::Tool {
+                call_id: "read-1".into(),
+                name: "read".into(),
+                input: r#"{"file_path":"chart.png"}"#.into(),
+                output: "image loaded".into(),
+                done: true,
+                error: None,
+            }];
+            let event = ApiEvent::SidePaneImages {
+                session_id: "session-a".into(),
+                images: vec![jcode_sdk::RenderedImage {
+                    history_message_index: None,
+                    media_type: "image/png".into(),
+                    data: "iVBORw0KGgo=".into(),
+                    label: Some("chart.png".into()),
+                    source: jcode_sdk::RenderedImageSource::ToolResult {
+                        tool_name: "read".into(),
+                    },
+                    anchor: Some(jcode_sdk::RenderedImageAnchor::ToolCall {
+                        id: "read-1".into(),
+                    }),
+                }],
+            };
+            panel.apply(&event, cx);
+            panel.apply(&event, cx);
+
+            assert_eq!(panel.items.len(), 2, "replayed image events are deduplicated");
+            assert!(matches!(&panel.items[1], Item::Image(image) if image.label.as_deref() == Some("chart.png")));
+        });
+    }
+
+    #[gpui::test]
+    fn history_restores_pasted_images_after_their_user_prompt(cx: &mut gpui::TestAppContext) {
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.push_test_panel("session-a", cx);
+            workspace
+        });
+        let mut panel = None;
+        workspace.update(vcx, |workspace, _| panel = workspace.test_panel(0));
+        let panel = panel.expect("test panel exists");
+
+        panel.update(vcx, |panel, cx| {
+            panel.items.clear();
+            panel.load_history(
+                vec![jcode_sdk::HistoryMessage {
+                    response_stats: None,
+                    role: "user".into(),
+                    content: "what is in this?".into(),
+                }],
+                vec![jcode_sdk::RenderedImage {
+                    history_message_index: None,
+                    media_type: "image/png".into(),
+                    data: "iVBORw0KGgo=".into(),
+                    label: None,
+                    source: jcode_sdk::RenderedImageSource::UserInput,
+                    anchor: Some(jcode_sdk::RenderedImageAnchor::UserPrompt { ordinal: 0 }),
+                }],
+                cx,
+            );
+            assert!(matches!(
+                panel.items.as_slice(),
+                [Item::User(_), Item::Image(_)]
+            ));
+        });
+    }
+
+    #[gpui::test]
+    fn keyboard_submission_reaches_the_bridge_and_streamed_text_paints(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| crate::input::bind_keys(cx));
+        let (bridge, commands) = crate::harness::spawn_recording();
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.set_test_bridge(bridge);
+            workspace.push_test_panel("session-a", cx);
+            workspace
+        });
+        let mut panel = None;
+        workspace.update(vcx, |workspace, _| panel = workspace.test_panel(0));
+        let panel = panel.expect("test panel exists");
+        vcx.update(|window, cx| {
+            let handle = panel.read(cx).input.read(cx).focus_handle.clone();
+            window.focus(&handle, cx);
+        });
+        vcx.run_until_parked();
+
+        vcx.simulate_input("hello jcode");
+        vcx.simulate_keystrokes("enter");
+        assert!(matches!(
+            commands.recv_timeout(std::time::Duration::from_millis(100)),
+            Ok(Command::Send { session_id, content, images })
+                if session_id == "session-a" && content == "hello jcode" && images.is_empty()
+        ));
+
+        panel.update(vcx, |panel, cx| {
+            panel.apply(
+                &ApiEvent::TextDelta {
+                    message_id: None,
+                    session_id: "session-a".into(),
+                    text: "hello back".into(),
+                },
+                cx,
+            );
+        });
+        vcx.run_until_parked();
+
+        let bounds = vcx
+            .debug_bounds("assistant-response")
+            .expect("streamed assistant response should paint");
+        assert!(bounds.size.width > px(0.) && bounds.size.height > px(0.));
+        assert!(vcx.debug_bounds("assistant-avatar").is_none());
+        assert!(vcx.debug_bounds("role-caption-jcode").is_none());
+    }
+
+    #[gpui::test]
+    fn escape_cancels_an_active_transcript_from_the_focused_prompt(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| crate::input::bind_keys(cx));
+        let (bridge, commands) = crate::harness::spawn_recording();
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.set_test_bridge(bridge);
+            workspace.push_test_panel("session-a", cx);
+            workspace
+        });
+        let mut panel = None;
+        workspace.update(vcx, |workspace, _| panel = workspace.test_panel(0));
+        let panel = panel.expect("test panel exists");
+        vcx.update(|window, cx| {
+            let handle = panel.read(cx).input.read(cx).focus_handle.clone();
+            window.focus(&handle, cx);
+        });
+        panel.update(vcx, |panel, cx| {
+            panel.status = "busy".into();
+            cx.notify();
+        });
+
+        vcx.run_until_parked();
+        assert!(vcx.debug_bounds("transcript-activity").is_some());
+        vcx.simulate_keystrokes("escape");
+        vcx.run_until_parked();
+        assert!(vcx.debug_bounds("transcript-activity").is_none());
+        panel.read_with(vcx, |panel, _| assert!(!panel.activity_active()));
+
+        assert!(matches!(
+            commands.recv_timeout(std::time::Duration::from_millis(100)),
+            Ok(Command::Cancel { session_id }) if session_id == "session-a"
+        ));
+    }
+
+    /// Nested inline markdown used to produce overlapping highlight ranges,
+    /// and GPUI aborts the whole process (`invalid text run`) when those reach
+    /// `StyledText`. Streaming crash-shaped text through the public event path
+    /// and painting it through the real window is the acceptance check that a
+    /// live session can no longer take the desktop down.
+    #[gpui::test]
+    fn streamed_nested_markdown_paints_without_aborting(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| crate::input::bind_keys(cx));
+        let (bridge, _commands) = crate::harness::spawn_recording();
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.set_test_bridge(bridge);
+            workspace.push_test_panel("session-a", cx);
+            workspace
+        });
+        let mut panel = None;
+        workspace.update(vcx, |workspace, _| panel = workspace.test_panel(0));
+        let panel = panel.expect("test panel exists");
+
+        // Every shape that nests one inline span in another, including the
+        // exact input from the recorded crash ("n the" inside a 12-byte run).
+        let crash_shaped = "prefix **`n the`** suffix, *italic with [a link](https://example.com) \
+                            and `code`*, ~~strike **bold `code`** tail~~, and \
+                            [**bold link**](https://example.com/x).";
+        panel.update(vcx, |panel, cx| {
+            panel.apply(
+                &ApiEvent::TextDelta {
+                    message_id: None,
+                    session_id: "session-a".into(),
+                    text: crash_shaped.into(),
+                },
+                cx,
+            );
+        });
+        vcx.run_until_parked();
+
+        let bounds = vcx
+            .debug_bounds("assistant-response")
+            .expect("nested markdown response should paint");
+        assert!(bounds.size.width > px(0.) && bounds.size.height > px(0.));
+    }
+
+    /// Mermaid support must travel through the same streamed assistant event and
+    /// virtualized transcript paint path used by a real session. Testing the SVG
+    /// helper alone would not catch a panel that still displayed the fenced source.
+    #[gpui::test]
+    fn streamed_mermaid_renders_as_a_visible_panel_diagram(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| crate::input::bind_keys(cx));
+        let (bridge, _commands) = crate::harness::spawn_recording();
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.set_test_bridge(bridge);
+            workspace.push_test_panel("session-a", cx);
+            workspace
+        });
+        let mut panel = None;
+        workspace.update(vcx, |workspace, _| panel = workspace.test_panel(0));
+        let panel = panel.expect("test panel exists");
+
+        panel.update(vcx, |panel, cx| {
+            panel.apply(
+                &ApiEvent::TextDelta {
+                    message_id: None,
+                    session_id: "session-a".into(),
+                    text: "```mermaid\nflowchart LR\nA[Start] --> B[Done]\n```".into(),
+                },
+                cx,
+            );
+        });
+        vcx.run_until_parked();
+
+        let bounds = vcx
+            .debug_bounds("md-mermaid")
+            .expect("Mermaid fence should paint as a diagram in the panel");
+        assert!(bounds.size.width > px(0.) && bounds.size.height > px(0.));
+    }
+
+    #[gpui::test]
+    fn slash_commands_dispatch_native_session_operations(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| crate::input::bind_keys(cx));
+        let (bridge, commands) = crate::harness::spawn_recording();
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.set_test_bridge(bridge);
+            workspace.push_test_panel("session-a", cx);
+            workspace
+        });
+        let mut panel = None;
+        workspace.update(vcx, |workspace, _| panel = workspace.test_panel(0));
+        let panel = panel.expect("test panel exists");
+        vcx.update(|window, cx| {
+            let handle = panel.read(cx).input.read(cx).focus_handle.clone();
+            window.focus(&handle, cx);
+        });
+
+        vcx.simulate_input("/effort x");
+        vcx.simulate_keystrokes("enter");
+        assert!(matches!(
+            commands.recv_timeout(std::time::Duration::from_millis(100)),
+            Ok(Command::SessionOperation {
+                session_id,
+                operation: SessionOperation::SetEffort(effort),
+            }) if session_id == "session-a" && effort == "xhigh"
+        ));
+
+        vcx.simulate_input("/clear");
+        vcx.simulate_keystrokes("enter");
+        assert!(matches!(
+            commands.recv_timeout(std::time::Duration::from_millis(100)),
+            Ok(Command::SessionOperation {
+                session_id,
+                operation: SessionOperation::Clear,
+            }) if session_id == "session-a"
+        ));
+    }
+
+    #[gpui::test]
+    fn update_command_submits_through_the_prompt_and_reports_platform_availability(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| crate::input::bind_keys(cx));
+        let _update_guard = crate::updates::test_lock();
+        crate::updates::set(crate::updates::UpdateState::Idle);
+        let (bridge, commands) = crate::harness::spawn_recording();
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.set_test_bridge(bridge);
+            workspace.push_test_panel("session-a", cx);
+            workspace
+        });
+        let mut panel = None;
+        workspace.update(vcx, |workspace, _| panel = workspace.test_panel(0));
+        let panel = panel.expect("test panel exists");
+        vcx.update(|window, cx| {
+            let handle = panel.read(cx).input.read(cx).focus_handle.clone();
+            window.focus(&handle, cx);
+        });
+
+        vcx.simulate_input("/update");
+        vcx.simulate_keystrokes("enter");
+        vcx.run_until_parked();
+
+        assert!(commands.try_recv().is_err(), "slash command stays local");
+        panel.read_with(vcx, |panel, _| {
+            assert!(matches!(
+                panel.items.last(),
+                Some(Item::Assistant(message))
+                    if message == "Automatic updates are unavailable in this build of Jcode Desktop."
+            ));
+        });
+        let bounds = vcx
+            .debug_bounds("assistant-response")
+            .expect("the update result should paint in the transcript");
+        assert!(bounds.size.width > px(0.) && bounds.size.height > px(0.));
+
+        #[cfg(target_os = "linux")]
+        {
+            // Exercise the production slash-command and asynchronous completion
+            // path, with a deterministic platform callback rather than network IO.
+            extern "C" fn current() {
+                crate::updates::set(crate::updates::UpdateState::Finished {
+                    message: "Jcode Desktop is already current.".into(),
+                });
+            }
+            extern "C" fn failed() {
+                crate::updates::set(crate::updates::UpdateState::Failed {
+                    message: "Update failed: checksum mismatch.".into(),
+                });
+            }
+            unsafe { crate::updates::jcode_update_register_actions(current, current) };
+            vcx.simulate_input("/update");
+            vcx.simulate_keystrokes("enter");
+            vcx.run_until_parked();
+            panel.read_with(vcx, |panel, _| {
+                assert!(matches!(panel.items.last(), Some(Item::Assistant(message))
+                    if message == "Jcode Desktop is already current."));
+            });
+            unsafe { crate::updates::jcode_update_register_actions(failed, failed) };
+            vcx.simulate_input("/update");
+            vcx.simulate_keystrokes("enter");
+            vcx.run_until_parked();
+            panel.read_with(vcx, |panel, _| {
+                assert!(matches!(panel.items.last(), Some(Item::Error(message))
+                    if message == "Update failed: checksum mismatch."));
+            });
+            assert!(
+                commands.try_recv().is_err(),
+                "Linux updater never invokes the model or CLI updater"
+            );
+            crate::updates::clear_test_actions();
+        }
+    }
+
+    #[gpui::test]
+    fn model_command_replaces_suggestions_above_input_and_enter_switches_selection(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| crate::input::bind_keys(cx));
+        let (bridge, commands) = crate::harness::spawn_recording();
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.set_test_bridge(bridge);
+            workspace.push_test_panel("session-a", cx);
+            workspace
+        });
+        let mut panel = None;
+        workspace.update(vcx, |workspace, cx| {
+            panel = workspace.test_panel(0);
+            panel.as_ref().unwrap().update(cx, |panel, cx| {
+                panel.apply(
+                    &ApiEvent::RuntimeInfo {
+                        session_id: "session-a".into(),
+                        provider: Some("openai".into()),
+                        model: Some("gpt-5.6-sol".into()),
+                        reasoning_effort: None,
+                        auth_method: None,
+                        routes: vec![
+                            route("claude-fable-5", "anthropic-api-key"),
+                            route("gpt-5.6-sol", "openai-oauth"),
+                        ],
+                    },
+                    cx,
+                );
+            });
+        });
+        let panel = panel.expect("test panel exists");
+        vcx.update(|window, cx| {
+            let handle = panel.read(cx).input.read(cx).focus_handle.clone();
+            window.focus(&handle, cx);
+        });
+
+        vcx.simulate_input("/mod");
+        vcx.run_until_parked();
+        let command = vcx
+            .debug_bounds("slash-command-row-0")
+            .expect("model command suggestion exists");
+        vcx.simulate_click(command.center(), gpui::Modifiers::default());
+        vcx.run_until_parked();
+        assert!(
+            commands.try_recv().is_err(),
+            "clicking /model opens choices without selecting a model"
+        );
+        vcx.update(|_, cx| assert_eq!(panel.read(cx).input.read(cx).content.as_ref(), "/model "));
+        assert!(vcx.debug_bounds("model-picker-logo-0").is_some());
+        vcx.simulate_keystrokes("escape");
+        vcx.run_until_parked();
+        assert!(vcx.debug_bounds("slash-command-overlay").is_none());
+
+        vcx.simulate_input("/model");
+        vcx.run_until_parked();
+        assert!(vcx.debug_bounds("model-picker-overlay").is_none());
+        assert!(vcx.debug_bounds("model-picker-dialog").is_none());
+        let suggestions = vcx
+            .debug_bounds("slash-command-overlay")
+            .expect("model suggestions replace command suggestions");
+        let input = vcx
+            .debug_bounds("prompt-input")
+            .expect("composer remains rendered");
+        assert!(
+            suggestions.bottom() <= input.top() || suggestions.top() >= input.bottom(),
+            "model suggestions must not cover the composer"
+        );
+        assert!((suggestions.left() - input.left()).abs() <= px(1.0));
+        assert!((suggestions.size.width - input.size.width).abs() <= px(2.0));
+        assert!(vcx.debug_bounds("model-picker-logo-0").is_some());
+        assert!(vcx.debug_bounds("model-picker-logo-1").is_some());
+        vcx.update(|_, cx| {
+            assert_eq!(panel.read(cx).input.read(cx).content.as_ref(), "/model");
+            assert_eq!(panel.read(cx).input.read(cx).model_picker_rows().len(), 2);
+        });
+
+        vcx.simulate_keystrokes("down");
+        vcx.run_until_parked();
+        vcx.update(|_, cx| {
+            assert_eq!(
+                panel.read(cx).input.read(cx).model_picker_rows(),
+                vec![
+                    ("gpt-5.6-sol".into(), false),
+                    ("claude-fable-5".into(), true)
+                ]
+            );
+        });
+        vcx.simulate_keystrokes("enter");
+        let received = commands.recv_timeout(std::time::Duration::from_millis(100));
+        match received {
+            Ok(Command::SetModel { session_id, model }) => {
+                assert_eq!(session_id, "session-a");
+                assert_eq!(model, "claude-api:claude-fable-5");
+            }
+            _ => panic!("picker did not emit SetModel"),
+        }
+        vcx.run_until_parked();
+        assert!(vcx.debug_bounds("model-picker-overlay").is_none());
+        assert!(vcx.debug_bounds("slash-command-overlay").is_none());
+
+        vcx.simulate_input("/model claude");
+        vcx.run_until_parked();
+        vcx.update(|_, cx| {
+            assert_eq!(
+                panel.read(cx).input.read(cx).model_picker_rows(),
+                vec![("claude-fable-5".into(), true)]
+            );
+        });
+        vcx.simulate_keystrokes("ctrl-a");
+        vcx.simulate_input("/model missing-route");
+        vcx.simulate_keystrokes("enter");
+        vcx.run_until_parked();
+        assert!(
+            commands.try_recv().is_err(),
+            "no matches must not send an invalid model"
+        );
+        assert!(vcx.debug_bounds("slash-command-overlay").is_some());
+        vcx.simulate_keystrokes("escape");
+        vcx.run_until_parked();
+        assert!(vcx.debug_bounds("slash-command-overlay").is_none());
+        vcx.simulate_input("/models");
+        vcx.simulate_keystrokes("enter");
+        vcx.run_until_parked();
+        assert!(vcx.debug_bounds("slash-command-overlay").is_some());
+        vcx.simulate_keystrokes("down up");
+        let row = vcx
+            .debug_bounds("slash-command-row-0")
+            .expect("model suggestion is clickable");
+        vcx.simulate_click(row.center(), gpui::Modifiers::default());
+        vcx.run_until_parked();
+        assert!(
+            matches!(commands.try_recv(), Ok(Command::SetModel { model, .. }) if model == "openai-oauth:gpt-5.6-sol")
+        );
+        assert!(vcx.debug_bounds("slash-command-overlay").is_none());
+        vcx.simulate_input("composer focus retained");
+        vcx.update(|_, cx| {
+            assert_eq!(
+                panel.read(cx).input.read(cx).content.as_ref(),
+                "composer focus retained"
+            )
+        });
+    }
+
+    #[test]
+    fn todo_tool_output_parses_items_and_plan() {
+        let payload = parse_todo_tool_output(
+            r#"[{"id":"build","content":"Build the card","status":"in_progress","priority":"high","group":"Desktop","confidence":"validated"}]
+Plan: {"user_intention":"See progress at a glance","understands_user_intent":"clear"}
+Goals: []"#,
+        )
+        .expect("todo payload parses");
+
+        assert_eq!(payload.todos.len(), 1);
+        assert_eq!(payload.todos[0].content, "Build the card");
+        assert_eq!(payload.todos[0].group.as_deref(), Some("Desktop"));
+        assert_eq!(
+            payload.plan.user_intention.as_deref(),
+            Some("See progress at a glance")
+        );
+    }
+
+    #[test]
+    fn todo_tool_output_parses_goals_intent_and_confidence_like_the_tui() {
+        let output = r#"[{"content":"Ship","status":"completed","priority":"high","id":"1","group":"Desktop","confidence":"plausible","completion_confidence":"validated"},{"content":"Next","status":"pending","priority":"high","id":"2","group":"Desktop","confidence":"speculative"}]
+
+Plan:
+{"user_intention":"Pinned todos stay open","understands_user_intent":"partial"}
+
+Goals:
+[{"group":"Desktop","closed_feedback_loop":"usable","feedback_loop_relevance":"representative","feedback_loop_coverage":"main_paths","feedback_loop_traceability":"partial","delivery_state":"integrated"}]"#;
+        let payload = parse_todo_tool_output(output).unwrap();
+        assert_eq!(
+            payload.plan.understands_user_intent,
+            Some(jcode_base::todo::IntentUnderstanding::Partial)
+        );
+        assert_eq!(
+            todo_confidence_label(&payload.todos[0]).as_deref(),
+            Some("plausible→validated")
+        );
+        assert_eq!(
+            todo_confidence_label(&payload.todos[1]).as_deref(),
+            Some("speculative")
+        );
+        let goal = todo_goal_for_group(&payload.goals, Some("Desktop")).unwrap();
+        let labels: Vec<_> = todo_goal_gate_segments(goal)
+            .into_iter()
+            .map(|segment| (segment.label, segment.state, segment.tone))
+            .collect();
+        assert_eq!(
+            labels,
+            vec![
+                ("Closed feedback loop", "usable".into(), TodoTone::Warn),
+                ("Delivery", "integrated".into(), TodoTone::Warn),
+            ]
+        );
+
+        let passing = jcode_base::todo::TodoGoal {
+            closed_feedback_loop: Some(jcode_base::todo::FeedbackLoopState::Closed),
+            feedback_loop_relevance: Some(
+                jcode_base::todo::FeedbackLoopRelevance::AcceptanceAligned,
+            ),
+            feedback_loop_coverage: Some(
+                jcode_base::todo::FeedbackLoopCoverage::EdgeAndIntegrationPaths,
+            ),
+            feedback_loop_traceability: Some(jcode_base::todo::FeedbackLoopTraceability::Complete),
+            ..Default::default()
+        };
+        let segments = todo_goal_gate_segments(&passing);
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].tone, TodoTone::Ok);
+        assert!(
+            todo_goal_gate_segments(&Default::default())
+                .iter()
+                .all(|segment| segment.state == "missing" && segment.tone == TodoTone::Fail)
+        );
+    }
+
+    #[gpui::test]
+    fn completed_todo_tool_paints_as_a_native_card(cx: &mut gpui::TestAppContext) {
+        let (workspace, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.push_test_panel("session-a", cx);
+            workspace
+        });
+        let panel = workspace
+            .read_with(vcx, |workspace, _| workspace.test_panel(0))
+            .expect("panel exists");
+        panel.update(vcx, |panel, cx| {
+            *panel.items = vec![
+                Item::User("Keep the task list compact".into()),
+                Item::Tool {
+                    call_id: "todo-1".into(),
+                    name: "todo".into(),
+                    input: r#"{"intent":"Track implementation"}"#.into(),
+                    output: r#"[{"id":"one","content":"Render rich rows","status":"completed","priority":"high","completion_confidence":"verified","blocked_by":[]},{"id":"two","content":"Test the card","status":"in_progress","priority":"medium","group":"Validation","confidence":"validated","blocked_by":[]}] Plan: {"user_intention":"See progress visually","understands_user_intent":"clear"} Goals: []"#.into(),
+                    done: true,
+                    error: None,
+                },
+            ];
+            cx.notify();
+        });
+        vcx.run_until_parked();
+
+        let pinned = vcx
+            .debug_bounds("pinned-todo-card")
+            .expect("todo card should be pinned outside the transcript");
+        assert!(
+            vcx.debug_bounds("pinned-latest-prompt").is_none(),
+            "a visible transcript prompt must not be duplicated above the todo card"
+        );
+        let transcript = vcx.debug_bounds("transcript").expect("transcript paints");
+        assert!(pinned.bottom() <= transcript.top());
+        assert!(vcx.debug_bounds("tool-inline").is_none());
+        assert!(
+            vcx.debug_bounds("todo-card").is_none(),
+            "no tool-style card when pinned"
+        );
+        let paper = vcx
+            .debug_bounds("pinned-todo-details-paper")
+            .expect("pinned todos are always expanded");
+        let intent = vcx
+            .debug_bounds("pinned-todo-intent-row")
+            .expect("intent row heads the card");
+        assert!(intent.top() >= paper.top());
+        let count = vcx
+            .debug_bounds("pinned-todo-count")
+            .expect("progress count");
+        assert!(count.right() <= paper.right());
+        assert!(vcx.debug_bounds("pinned-todo-intent-state").is_some());
+        assert!(vcx.debug_bounds("todo-row-confidence").is_some());
+        let rows = vcx.debug_bounds("todo-row").expect("task rows");
+        assert!(rows.top() > intent.bottom());
+    }
+}
+
+/// Transcript fixture for one screenshot panel. `JCODE_DESKTOP_SCREENSHOT_PANEL_TRANSCRIPTS`
+/// (comma-separated, by panel index) overrides `JCODE_DESKTOP_SCREENSHOT_TRANSCRIPT` so
+/// a multi-panel capture can show varied sessions instead of one repeated fixture.
+fn screenshot_fixture_for(session_id: &str) -> Option<String> {
+    let per_panel = std::env::var("JCODE_DESKTOP_SCREENSHOT_PANEL_TRANSCRIPTS").ok();
+    let global = std::env::var("JCODE_DESKTOP_SCREENSHOT_TRANSCRIPT").ok();
+    fixture_for_panel(session_id, per_panel.as_deref(), global)
+}
+
+fn fixture_for_panel(
+    session_id: &str,
+    per_panel: Option<&str>,
+    global: Option<String>,
+) -> Option<String> {
+    let index = match session_id {
+        "screenshot-fixture" => Some(0),
+        other => other
+            .strip_prefix("screenshot-fixture-")
+            .and_then(|index| index.parse::<usize>().ok()),
+    };
+    index
+        .and_then(|index| per_panel?.split(',').nth(index))
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .or(global)
+}
+
+#[cfg(test)]
+mod fixture_for_panel_tests {
+    use super::fixture_for_panel;
+
+    #[test]
+    fn per_panel_list_overrides_global_by_index() {
+        let list = Some("diff-rich, ,mermaid");
+        let global = || Some("all".to_owned());
+        assert_eq!(
+            fixture_for_panel("screenshot-fixture", list, global()).as_deref(),
+            Some("diff-rich")
+        );
+        assert_eq!(
+            fixture_for_panel("screenshot-fixture-1", list, global()).as_deref(),
+            Some("all")
+        );
+        assert_eq!(
+            fixture_for_panel("screenshot-fixture-2", list, global()).as_deref(),
+            Some("mermaid")
+        );
+        assert_eq!(
+            fixture_for_panel("screenshot-fixture-3", list, global()).as_deref(),
+            Some("all")
+        );
+        assert_eq!(
+            fixture_for_panel("real-session", list, global()).as_deref(),
+            Some("all")
+        );
+        assert_eq!(fixture_for_panel("screenshot-fixture-1", None, None), None);
+    }
+}
+
+/// `JCODE_DESKTOP_DEMO_TRANSCRIPT=1` seeds one panel with a sample of every
+/// transcript shape, so rendering changes can be reviewed without driving a
+/// real session through each case.
+fn demo_items(fixture: Option<&str>) -> Vec<Item> {
+    let fixture = fixture.map(str::to_owned);
+    if crate::harness::screenshot_mode() && fixture.as_deref() == Some("background-tasks") {
+        return vec![
+            Item::User("Run the checks in the background".into()),
+            Item::BackgroundTask {
+                task_id: "running".into(),
+                label: "Workspace tests".into(),
+                summary: "35% · Running integration tests".into(),
+                percent: Some(35.0),
+                done: false,
+            },
+            Item::BackgroundTask {
+                task_id: "waiting".into(),
+                label: "Release build".into(),
+                summary: "Compiling dependencies and waiting for the linker to finish".into(),
+                percent: None,
+                done: false,
+            },
+            Item::BackgroundTask {
+                task_id: "done".into(),
+                label: "Formatting".into(),
+                summary: "✓ completed · 8.2s · exit 0".into(),
+                percent: None,
+                done: true,
+            },
+        ];
+    }
+    if crate::harness::screenshot_mode() && fixture.as_deref() == Some("orb-todos") {
+        // A live turn partway through its plan, for the tab progress fill.
+        return vec![
+            Item::User("Ship the tab activity redesign".into()),
+            Item::Todos(TodoCardPayload {
+                todos: [
+                    ("Replace the orbiting comet", "completed"),
+                    ("Fill the tab with todo progress", "completed"),
+                    ("Glow green when done", "in_progress"),
+                    ("Clear the glow once seen", "pending"),
+                    ("Rebuild and reload", "pending"),
+                ]
+                .into_iter()
+                .map(|(content, status)| TodoCardItem {
+                    content: content.into(),
+                    status: status.into(),
+                    group: None,
+                    blocked_by: vec![],
+                    confidence: None,
+                    completion_confidence: None,
+                })
+                .collect(),
+                plan: TodoCardPlan::default(),
+                goals: Vec::new(),
+            }),
+        ];
+    }
+    if crate::harness::screenshot_mode() && fixture.as_deref() == Some("todos-completed") {
+        return vec![
+            Item::User("Keep the task group visible after the work finishes".into()),
+            Item::Todos(TodoCardPayload {
+                todos: ["Use the todo group name", "Verify the completed header"]
+                    .into_iter()
+                    .map(|content| TodoCardItem {
+                        content: content.into(),
+                        status: "completed".into(),
+                        group: Some("Todo group header".into()),
+                        blocked_by: vec![],
+                        confidence: None,
+                        completion_confidence: None,
+                    })
+                    .collect(),
+                plan: TodoCardPlan::default(),
+                goals: Vec::new(),
+            }),
+            Item::Assistant("The completed header now keeps the task group name. The green dots show that both tasks are complete.".into()),
+        ];
+    }
+    if crate::harness::screenshot_mode() && fixture.as_deref() == Some("prompts") {
+        return prompt::fixture_items();
+    }
+    if crate::harness::screenshot_mode() && fixture.as_deref() == Some("gmail-draft") {
+        return gmail_draft_card::fixture_items();
+    }
+    if crate::harness::screenshot_mode() && fixture.as_deref() == Some("mcp-list") {
+        return mcp_list_card::fixture_items();
+    }
+    if crate::harness::screenshot_mode()
+        && matches!(
+            fixture.as_deref(),
+            Some("user-response" | "user-response-short" | "user-response-long")
+        )
+    {
+        return user_response::fixture_items_for(fixture.as_deref().unwrap());
+    }
+    if crate::harness::screenshot_mode() && fixture.as_deref() == Some("gmail-read") {
+        return gmail_read_card::fixture_items();
+    }
+    if crate::harness::screenshot_mode() && fixture.as_deref() == Some("tool-icons") {
+        return [
+            "read",
+            "write",
+            "edit",
+            "multiedit",
+            "apply_patch",
+            "bash",
+            "ls",
+            "agentgrep",
+            "websearch",
+            "webfetch",
+            "browser",
+            "gmail",
+            "memory",
+            "todo",
+            "schedule",
+            "swarm",
+            "batch",
+            "mcp",
+            "custom_tool",
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, name)| Item::Tool {
+            call_id: format!("icon-{index}"),
+            name: name.into(),
+            input: serde_json::json!({"intent": format!("{} tool", name)}).to_string(),
+            output: "Done".into(),
+            done: index != 5,
+            error: (index == 11).then(|| "Example error".into()),
+        })
+        .collect();
+    }
+    if crate::harness::screenshot_mode() && fixture.as_deref() == Some("tool-streaming") {
+        return tool_streaming::fixture_items();
+    }
+    if crate::harness::screenshot_mode() && fixture.as_deref() == Some("empty") {
+        return Vec::new();
+    }
+    if !crate::harness::screenshot_mode()
+        && std::env::var("JCODE_DESKTOP_DEMO_TRANSCRIPT").as_deref() != Ok("1")
+    {
+        return Vec::new();
+    }
+    if crate::harness::screenshot_mode() && fixture.as_deref() == Some("long-history") {
+        return (0..10_000)
+            .map(|index| {
+                let text = format!("Message {index}: **formatted** text and `inline code`.\n\nA second paragraph for layout.");
+                if index % 2 == 0 { Item::User(text) } else { Item::Assistant(text) }
+            })
+            .collect();
+    }
+    if crate::harness::screenshot_mode() && fixture.as_deref() == Some("diff") {
+        return diff_review::fixture_items();
+    }
+    if crate::harness::screenshot_mode() && fixture.as_deref() == Some("diff-rich") {
+        return vec![
+            Item::User("Make these changes easier to review.".into()),
+            Item::Assistant(format!(
+                "The title now has a clearer fallback and a Unicode-safe length limit.\n\n```diff\n{}```",
+                include_str!("../../../assets/previews/change-review.diff")
+            )),
+        ];
+    }
+    if crate::harness::screenshot_mode() && fixture.as_deref() == Some("mermaid") {
+        let source = std::env::var("JCODE_DESKTOP_SCREENSHOT_MERMAID_SOURCE").unwrap_or_else(|_| {
+            "flowchart LR\n    A[Idea] --> B[Build]\n    B --> C[Test]\n    C -->|Pass| D[Ship]\n    C -->|Needs work| B".into()
+        });
+        return vec![
+            Item::User("Can you render a Mermaid diagram?".into()),
+            Item::Assistant(format!(
+                "Here is a Mermaid diagram:\n\n```mermaid\n{source}\n```"
+            )),
+        ];
+    }
+    if crate::harness::screenshot_mode() && fixture.as_deref() == Some("tokens") {
+        let mut items = vec![Item::User(
+            "Show tool output token costs instead of line counts.".into(),
+        )];
+        for (index, (summary, tokens)) in [
+            ("Small output", 1_900),
+            ("Large output", 4_000),
+            ("Very large output", 12_000),
+            ("Empty output", 0),
+            ("Single-line output", 1),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            items.push(Item::Tool {
+                call_id: format!("token-fixture-{index}"),
+                name: "bash".into(),
+                input: serde_json::json!({"command": "example", "intent": summary}).to_string(),
+                output: "data".repeat(tokens),
+                done: true,
+                error: None,
+            });
+        }
+        items.push(Item::Assistant("The response is complete. Its totals appear below, separate from the context and account meters.".into()));
+        items.push(Item::ResponseStats(response_stats::fixture()));
+        return items;
+    }
+    if crate::harness::screenshot_mode() && fixture.as_deref() == Some("image") {
+        let mut image = image_preview::fixture_image();
+        image.source = jcode_sdk::RenderedImageSource::ToolResult {
+            tool_name: "read".into(),
+        };
+        image.anchor = Some(jcode_sdk::RenderedImageAnchor::ToolCall {
+            id: "read-chart".into(),
+        });
+        return vec![
+            Item::User("Read this chart and tell me what it shows.".into()),
+            Item::Tool {
+                call_id: "read-chart".into(),
+                name: "read".into(),
+                input: r#"{"file_path":"chart.png","intent":"Read the chart"}"#.into(),
+                output: "Image loaded".into(),
+                done: true,
+                error: None,
+            },
+            Item::Image(image),
+            Item::Assistant(
+                "The chart compares three bars. Click the image above to see it larger.".into(),
+            ),
+        ];
+    }
+    if crate::harness::screenshot_mode() && fixture.as_deref() == Some("html") {
+        return vec![
+            Item::User("Show me different fonts directly in this chat.".into()),
+            Item::Assistant(format!(
+                "Here are live font pairings. Click inside to interact.\n\n```html-preview\n{}\n```",
+                include_str!("../../../assets/previews/font-pairings.html")
+            )),
+        ];
+    }
+    if crate::harness::screenshot_mode() && fixture.as_deref() == Some("streaming") {
+        return vec![
+            Item::User("Make it easier to see which panels are still working.".into()),
+            Item::Assistant("I'll add a small spinner and a subtle accent tint, while keeping the conversation easy to read.".into()),
+        ];
+    }
+    if crate::harness::screenshot_mode() && fixture.as_deref() == Some("reasoning") {
+        return vec![
+            Item::User("Can you make the thinking display feel quieter?".into()),
+            Item::Reasoning("The content should read like part of the conversation, not another interface to manage. I'll keep it in a **dimmed font**, aligned with the answer, and remove the surrounding labels and controls.".into()),
+            Item::Reasoning("## Keep the presentation simple\n\n- No card background or border\n- No thinking label or expand button\n- Preserve the full text and Markdown formatting".into()),
+            Item::Assistant(format!(
+                "{}\n{}\nThinking now appears as subtle inline text. The answer keeps its normal contrast, so it's easy to tell the two apart.",
+                jcode_render_core::reasoning_line_markup("**Checking top live tabs**"),
+                jcode_render_core::reasoning_line_markup("**Fixing live camera geometry**"),
+            )),
+        ];
+    }
+    demo_item_fixtures()
+}
+
+/// The sample content behind `demo_items`, reachable from tests without
+/// mutating process environment.
+fn demo_item_fixtures() -> Vec<Item> {
+    vec![
+        Item::User("Explain **markdown** rendering and show `code`, a [link](https://example.com), ~~old~~ new.".into()),
+        Item::Reasoning("The user wants a survey of the renderer. I should cover blocks, inline spans, and how streaming text is handled while a turn is still in flight, then mention the tables and code paths in order.".into()),
+        Item::Tool {
+            call_id: "1".into(),
+            name: "bash".into(),
+            input: r#"{"command":"cargo test --offline","intent":"run the suite"}"#.into(),
+            output: "test result: ok. 61 passed".into(),
+            done: true,
+            error: None,
+        },
+        Item::Tool {
+            call_id: "2".into(),
+            name: "read".into(),
+            input: r#"{"file_path":"src/markdown.rs"}"#.into(),
+            output: String::new(),
+            done: false,
+            error: None,
+        },
+        // Long ANSI-colored output: exercises the size hint on the collapsed
+        // row and the stripped, head-and-tail detail when expanded.
+        Item::Tool {
+            call_id: "3".into(),
+            name: "bash".into(),
+            input: r#"{"command":"cargo build 2>&1","intent":"noisy build"}"#.into(),
+            output: (0..90)
+                .map(|n| format!("\u{1b}[32m   Compiling\u{1b}[0m crate-{n} v0.1.{n}\n"))
+                .collect(),
+            done: true,
+            error: None,
+        },
+        Item::Todos(TodoCardPayload {
+            todos: vec![
+                TodoCardItem {
+                    content: "Add compact todo progress dots".into(),
+                    status: "completed".into(),
+                    group: Some("Desktop".into()),
+                    blocked_by: vec![],
+                    confidence: Some(jcode_base::todo::ConfidenceState::Plausible),
+                    completion_confidence: Some(jcode_base::todo::ConfidenceState::Verified),
+                },
+                TodoCardItem {
+                    content: "Keep the pinned plan compact while the detailed card stays in the transcript".into(),
+                    status: "in_progress".into(),
+                    group: Some("Desktop".into()),
+                    blocked_by: vec![],
+                    confidence: Some(jcode_base::todo::ConfidenceState::Validated),
+                    completion_confidence: None,
+                },
+                TodoCardItem {
+                    content: "Inspect the real offline screenshot".into(),
+                    status: "pending".into(),
+                    group: Some("Validation".into()),
+                    blocked_by: vec![],
+                    confidence: Some(jcode_base::todo::ConfidenceState::Speculative),
+                    completion_confidence: None,
+                },
+                TodoCardItem {
+                    content: "Retired task".into(),
+                    status: "cancelled".into(),
+                    group: None,
+                    blocked_by: vec![],
+                    confidence: None,
+                    completion_confidence: None,
+                },
+            ],
+            plan: TodoCardPlan {
+                user_intention: Some("See current work without losing transcript space".into()),
+                understands_user_intent: Some(jcode_base::todo::IntentUnderstanding::Clear),
+            },
+            goals: vec![jcode_base::todo::TodoGoal {
+                group: Some("Desktop".into()),
+                closed_feedback_loop: Some(jcode_base::todo::FeedbackLoopState::Usable),
+                feedback_loop_relevance: Some(
+                    jcode_base::todo::FeedbackLoopRelevance::Representative,
+                ),
+                feedback_loop_coverage: Some(jcode_base::todo::FeedbackLoopCoverage::MainPaths),
+                feedback_loop_traceability: Some(
+                    jcode_base::todo::FeedbackLoopTraceability::Partial,
+                ),
+                ..Default::default()
+            }],
+        }),
+        Item::Assistant(
+            "# Heading one\n## Heading two\n\nA paragraph with *italic*, **bold**, `inline code`, and math $e^{i\\pi}+1=0$ plus \\(n \\to \\infty\\).\n\n- top level\n  - nested item\n- [x] finished task\n- [ ] pending task\n\n1. first\n2. second\n\n> A quote line\n> continued here\n\n| block | supported |\n| --- | --- |\n| tables | yes |\n| code | yes |\n\n```rust\nfn main() {\n    // a comment\n    let name = \"world\";\n    println!(\"hello {name}\");\n}\n```\n\n$$\n\\sum_{i=0}^{n} i^2\n$$\n\n\\[ E = mc^2 \\]\n\n---\n\nDone."
+                .into(),
+        ),
+        Item::ResponseStats(response_stats::fixture()),
+        Item::Error("provider returned 429: rate limited, retrying".into()),
+    ]
+}
+
+#[cfg(test)]
+#[path = "panel_responsive_tests.rs"]
+mod responsive_tests;
+
+#[cfg(test)]
+#[path = "panel_todoist_tests.rs"]
+mod todoist_tests;

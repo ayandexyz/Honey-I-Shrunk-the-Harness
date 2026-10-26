@@ -1,0 +1,162 @@
+//! Geometry retained across the welcome screen's first submission.
+//!
+//! Empty space is a minimum viewport height, not blank transcript rows. The
+//! editor keeps its entity, width and height while content consumes that space.
+use super::*;
+use std::{cell::Cell, rc::Rc};
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StartupLayout {
+    input_top: f32,
+    pub(super) committed: bool,
+    pub messages_height: f32,
+    preview: bool,
+    /// Set once the transcript fills the space above the composer. The
+    /// two-row welcome editor then shrinks to a single row. Sticky, so the
+    /// freed height can not flip it back and forth.
+    #[serde(default)]
+    pub(super) compact: bool,
+    /// The messages area has reached the space above the composer. Until
+    /// then its height trails the measured content by one frame, so any
+    /// overflow is transient and must not scroll or show a scrollbar.
+    #[serde(default)]
+    pub(super) filled: bool,
+}
+
+pub(super) fn input_marker(
+    bounds: Rc<Cell<Option<gpui::Bounds<gpui::Pixels>>>>,
+) -> gpui::AnyElement {
+    gpui::canvas(|_, _, _| (), move |rect, _, _, _| bounds.set(Some(rect)))
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .into_any_element()
+}
+
+impl Panel {
+    /// Content still fits above the welcome composer, which moves down as it
+    /// grows. Its height trails measurement by a frame, so keep the first row
+    /// pinned and hide overflow chrome instead of flashing it every line.
+    pub(super) fn startup_growing(&self) -> bool {
+        self.startup_layout
+            .as_ref()
+            .is_some_and(|layout| !layout.filled)
+    }
+
+    pub(super) fn release_startup_preview(&mut self) {
+        if let Some(layout) = &mut self.startup_layout {
+            if layout.preview && !self.items.is_empty() {
+                self.stick_to_bottom = false;
+            }
+            layout.preview = false;
+        }
+    }
+
+    pub(super) fn startup_prompt_preview(&mut self) -> bool {
+        let Some(layout) = &mut self.startup_layout else {
+            return false;
+        };
+        // A first prompt, including its attachments, should open at its start.
+        // As soon as the answer arrives, ordinary tail following takes over.
+        let first_prompt_only = self
+            .items
+            .iter()
+            .filter(|item| matches!(item, Item::User(_)))
+            .count()
+            == 1
+            && self
+                .items
+                .iter()
+                .all(|item| matches!(item, Item::User(_) | Item::Image(_)))
+            && self.streaming_text.is_empty()
+            && self.streaming_reasoning.is_empty();
+        if !self.items.is_empty() && !first_prompt_only {
+            layout.preview = false;
+        }
+        layout.preview && first_prompt_only && self.stick_to_bottom
+    }
+
+    /// Observe the actual editor and list after paint, including wrapped text,
+    /// attachments and session chrome. Do not guess line heights from strings.
+    pub(super) fn startup_layout_observer(
+        &self,
+        fresh: bool,
+        input: Rc<Cell<Option<gpui::Bounds<gpui::Pixels>>>>,
+        body: Rc<Cell<Option<gpui::Bounds<gpui::Pixels>>>>,
+        cx: &Context<Self>,
+    ) -> gpui::AnyElement {
+        let panel = cx.entity().downgrade();
+        let list = self.transcript_list.clone();
+        gpui::canvas(
+            |_, _, _| (),
+            move |panel_bounds, _, _, cx| {
+                let Some(input) = input.get() else { return };
+                let Some(body) = body.get() else { return };
+                let viewport = list.viewport_bounds();
+                let measured_content =
+                    f32::from(viewport.size.height + list.max_offset_for_scrollbar().y);
+                cx.defer(move |cx| {
+                    // Work out the new layout from a read, and update only when it
+                    // differs: an update counts as a change for retained views.
+                    let Some(entity) = panel.upgrade() else {
+                        return;
+                    };
+                    let current = entity.read(cx).startup_layout.clone();
+                    let (next, notify) = if fresh {
+                        // Remember without notifying: this measurement does
+                        // not change the already correct welcome frame.
+                        let next = StartupLayout {
+                            input_top: f32::from(input.top() - panel_bounds.top()),
+                            committed: false,
+                            messages_height: f32::from(input.top() - body.top()),
+                            preview: true,
+                            compact: false,
+                            filled: false,
+                        };
+                        (Some(next), false)
+                    } else if let Some(mut layout) = current.clone() {
+                        let mut notify = false;
+                        let available = f32::from(body.size.height - input.size.height).max(0.);
+                        let wanted = measured_content + TRANSCRIPT_BOTTOM_GAP;
+                        if !layout.compact && wanted >= available {
+                            layout.compact = true;
+                            notify = true;
+                        }
+                        let floor =
+                            (layout.input_top - f32::from(body.top() - panel_bounds.top())).max(0.);
+                        // messages_height includes the non-scrolling gap,
+                        // while the list's measurements contain rows only.
+                        let height = floor.max(wanted).min(available);
+                        if (height - layout.messages_height).abs() > 0.5 {
+                            layout.messages_height = height;
+                            notify = true;
+                        }
+                        let filled = wanted >= available - 0.5;
+                        if filled != layout.filled {
+                            layout.filled = filled;
+                            notify = true;
+                        }
+                        (Some(layout), notify)
+                    } else {
+                        return;
+                    };
+                    if next == current {
+                        return;
+                    }
+                    entity.update(cx, |panel, cx| {
+                        panel.startup_layout = next;
+                        if notify {
+                            cx.notify();
+                        }
+                    });
+                });
+            },
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .into_any_element()
+    }
+}

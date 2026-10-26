@@ -1,0 +1,846 @@
+//! Gmail compose calls render as an email, not as JSON.
+//!
+//! `gmail` calls with `action: draft`, `send` or `update_draft` show the
+//! recipient, subject and body as they stream in, then the saved, updated or
+//! sent state with a link to open it in Gmail. A finished `update_draft` shows
+//! the merged draft from the tool output, since omitted fields keep their
+//! previous values. Cards for a draft that a later call updated, sent or
+//! deleted collapse to one line marked as superseded. Other Gmail actions keep
+//! the generic row.
+use crate::text_selection::{self, TextSelection};
+use crate::theme::Theme;
+use gpui::{prelude::*, *};
+
+const BODY_LINES: usize = 14;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct Compose {
+    pub action: String,
+    pub to: String,
+    pub cc: String,
+    pub subject: String,
+    pub body: String,
+    pub attachments: Vec<String>,
+    pub reply: bool,
+    /// The draft an `update_draft` call revises.
+    pub draft_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum Outcome {
+    Writing,
+    Drafted {
+        draft_id: Option<String>,
+    },
+    Updated {
+        draft_id: Option<String>,
+    },
+    Sent {
+        message_id: Option<String>,
+    },
+    /// The tool finished without composing, e.g. a missing attachment.
+    Note(String),
+}
+
+/// What happened to a draft after its card was rendered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Superseded {
+    Updated,
+    Sent,
+    Deleted,
+}
+
+impl Superseded {
+    fn label(self) -> &'static str {
+        match self {
+            Superseded::Updated => "Superseded · updated below",
+            Superseded::Sent => "Superseded · sent below",
+            Superseded::Deleted => "Superseded · deleted below",
+        }
+    }
+}
+
+/// Top-level string fields and string arrays, readable before the arguments
+/// finish streaming. Unfinished values are returned as their decoded prefix.
+fn fields(input: &str) -> Vec<(String, serde_json::Value)> {
+    if let Ok(serde_json::Value::Object(map)) = serde_json::from_str(input) {
+        return map.into_iter().collect();
+    }
+    let mut out = Vec::new();
+    let Some(mut rest) = input.trim_start().strip_prefix('{') else {
+        return out;
+    };
+    loop {
+        rest = rest.trim_start();
+        if !rest.starts_with('"') {
+            break;
+        }
+        let (key, Some(consumed)) = super::tool_streaming::progressive_string(rest) else {
+            break;
+        };
+        let Some(value) = rest[consumed..].trim_start().strip_prefix(':') else {
+            break;
+        };
+        rest = value.trim_start();
+        if rest.starts_with('"') {
+            let (text, consumed) = super::tool_streaming::progressive_string(rest);
+            out.push((key, serde_json::Value::String(text)));
+            let Some(consumed) = consumed else { break };
+            rest = &rest[consumed..];
+        } else {
+            let mut values =
+                serde_json::Deserializer::from_str(rest).into_iter::<serde_json::Value>();
+            match values.next() {
+                Some(Ok(value)) => {
+                    out.push((key, value));
+                    rest = &rest[values.byte_offset()..];
+                }
+                _ => break,
+            }
+        }
+        let Some(next) = rest.trim_start().strip_prefix(',') else {
+            break;
+        };
+        rest = next;
+    }
+    out
+}
+
+/// A compose view of `gmail` arguments, or `None` for non-compose actions.
+pub(super) fn parse(name: &str, input: &str) -> Option<Compose> {
+    if name.trim_start_matches("functions.") != "gmail" {
+        return None;
+    }
+    let mut compose = Compose::default();
+    for (key, value) in fields(input) {
+        let text = || value.as_str().unwrap_or_default().to_owned();
+        match key.as_str() {
+            "action" => compose.action = text(),
+            "to" => compose.to = text(),
+            "cc" => compose.cc = text(),
+            "subject" => compose.subject = text(),
+            "body" => compose.body = text(),
+            "in_reply_to" | "thread_id" => compose.reply |= !text().is_empty(),
+            "draft_id" => compose.draft_id = text(),
+            "attachments" => {
+                compose.attachments = value
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|path| path.as_str().map(str::to_owned))
+                    .collect()
+            }
+            _ => {}
+        }
+    }
+    matches!(compose.action.as_str(), "draft" | "send" | "update_draft").then_some(compose)
+}
+
+/// A finished `update_draft` reports the merged draft. Prefer it over the
+/// arguments, which only carry the fields the call changed.
+pub(super) fn merge_output(mut compose: Compose, output: &str, done: bool) -> Compose {
+    if compose.action != "update_draft" || !done {
+        return compose;
+    }
+    let output = output.trim();
+    if !output.starts_with("Draft updated") {
+        return compose;
+    }
+    if let Some(to) = line_value(output, "To:") {
+        compose.to = to;
+    }
+    if let Some(subject) = output
+        .lines()
+        .find_map(|line| line.strip_prefix("Subject:"))
+    {
+        compose.subject = subject.trim().to_owned();
+    }
+    if let Some((_, rest)) = output.split_once("\nBody:\n") {
+        let body = rest
+            .split_once("\n\nTo send this draft")
+            .map_or(rest, |(body, _)| body);
+        let body = body
+            .split_once("\nNote: the previous draft had attachments")
+            .map_or(body, |(body, _)| body);
+        compose.body = body.trim_end().to_owned();
+    }
+    if compose.draft_id.is_empty()
+        && let Some(id) = line_value(output, "Draft ID:")
+    {
+        compose.draft_id = id;
+    }
+    compose
+}
+
+/// The draft a compose card shows, once it is known.
+pub(super) fn card_draft_id(compose: &Compose, outcome: &Outcome) -> Option<String> {
+    match outcome {
+        Outcome::Drafted { draft_id } | Outcome::Updated { draft_id } => draft_id.clone(),
+        _ => None,
+    }
+    .or_else(|| (!compose.draft_id.is_empty()).then(|| compose.draft_id.clone()))
+}
+
+/// A finished call that replaces, sends or deletes an existing draft.
+pub(super) fn supersedes(
+    name: &str,
+    input: &str,
+    output: &str,
+    done: bool,
+    error: Option<&str>,
+) -> Option<(String, Superseded)> {
+    if name.trim_start_matches("functions.") != "gmail" || !done || error.is_some() {
+        return None;
+    }
+    let input: serde_json::Value = serde_json::from_str(input).ok()?;
+    let draft_id = input.get("draft_id")?.as_str()?.trim();
+    if draft_id.is_empty() {
+        return None;
+    }
+    let output = output.trim();
+    let kind = match input.get("action")?.as_str()? {
+        "update_draft" if output.starts_with("Draft updated") => Superseded::Updated,
+        "send_draft" if output.starts_with("Draft sent") => Superseded::Sent,
+        "delete_draft" if output.ends_with("deleted.") => Superseded::Deleted,
+        _ => return None,
+    };
+    Some((draft_id.to_owned(), kind))
+}
+
+/// Map each superseded compose card's call id to what replaced it. `tools`
+/// is every tool call in transcript order as (call id, name, input, output,
+/// done, error). Only later calls supersede earlier cards.
+pub(super) fn superseded_cards<'a>(
+    tools: impl IntoIterator<Item = (&'a str, &'a str, &'a str, &'a str, bool, Option<&'a str>)>,
+) -> std::collections::HashMap<String, Superseded> {
+    use std::collections::HashMap;
+    let mut open: HashMap<String, Vec<String>> = HashMap::new();
+    let mut out = HashMap::new();
+    for (call_id, name, input, output, done, error) in tools {
+        if let Some((draft_id, kind)) = supersedes(name, input, output, done, error)
+            && let Some(cards) = open.remove(&draft_id)
+        {
+            for card in cards {
+                out.insert(card, kind);
+            }
+        }
+        if error.is_none()
+            && let Some(compose) = parse(name, input)
+        {
+            let compose = merge_output(compose, output, done);
+            if let Some(draft_id) = card_draft_id(&compose, &outcome(output, done)) {
+                open.entry(draft_id).or_default().push(call_id.to_owned());
+            }
+        }
+    }
+    out
+}
+
+fn line_value(output: &str, label: &str) -> Option<String> {
+    output
+        .lines()
+        .find_map(|line| line.trim().strip_prefix(label))
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+pub(super) fn outcome(output: &str, done: bool) -> Outcome {
+    let output = output.trim();
+    if !done {
+        return Outcome::Writing;
+    }
+    if output.starts_with("Draft created") {
+        Outcome::Drafted {
+            draft_id: line_value(output, "Draft ID:"),
+        }
+    } else if output.starts_with("Draft updated") {
+        Outcome::Updated {
+            draft_id: line_value(output, "Draft ID:"),
+        }
+    } else if output.starts_with("Email sent") {
+        Outcome::Sent {
+            message_id: line_value(output, "Message ID:"),
+        }
+    } else {
+        Outcome::Note(output.lines().next().unwrap_or_default().to_owned())
+    }
+}
+
+/// Where "Open in Gmail" goes. Sent mail opens the message itself. Drafts open
+/// the Drafts folder, since the API draft id is not a Gmail web URL.
+pub(super) fn gmail_url(outcome: &Outcome) -> Option<String> {
+    match outcome {
+        Outcome::Drafted { .. } | Outcome::Updated { .. } => {
+            Some("https://mail.google.com/mail/u/0/#drafts".into())
+        }
+        Outcome::Sent {
+            message_id: Some(id),
+        } if id.chars().all(|ch| ch.is_ascii_alphanumeric()) => {
+            Some(format!("https://mail.google.com/mail/u/0/#all/{id}"))
+        }
+        Outcome::Sent { .. } => Some("https://mail.google.com/mail/u/0/#sent".into()),
+        _ => None,
+    }
+}
+
+fn clip_body(body: &str) -> (String, usize) {
+    let lines: Vec<&str> = body.trim_end().lines().collect();
+    if lines.len() <= BODY_LINES {
+        return (lines.join("\n"), 0);
+    }
+    (lines[..BODY_LINES].join("\n"), lines.len() - BODY_LINES)
+}
+
+fn file_name(path: &str) -> &str {
+    path.rsplit(['/', '\\']).next().unwrap_or(path)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn render(
+    index: usize,
+    compose: &Compose,
+    outcome: &Outcome,
+    error: Option<&str>,
+    tokens: Option<Div>,
+    superseded: Option<Superseded>,
+    expanded: bool,
+    on_toggle: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    selection: &Entity<TextSelection>,
+    window: &Window,
+    cx: &App,
+) -> AnyElement {
+    let theme = Theme::global();
+    // A replaced draft collapses to one line. Clicking it shows the old
+    // version in full, still marked as superseded.
+    if let Some(kind) = superseded
+        && !expanded
+    {
+        return render_superseded(index, compose, kind, on_toggle);
+    }
+    let sending = compose.action == "send";
+    let updating = compose.action == "update_draft";
+    let failed = error.is_some() || matches!(outcome, Outcome::Note(_));
+    let (status, status_color) = match (outcome, error) {
+        (_, Some(_)) => ("Failed", theme.ERROR),
+        _ if superseded.is_some() => (superseded.map_or("", Superseded::label), theme.TEXT_FAINT),
+        (Outcome::Writing, _) if sending => ("Sending…", theme.TEXT_FAINT),
+        (Outcome::Writing, _) if updating => ("Updating draft…", theme.TEXT_FAINT),
+        (Outcome::Writing, _) => ("Writing draft…", theme.TEXT_FAINT),
+        (Outcome::Drafted { .. }, _) => ("Draft saved", theme.OK),
+        (Outcome::Updated { .. }, _) => ("Draft updated", theme.OK),
+        (Outcome::Sent { .. }, _) => ("Sent", theme.OK),
+        (Outcome::Note(_), _) => ("Not saved", theme.WARN),
+    };
+    let title = if updating {
+        "Updated draft"
+    } else if compose.reply {
+        if sending { "Reply" } else { "Reply draft" }
+    } else if sending {
+        "Email"
+    } else {
+        "Email draft"
+    };
+    let plain =
+        |key: String, text: String| text_selection::plain(selection.clone(), key, text, window, cx);
+    let field = |label: &'static str, value: String, key: &str, strong: bool| {
+        div()
+            .flex()
+            .flex_row()
+            .gap_3()
+            .min_w_0()
+            .child(
+                div()
+                    .flex_none()
+                    .w(px(56.0))
+                    .text_color(theme.TEXT_FAINT)
+                    .child(label),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(if strong { theme.TEXT } else { theme.TEXT_DIM })
+                    .when(strong, |el| el.font_weight(FontWeight::MEDIUM))
+                    .child(plain(format!("gmail-{key}-{index}"), value)),
+            )
+    };
+    let (body, hidden) = if expanded {
+        (compose.body.trim_end().to_owned(), 0)
+    } else {
+        clip_body(&compose.body)
+    };
+    let writing = matches!(outcome, Outcome::Writing) && error.is_none();
+    // An old version should not invite opening Gmail; the newer card does.
+    let url = gmail_url(outcome).filter(|_| superseded.is_none());
+    let on_toggle = std::rc::Rc::new(on_toggle);
+    let collapse_toggle = on_toggle.clone();
+
+    div()
+        .id(("gmail-compose", index))
+        .debug_selector(|| "gmail-compose-card".into())
+        .flex_none()
+        .flex()
+        .flex_col()
+        .max_w(px(720.0))
+        .my_1()
+        .rounded_lg()
+        .border_1()
+        .border_color(if failed {
+            theme.ERROR
+        } else {
+            theme.TOOL_BORDER
+        })
+        .bg(theme.TOOL_BG)
+        .when(superseded.is_some(), |el| el.opacity(0.6))
+        .overflow_hidden()
+        .text_size(px(13.0))
+        .line_height(px(20.0))
+        // Header: what this is and where it stands.
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .px_3()
+                .py_2()
+                .bg(theme.HEADER_BG)
+                .child(crate::tool_icon::render_badge("gmail", !writing, failed))
+                .child(
+                    div()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(theme.TOOL_TEXT)
+                        .child(title),
+                )
+                .child(
+                    div()
+                        .debug_selector(|| "gmail-compose-status".into())
+                        .text_size(px(12.0))
+                        .text_color(status_color)
+                        .child(status),
+                )
+                .when_some(tokens, |el, tokens| el.child(tokens))
+                .child(div().flex_1())
+                .when(superseded.is_some(), |el| {
+                    el.child(
+                        div()
+                            .id(("gmail-superseded-hide", index))
+                            .debug_selector(|| "gmail-compose-hide".into())
+                            .px_2()
+                            .rounded_full()
+                            .bg(theme.INLINE_CODE_BG)
+                            .text_size(px(12.0))
+                            .text_color(theme.TEXT_DIM)
+                            .cursor_pointer()
+                            .hover(|style| style.bg(theme.ACCENT_MUTED))
+                            .on_click(move |event, window, cx| collapse_toggle(event, window, cx))
+                            .child("Collapse"),
+                    )
+                })
+                .when_some(url.clone(), |el, url| {
+                    el.child(
+                        div()
+                            .id(("gmail-open", index))
+                            .debug_selector(|| "gmail-compose-open".into())
+                            .px_2()
+                            .rounded_md()
+                            .text_size(px(12.0))
+                            .text_color(theme.LINK)
+                            .cursor_pointer()
+                            .hover(|style| style.bg(theme.INLINE_CODE_BG))
+                            .on_click(move |_, _, cx| {
+                                cx.stop_propagation();
+                                if !crate::harness::screenshot_mode() {
+                                    cx.open_url(&url);
+                                }
+                            })
+                            .child("Open in Gmail"),
+                    )
+                }),
+        )
+        // Envelope.
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .px_3()
+                .pt_2()
+                .pb_2()
+                .child(field(
+                    "To",
+                    if compose.to.is_empty() {
+                        "…".into()
+                    } else {
+                        compose.to.clone()
+                    },
+                    "to",
+                    false,
+                ))
+                .when(!compose.cc.is_empty(), |el| {
+                    el.child(field("Cc", compose.cc.clone(), "cc", false))
+                })
+                .child(field(
+                    "Subject",
+                    if compose.subject.is_empty() {
+                        if writing {
+                            "…".into()
+                        } else {
+                            "(no subject)".into()
+                        }
+                    } else {
+                        compose.subject.clone()
+                    },
+                    "subject",
+                    true,
+                )),
+        )
+        // Body, the part worth reading.
+        .when(!body.trim().is_empty() || writing, |el| {
+            el.child(
+                div()
+                    .debug_selector(|| "gmail-compose-body".into())
+                    .mx_3()
+                    .mb_2()
+                    .pt_2()
+                    .border_t_1()
+                    .border_color(theme.TOOL_BORDER)
+                    .font_family(theme.FONT_AI)
+                    .text_color(theme.TEXT)
+                    .whitespace_normal()
+                    .child(plain(format!("gmail-body-{index}"), body)),
+            )
+        })
+        .when(
+            hidden > 0 || (expanded && compose.body.lines().count() > BODY_LINES),
+            |el| {
+                el.child(
+                    div()
+                        .id(("gmail-body-toggle", index))
+                        .debug_selector(|| "gmail-compose-more".into())
+                        .mx_3()
+                        .mb_2()
+                        .text_size(px(12.0))
+                        .text_color(theme.TEXT_DIM)
+                        .cursor_pointer()
+                        .hover(|style| style.text_color(theme.TEXT))
+                        .on_click(move |event, window, cx| on_toggle(event, window, cx))
+                        .child(if expanded {
+                            "Show less".to_owned()
+                        } else {
+                            format!(
+                                "Show {hidden} more line{}",
+                                if hidden == 1 { "" } else { "s" }
+                            )
+                        }),
+                )
+            },
+        )
+        .when(!compose.attachments.is_empty(), |el| {
+            el.child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .gap_1()
+                    .mx_3()
+                    .mb_2()
+                    .children(compose.attachments.iter().enumerate().map(|(n, path)| {
+                        div()
+                            .id(("gmail-attachment", index * 64 + n))
+                            .px_2()
+                            .rounded_md()
+                            .bg(theme.INLINE_CODE_BG)
+                            .text_size(px(12.0))
+                            .text_color(theme.TEXT_DIM)
+                            .child(format!("📎 {}", file_name(path)))
+                    })),
+            )
+        })
+        .when_some(
+            match (error, outcome) {
+                (Some(message), _) => Some(message.to_owned()),
+                (None, Outcome::Note(note)) => Some(note.clone()),
+                _ => None,
+            },
+            |el, message| {
+                el.child(
+                    div()
+                        .debug_selector(|| "gmail-compose-error".into())
+                        .px_3()
+                        .pb_2()
+                        .text_size(px(12.0))
+                        .text_color(theme.ERROR)
+                        .child(plain(format!("gmail-error-{index}"), message)),
+                )
+            },
+        )
+        .into_any_element()
+}
+
+/// One line for a draft version a later call replaced.
+fn render_superseded(
+    index: usize,
+    compose: &Compose,
+    kind: Superseded,
+    on_toggle: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> AnyElement {
+    let theme = Theme::global();
+    let subject = if compose.subject.trim().is_empty() {
+        "(no subject)".to_owned()
+    } else {
+        compose.subject.clone()
+    };
+    div()
+        .id(("gmail-compose", index))
+        .debug_selector(|| "gmail-compose-superseded".into())
+        .flex_none()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_2()
+        .max_w(px(720.0))
+        .my_1()
+        .px_3()
+        .py_1()
+        .rounded_full()
+        .bg(theme.TOOL_BG)
+        .opacity(0.7)
+        .text_size(px(13.0))
+        .line_height(px(20.0))
+        .cursor_pointer()
+        .hover(|style| style.opacity(1.0))
+        .on_click(on_toggle)
+        .child(crate::tool_icon::render_badge("gmail", true, false))
+        .child(div().flex_none().text_color(theme.TEXT_DIM).child(
+            if compose.action == "update_draft" {
+                "Earlier revision"
+            } else {
+                "Earlier draft"
+            },
+        ))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_color(theme.TEXT_DIM)
+                .line_through()
+                .child(subject),
+        )
+        .child(
+            div()
+                .flex_none()
+                .debug_selector(|| "gmail-compose-superseded-status".into())
+                .text_size(px(12.0))
+                .text_color(theme.TEXT_FAINT)
+                .child(kind.label()),
+        )
+        .into_any_element()
+}
+
+pub(super) fn fixture_items() -> Vec<super::Item> {
+    use super::Item;
+    let body = "Hi Sam,\n\nThanks for sending over the Q3 numbers. I went through them this afternoon and they look solid.\n\nTwo small things before we share it more widely:\n\n1. The churn figure on page 3 uses August, not September.\n2. Could we add the Desktop beta signups next to the CLI installs?\n\nHappy to pair on it tomorrow if that helps.\n\nBest,\nJeremy";
+    vec![
+        Item::User("Draft a reply to Sam about the Q3 report. Mention the churn number and ask for Desktop signups.".into()),
+        Item::Assistant("Here is a draft reply. It is saved in Gmail and has not been sent.".into()),
+        Item::Tool {
+            call_id: "gmail-draft".into(),
+            name: "gmail".into(),
+            input: serde_json::json!({
+                "intent": "Draft reply to Sam",
+                "action": "draft",
+                "to": "sam@example.com",
+                "subject": "Re: Q3 report",
+                "body": body,
+                "in_reply_to": "18c2f0a1b2c3d4e5",
+                "attachments": ["/home/jeremy/reports/q3-notes.pdf"],
+            })
+            .to_string(),
+            output: "Draft created successfully.\nDraft ID: r-812345\nTo: sam@example.com\nSubject: Re: Q3 report\nAttachments (1):\n  - /home/jeremy/reports/q3-notes.pdf\n\nTo send this draft, use action 'send_draft' with draft_id 'r-812345' and confirmed: true.".into(),
+            done: true,
+            error: None,
+        },
+        Item::User("Make it shorter and drop the attachment mention.".into()),
+        Item::Tool {
+            call_id: "gmail-update".into(),
+            name: "gmail".into(),
+            input: serde_json::json!({
+                "intent": "Shorten the reply to Sam",
+                "action": "update_draft",
+                "draft_id": "r-812345",
+                "body": "Hi Sam,\n\nThe Q3 numbers look solid. One fix: the churn figure on page 3 uses August, not September. Could you also add Desktop beta signups?\n\nBest,\nJeremy",
+            })
+            .to_string(),
+            output: "Draft updated in place.\nDraft ID: r-812345\nTo: sam@example.com\nSubject: Re: Q3 report\nBody:\nHi Sam,\n\nThe Q3 numbers look solid. One fix: the churn figure on page 3 uses August, not September. Could you also add Desktop beta signups?\n\nBest,\nJeremy\n\nTo send this draft, use action 'send_draft' with draft_id 'r-812345' and confirmed: true.".into(),
+            done: true,
+            error: None,
+        },
+        Item::User("Also start one to the team about Friday's demo.".into()),
+        Item::Tool {
+            call_id: "gmail-draft-streaming".into(),
+            name: "gmail".into(),
+            input: r#"{"intent":"Draft demo note","action":"draft","to":"team@example.com","subject":"Friday demo","body":"Hi all,\n\nQuick heads up: we will demo the new Gmail draft cards on Fri"#.into(),
+            output: String::new(),
+            done: false,
+            error: None,
+        },
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        BODY_LINES, Outcome, Superseded, clip_body, file_name, gmail_url, merge_output, outcome,
+        parse, superseded_cards,
+    };
+
+    const UPDATED: &str = "Draft updated in place.\nDraft ID: r-1\nTo: sam@x.com\nSubject: Re: Q3\nBody:\nHi Sam,\n\nShorter.\nNote: the previous draft had attachments; they were not carried over. Pass 'attachments' to re-attach.\n\nTo send this draft, use action 'send_draft' with draft_id 'r-1' and confirmed: true.";
+
+    #[test]
+    fn update_draft_renders_the_merged_draft() {
+        let input = r#"{"action":"update_draft","draft_id":"r-1","body":"Shorter."}"#;
+        let compose = parse("gmail", input).unwrap();
+        assert_eq!(compose.draft_id, "r-1");
+        // While streaming, only the changed fields are known.
+        assert!(merge_output(compose.clone(), "", false).to.is_empty());
+        let merged = merge_output(compose, UPDATED, true);
+        assert_eq!(merged.to, "sam@x.com");
+        assert_eq!(merged.subject, "Re: Q3");
+        assert_eq!(merged.body, "Hi Sam,\n\nShorter.");
+        assert_eq!(
+            outcome(UPDATED, true),
+            Outcome::Updated {
+                draft_id: Some("r-1".into())
+            }
+        );
+    }
+
+    #[test]
+    fn later_calls_supersede_earlier_draft_cards() {
+        let draft_in = r#"{"action":"draft","to":"a","subject":"S","body":"v1"}"#;
+        let draft_out = "Draft created successfully.\nDraft ID: r-1\nTo: a";
+        let other_in = r#"{"action":"draft","to":"b","subject":"T","body":"x"}"#;
+        let other_out = "Draft created successfully.\nDraft ID: r-2\nTo: b";
+        let update_in = r#"{"action":"update_draft","draft_id":"r-1","body":"v2"}"#;
+        let send_in = r#"{"action":"send_draft","draft_id":"r-1","confirmed":true}"#;
+        let tools = vec![
+            ("c1", "gmail", draft_in, draft_out, true, None),
+            ("c2", "gmail", other_in, other_out, true, None),
+            ("c3", "gmail", update_in, UPDATED, true, None),
+        ];
+        let stale = superseded_cards(tools.clone());
+        assert_eq!(stale.get("c1"), Some(&Superseded::Updated));
+        assert!(!stale.contains_key("c2"), "other drafts are untouched");
+        assert!(!stale.contains_key("c3"), "the newest revision stays live");
+
+        let mut sent = tools.clone();
+        sent.push((
+            "c4",
+            "gmail",
+            send_in,
+            "Draft sent successfully.\nMessage ID: m",
+            true,
+            None,
+        ));
+        let stale = superseded_cards(sent);
+        assert_eq!(stale.get("c1"), Some(&Superseded::Updated));
+        assert_eq!(stale.get("c3"), Some(&Superseded::Sent));
+
+        // A confirmation prompt or failed update does not supersede.
+        let mut pending = tools[..2].to_vec();
+        pending.push(("c3", "gmail", update_in, "", false, None));
+        pending.push((
+            "c4",
+            "gmail",
+            send_in,
+            "CONFIRMATION REQUIRED: Send draft r-1?",
+            true,
+            None,
+        ));
+        assert!(superseded_cards(pending).is_empty());
+        let mut failed = tools[..2].to_vec();
+        failed.push(("c3", "gmail", update_in, "", true, Some("boom")));
+        assert!(superseded_cards(failed).is_empty());
+    }
+
+    #[test]
+    fn only_compose_actions_become_cards() {
+        assert!(parse("gmail", r#"{"action":"search","query":"x"}"#).is_none());
+        assert!(parse("gmail", r#"{"action":"send_draft","draft_id":"r"}"#).is_none());
+        assert!(parse("bash", r#"{"action":"draft"}"#).is_none());
+        let draft = parse("functions.gmail", r#"{"action":"draft","to":"a@b.c","subject":"Hi","body":"Yo","thread_id":"t","attachments":["/x/y.pdf"]}"#).unwrap();
+        assert_eq!(draft.to, "a@b.c");
+        assert_eq!(draft.subject, "Hi");
+        assert!(draft.reply);
+        assert_eq!(draft.attachments, vec!["/x/y.pdf"]);
+        assert_eq!(
+            parse("gmail", r#"{"action":"send","to":"a"}"#)
+                .unwrap()
+                .action,
+            "send"
+        );
+    }
+
+    #[test]
+    fn streaming_arguments_fill_in_progressively() {
+        assert!(parse("gmail", r#"{"intent":"x","act"#).is_none());
+        let partial = parse("gmail", r#"{"action":"draft","to":"sam@ex","#).unwrap();
+        assert_eq!(partial.to, "sam@ex");
+        let partial = parse(
+            "gmail",
+            r#"{"action":"draft","to":"s","body":"Line one\nLine tw"#,
+        )
+        .unwrap();
+        assert_eq!(partial.body, "Line one\nLine tw");
+        assert!(partial.subject.is_empty());
+    }
+
+    #[test]
+    fn outcomes_follow_the_tool_output() {
+        assert_eq!(outcome("", false), Outcome::Writing);
+        assert_eq!(
+            outcome("Draft created successfully.\nDraft ID: r-1\nTo: a", true),
+            Outcome::Drafted {
+                draft_id: Some("r-1".into())
+            }
+        );
+        assert_eq!(
+            outcome(
+                "Email sent successfully.\nMessage ID: 18abc\nThread ID: t",
+                true
+            ),
+            Outcome::Sent {
+                message_id: Some("18abc".into())
+            }
+        );
+        assert_eq!(
+            outcome("Attachment not found or not a file: /x", true),
+            Outcome::Note("Attachment not found or not a file: /x".into())
+        );
+        assert_eq!(
+            gmail_url(&Outcome::Sent {
+                message_id: Some("18abc".into())
+            })
+            .unwrap(),
+            "https://mail.google.com/mail/u/0/#all/18abc"
+        );
+        assert!(
+            gmail_url(&Outcome::Drafted { draft_id: None })
+                .unwrap()
+                .ends_with("#drafts")
+        );
+        assert!(gmail_url(&Outcome::Writing).is_none());
+    }
+
+    #[test]
+    fn long_bodies_clip_with_a_count() {
+        let body: String = (0..20).map(|n| format!("l{n}\n")).collect();
+        let (shown, hidden) = clip_body(&body);
+        assert_eq!(hidden, 6);
+        assert_eq!(shown.lines().count(), BODY_LINES);
+        assert_eq!(file_name("/a/b/c.pdf"), "c.pdf");
+    }
+}

@@ -1,0 +1,407 @@
+name: Linux and Windows desktop release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Package version used for validation artifacts
+        required: true
+        default: 0.1.0-beta.29
+  push:
+    tags: ["desktop-v*"]
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: desktop-release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Prepare private draft release
+        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF_NAME" =~ ^desktop-v[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$ ]] || { echo "Invalid desktop release tag" >&2; exit 1; }
+          PRERELEASE=false
+          [[ "$GITHUB_REF_NAME" != *-beta.* ]] || PRERELEASE=true
+          if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # macOS and the matrix coordinator can start together. A concurrent
+            # create is safe only when the resulting release passes the gate below.
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+              --verify-tag --draft --prerelease="$PRERELEASE" \
+              --title "Jcode Desktop ${GITHUB_REF_NAME#desktop-v}" \
+              --notes "Verified platform packages. All release gates must pass before publication." \
+              || gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null
+          fi
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --json tagName,isDraft,isPrerelease \
+            --jq "(.tagName == \"$GITHUB_REF_NAME\" and .isDraft == true and .isPrerelease == $PRERELEASE)" | grep -qx true
+
+  build:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: linux
+            arch: x86_64
+            target: x86_64-unknown-linux-gnu
+            checksums: SHA256SUMS-linux
+          - os: ubuntu-24.04-arm
+            platform: linux
+            arch: aarch64
+            target: aarch64-unknown-linux-gnu
+            checksums: SHA256SUMS-linux-aarch64
+          - os: windows-2025
+            platform: windows
+            arch: x86_64
+            target: x86_64-pc-windows-msvc
+            checksums: SHA256SUMS-windows
+          - os: windows-11-arm
+            platform: windows
+            arch: aarch64
+            target: aarch64-pc-windows-msvc
+            checksums: SHA256SUMS-windows-aarch64
+    runs-on: ${{ matrix.os }}
+    # Cold Windows builds plus the multi-GB post-job cache save exceeded 120m
+    # in beta27 after packaging, smoke tests, and artifact upload had passed.
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: jcode-desktop
+          # Embed version/date-grouped update history, not just the checkout commit.
+          fetch-depth: 0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: 1jehuang/jcode
+          ref: 217c196bbd7038b57a682221b5f1611f2ccc5bc3 # verified runtime: native voice, collections, commands, user responses and session presence
+          path: jcode
+          submodules: recursive
+      - name: Verify runtime source compatibility
+        run: python jcode-desktop/scripts/verify-runtime-source.py --runtime jcode --expected-commit 217c196bbd7038b57a682221b5f1611f2ccc5bc3
+      - name: Validate release target and publication contracts
+        run: python -m unittest discover -s jcode-desktop/tests -p test_release_targets.py -v
+      - name: Configure MSVC build environment
+        if: matrix.platform == 'windows'
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        with:
+          arch: ${{ matrix.arch == 'aarch64' && 'amd64_arm64' || 'amd64' }}
+      # .cargo/config.toml routes rustc through a POSIX shell wrapper (the
+      # parallel front-end for unoptimized local builds) that native Windows
+      # cannot execute. Release builds never use its threads, so disable it.
+      - name: Disable POSIX rustc wrapper on Windows
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_ENV -Value 'CARGO_BUILD_RUSTC_WRAPPER='
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        with:
+          workspaces: |
+            jcode-desktop
+            jcode
+          cache-on-failure: true
+          key: ${{ matrix.target }}
+      - name: Install Linux build dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev libfontconfig-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libx11-xcb-dev libxcb1-dev libxcb-render0-dev \
+            libxcb-shape0-dev libxcb-xfixes0-dev libgl1-mesa-dri \
+            mesa-vulkan-drivers openbox wayland-utils weston x11-utils xvfb
+      - name: Build and package Linux
+        if: matrix.platform == 'linux'
+        env:
+          VERSION: ${{ startsWith(github.ref, 'refs/tags/desktop-v') && github.ref_name || inputs.version }}
+          JCODE_REPO: ${{ github.workspace }}/jcode
+          TARGET: ${{ matrix.target }}
+        run: jcode-desktop/scripts/package-linux.sh
+      - name: Verify Linux package
+        if: matrix.platform == 'linux'
+        run: |
+          python3 jcode-desktop/scripts/verify-release-package.py jcode-desktop/dist/linux/*.tar.gz --target '${{ matrix.target }}'
+          dpkg-deb --info jcode-desktop/dist/linux/*.deb
+          dpkg-deb --contents jcode-desktop/dist/linux/*.deb | grep -E 'jcode-desktop|jcode-harness-api-bridge|jcode.desktop|jcode.png'
+          (cd jcode-desktop/dist/linux && sha256sum -c '${{ matrix.checksums }}')
+      # Preserve branch validation builds even if smoke infrastructure fails.
+      # Tags use private release transport only after all native smoke gates.
+      - name: Preserve packaged Linux artifacts before smoke
+        if: matrix.platform == 'linux' && !startsWith(github.ref, 'refs/tags/desktop-v')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: desktop-linux-${{ matrix.arch }}
+          if-no-files-found: error
+          path: |
+            jcode-desktop/dist/linux/Jcode-*.tar.gz
+            jcode-desktop/dist/linux/Jcode-*.deb
+            jcode-desktop/dist/linux/${{ matrix.checksums }}
+      - name: Smoke-test Linux package on X11
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          app=$(find jcode-desktop/dist/linux -type f -name jcode-desktop | head -1)
+          cli=$(dirname "$app")/jcode
+          "$cli" --version
+          smoke="$RUNNER_TEMP/jcode-linux-smoke/x11"
+          runtime="$smoke/runtime"
+          home="$smoke/home"
+          mkdir -p "$runtime" "$home"
+          chmod 700 "$runtime"
+          timeout 25s xvfb-run -a -s '-screen 0 1280x800x24' bash -c '
+            set -euo pipefail
+            app=$1; runtime=$2; home=$3; smoke=$4
+            openbox >"$smoke/openbox.log" 2>&1 &
+            openbox_pid=$!
+            trap '\''kill "$openbox_pid" 2>/dev/null || true'\'' EXIT
+            for _ in {1..50}; do
+              xprop -root _NET_SUPPORTING_WM_CHECK >/dev/null 2>&1 && break
+              sleep 0.1
+            done
+            xprop -root _NET_SUPPORTING_WM_CHECK >/dev/null
+            env -u WAYLAND_DISPLAY XDG_RUNTIME_DIR="$runtime" HOME="$home" \
+              LIBGL_ALWAYS_SOFTWARE=1 WGPU_BACKEND=vulkan \
+              "$app" >"$smoke/app.log" 2>&1 &
+            pid=$!
+            sleep 8
+            if ! kill -0 "$pid" 2>/dev/null; then
+              wait "$pid" || status=$?
+              echo "X11 app exited before smoke completed (status ${status:-0})" >&2
+              exit 1
+            fi
+            kill "$pid"
+            wait "$pid" || true
+          ' bash "$app" "$runtime" "$home" "$smoke"
+      - name: Smoke-test Linux package on native Wayland
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          app=$(find jcode-desktop/dist/linux -type f -name jcode-desktop | head -1)
+          smoke="$RUNNER_TEMP/jcode-linux-smoke/wayland"
+          runtime="$smoke/runtime"
+          home="$smoke/home"
+          mkdir -p "$runtime" "$home"
+          chmod 700 "$runtime"
+          # Weston's headless backend has no wl_seat, which GPUI requires.
+          # Nest Weston in Xvfb to expose a virtual seat, then remove DISPLAY
+          # from the app so the tested client path is still native Wayland.
+          timeout 30s xvfb-run -a -s '-screen 0 1280x800x24' bash -c '
+            set -euo pipefail
+            app=$1; runtime=$2; home=$3; smoke=$4
+            openbox >"$smoke/openbox.log" 2>&1 &
+            openbox_pid=$!
+            XDG_RUNTIME_DIR="$runtime" LIBGL_ALWAYS_SOFTWARE=1 \
+              weston --backend=x11-backend.so --use-pixman \
+                --socket=jcode-ci-wayland --idle-time=0 >"$smoke/weston.log" 2>&1 &
+            weston_pid=$!
+            trap '\''kill "$weston_pid" "$openbox_pid" 2>/dev/null || true'\'' EXIT
+            ready=0
+            for _ in {1..100}; do
+              if [[ -S "$runtime/jcode-ci-wayland" ]] && \
+                 XDG_RUNTIME_DIR="$runtime" WAYLAND_DISPLAY=jcode-ci-wayland \
+                   timeout 2s wayland-info >"$smoke/registry.log" 2>&1 && \
+                 grep -q wl_seat "$smoke/registry.log"; then
+                ready=1
+                break
+              fi
+              kill -0 "$weston_pid" 2>/dev/null || break
+              sleep 0.1
+            done
+            [[ "$ready" == 1 ]]
+            env -u DISPLAY XDG_RUNTIME_DIR="$runtime" HOME="$home" \
+              WAYLAND_DISPLAY=jcode-ci-wayland LIBGL_ALWAYS_SOFTWARE=1 \
+              WGPU_BACKEND=vulkan "$app" >"$smoke/app.log" 2>&1 &
+            pid=$!
+            sleep 8
+            if ! kill -0 "$pid" 2>/dev/null; then
+              wait "$pid" || status=$?
+              echo "Wayland app exited before smoke completed (status ${status:-0})" >&2
+              exit 1
+            fi
+            kill "$pid"
+            wait "$pid" || true
+          ' bash "$app" "$runtime" "$home" "$smoke"
+      - name: Print Linux smoke diagnostics
+        if: always() && matrix.platform == 'linux'
+        shell: bash
+        run: |
+          shopt -s nullglob globstar
+          for file in "$RUNNER_TEMP"/jcode-linux-smoke/**/*.log; do
+            echo "===== $file ====="
+            cat "$file"
+          done
+          for file in "$RUNNER_TEMP"/jcode-linux-smoke/*/home/.local/state/jcode-desktop/*.log; do
+            echo "===== $file ====="
+            cat "$file"
+          done
+      - name: Upload Linux smoke diagnostics
+        if: always() && matrix.platform == 'linux'
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: linux-smoke-diagnostics-${{ matrix.arch }}
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 7
+          path: ${{ runner.temp }}/jcode-linux-smoke
+      - name: Build and package Windows
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        env:
+          VERSION: ${{ startsWith(github.ref, 'refs/tags/desktop-v') && github.ref_name || inputs.version }}
+          JCODE_REPO: ${{ github.workspace }}/jcode
+          TARGET: ${{ matrix.target }}
+        run: ./jcode-desktop/scripts/package-windows.ps1
+      - name: Verify Windows package
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          python jcode-desktop/scripts/verify-release-package.py (Get-ChildItem jcode-desktop/dist/windows/*.zip).FullName --target '${{ matrix.target }}'
+          if ($LASTEXITCODE) { throw 'Windows package verification failed' }
+          $stage = Get-ChildItem jcode-desktop/dist/windows -Directory -Filter 'Jcode-*-windows-${{ matrix.arch }}' | Select-Object -First 1
+          & "$($stage.FullName)/jcode.exe" --version
+          if ($LASTEXITCODE) { throw 'Bundled Jcode CLI did not start' }
+      - name: Smoke-test Windows package
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          # Exercise the ZIP users download, never the build tree or offline fixtures.
+          $destination = Join-Path $env:RUNNER_TEMP 'Jcode release package with spaces'
+          Expand-Archive (Get-ChildItem jcode-desktop/dist/windows/*.zip).FullName -DestinationPath $destination
+          $app = Get-ChildItem $destination -Recurse -Filter jcode-desktop.exe
+          if (@($app).Count -ne 1) { throw 'Expected exactly one packaged Desktop' }
+          python jcode-desktop/scripts/windows-ci-desktop.py --evidence "$env:RUNNER_TEMP/windows-runtime-evidence/runtime-desktop.json" -- python jcode-desktop/scripts/windows-runtime-acceptance.py $app.Directory.FullName "$env:RUNNER_TEMP/windows-runtime-evidence"
+          if ($LASTEXITCODE) { throw 'Windows runtime cold-start and recovery acceptance failed' }
+          # Fixture rendering is separate from the real runtime checks above.
+          python -m pip install --quiet pillow
+          if ($LASTEXITCODE) { throw 'Native UI test dependency installation failed' }
+          python jcode-desktop/scripts/windows-ci-desktop.py --evidence "$env:RUNNER_TEMP/windows-runtime-evidence/ui-desktop.json" -- python jcode-desktop/scripts/windows_screenshots.py $app.FullName "$env:RUNNER_TEMP/windows-runtime-evidence/ui-integration" --states caption,caption-light,windows-integration,chat,diff,applet --resolution 1920x1080
+          if ($LASTEXITCODE) { throw 'Windows native integration or six-state rendering acceptance failed' }
+      - name: Upload Windows runtime acceptance diagnostics
+        if: always() && matrix.platform == 'windows'
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-runtime-smoke-diagnostics-${{ matrix.arch }}
+          path: ${{ runner.temp }}/windows-runtime-evidence
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: matrix.platform == 'windows' && !startsWith(github.ref, 'refs/tags/desktop-v')
+        with:
+          name: desktop-${{ matrix.platform }}-${{ matrix.arch }}
+          if-no-files-found: error
+          path: |
+            jcode-desktop/dist/${{ matrix.platform }}/Jcode-*.tar.gz
+            jcode-desktop/dist/${{ matrix.platform }}/Jcode-*.deb
+            jcode-desktop/dist/${{ matrix.platform }}/Jcode-*.zip
+            jcode-desktop/dist/${{ matrix.platform }}/SHA256SUMS-*
+      - name: Upload verified platform packages to private draft
+        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_PLATFORM: ${{ matrix.platform }}
+          CHECKSUMS: ${{ matrix.checksums }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF_NAME" =~ ^desktop-v[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$ ]] || { echo "Invalid desktop release tag" >&2; exit 1; }
+          PRERELEASE=false
+          [[ "$GITHUB_REF_NAME" != *-beta.* ]] || PRERELEASE=true
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --json tagName,isDraft,isPrerelease \
+            --jq "(.tagName == \"$GITHUB_REF_NAME\" and .isDraft == true and .isPrerelease == $PRERELEASE)" | grep -qx true
+          case "$RELEASE_PLATFORM" in
+            linux) files=(jcode-desktop/dist/linux/Jcode-*.tar.gz jcode-desktop/dist/linux/Jcode-*.deb) ;;
+            windows) files=(jcode-desktop/dist/windows/Jcode-*.zip) ;;
+            *) exit 1 ;;
+          esac
+          files+=("jcode-desktop/dist/$RELEASE_PLATFORM/$CHECKSUMS")
+          for file in "${files[@]}"; do test -s "$file"; done
+          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber "${files[@]}"
+
+  build-freebsd:
+    needs: prepare
+    uses: ./.github/workflows/freebsd-release.yml
+    with:
+      version: ${{ startsWith(github.ref, 'refs/tags/desktop-v') && github.ref_name || inputs.version }}
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/desktop-v')
+    needs: [build, build-freebsd]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 190
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: jcode-desktop
+          persist-credentials: false
+      - name: Wait for secure macOS workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF_NAME" =~ ^desktop-v[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$ ]] || { echo "Invalid desktop release tag" >&2; exit 1; }
+          # Assets stay on the private draft. Require the entire signing workflow
+          # (including post-job steps) for this exact tag and commit to succeed.
+          for attempt in {1..540}; do
+            state=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow macos-beta.yml \
+              --branch "$GITHUB_REF_NAME" --commit "$GITHUB_SHA" --limit 100 \
+              --json status,conclusion,event,headSha,headBranch \
+              --jq 'map(select((.event == "push" or .event == "workflow_dispatch") and .headSha == env.GITHUB_SHA and .headBranch == env.GITHUB_REF_NAME)) | first | if .status == "completed" then .conclusion else "pending" end')
+            case "$state" in
+              success) exit 0 ;;
+              pending) ;;
+              *) echo "macOS secure workflow did not succeed: $state" >&2; exit 1 ;;
+            esac
+            echo "Waiting for notarized macOS workflow ($attempt/540)..."
+            sleep 20
+          done
+          echo "macOS secure workflow did not complete" >&2
+          exit 1
+      - name: Validate complete private draft and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF_NAME" =~ ^desktop-v[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$ ]] || { echo "Invalid desktop release tag" >&2; exit 1; }
+          PRERELEASE=false
+          [[ "$GITHUB_REF_NAME" != *-beta.* ]] || PRERELEASE=true
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --json tagName,isDraft,isPrerelease \
+            --jq "(.tagName == \"$GITHUB_REF_NAME\" and .isDraft == true and .isPrerelease == $PRERELEASE)" | grep -qx true
+          mkdir -p artifacts
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --dir artifacts \
+            --pattern 'Jcode-*.dmg' --pattern 'Jcode-*.zip' \
+            --pattern 'Jcode-*.tar.gz' --pattern 'Jcode-*.deb' \
+            --pattern 'SHA256SUMS*' --pattern appcast.xml
+          python3 jcode-desktop/scripts/prepare-public-release.py artifacts "$GITHUB_REF_NAME" --manifest artifacts/latest.json
+          # The legacy desktop-updates feed (read by 0.1.0-beta.10 to beta.23)
+          # is advanced by publish-public-release.yml only after the public
+          # channel is promoted. Writing it here pointed old Macs at beta
+          # archives that are never published to jcode.sh, so every update 404d.
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --json tagName,isDraft,isPrerelease \
+            --jq "(.tagName == \"$GITHUB_REF_NAME\" and .isDraft == true and .isPrerelease == $PRERELEASE)" | grep -qx true
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --draft=false --prerelease="$PRERELEASE"

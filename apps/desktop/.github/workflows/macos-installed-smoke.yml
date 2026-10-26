@@ -1,0 +1,113 @@
+name: macOS installed-beta smoke test
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published desktop release tag
+        required: true
+        default: desktop-v0.1.0-beta.2
+      expected_update_build:
+        description: Optional newer CFBundleVersion expected after automatic update and relaunch
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: macos-14
+    timeout-minutes: 10
+    steps:
+      - name: Download published beta
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern Jcode-macOS-universal.dmg --pattern SHA256SUMS
+          shasum -a 256 -c SHA256SUMS --ignore-missing
+          mkdir -p "$RUNNER_TEMP/mount" "$RUNNER_TEMP/Applications"
+          hdiutil attach Jcode-macOS-universal.dmg -mountpoint "$RUNNER_TEMP/mount" -nobrowse
+          test -L "$RUNNER_TEMP/mount/Applications"
+          ditto "$RUNNER_TEMP/mount/Jcode.app" "$RUNNER_TEMP/Applications/Jcode.app"
+          hdiutil detach "$RUNNER_TEMP/mount"
+          ln -s "$RUNNER_TEMP/Applications/Jcode.app" Jcode.app
+      - name: Verify installed bundle
+        run: |
+          codesign --verify --deep --strict --verbose=2 Jcode.app
+          test "$(defaults read "$PWD/Jcode.app/Contents/Info" CFBundleIdentifier)" = dev.solosystems.jcode.desktop
+          file Jcode.app/Contents/MacOS/{jcode-desktop,jcode,jcode-harness-api-bridge} | tee binaries.txt
+          test "$(grep -c 'universal binary with 2 architectures' binaries.txt)" = 3
+          Jcode.app/Contents/MacOS/jcode --version
+      - name: Launch the app bundle
+        if: inputs.expected_update_build == ''
+        run: |
+          set -euo pipefail
+          JCODE_DESKTOP_STATE="$RUNNER_TEMP/desktop-state.txt" \
+            Jcode.app/Contents/MacOS/jcode-desktop >"$RUNNER_TEMP/desktop.log" 2>&1 &
+          pid=$!
+          sleep 12
+          if ! kill -0 "$pid" 2>/dev/null; then
+            cat "$RUNNER_TEMP/desktop.log"
+            echo "Jcode Desktop exited during launch" >&2
+            exit 1
+          fi
+          kill "$pid"
+          wait "$pid" || true
+      - name: Update an installed older app and relaunch it
+        if: inputs.expected_update_build != ''
+        env:
+          EXPECTED_UPDATE_BUILD: ${{ inputs.expected_update_build }}
+        run: |
+          set -euo pipefail
+          app="$PWD/Jcode.app"
+          before=$(defaults read "$app/Contents/Info" CFBundleVersion)
+          test "$before" != "$EXPECTED_UPDATE_BUILD"
+
+          # Launch through LaunchServices so Sparkle observes the same lifecycle
+          # as a Finder-launched installed app. The packaged bootstrap performs
+          # an immediate background check after NSApplication finishes launching.
+          open "$app"
+          for attempt in {1..90}; do
+            if pgrep -x jcode-desktop >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          pgrep -x jcode-desktop >/dev/null
+
+          # SUAutomaticallyUpdate stages the signed archive and installs it when
+          # the application terminates. Give the real network/download path time
+          # to finish, then request a normal application quit rather than killing
+          # the process and bypassing Sparkle's termination observer.
+          sleep 90
+          if pgrep -x jcode-desktop >/dev/null; then
+            pkill -TERM -x jcode-desktop || true
+            for attempt in {1..30}; do
+              pgrep -x jcode-desktop >/dev/null || break
+              sleep 1
+            done
+          else
+            echo "Jcode exited while Sparkle handled the update"
+          fi
+
+          for attempt in {1..120}; do
+            # Sparkle replaces the bundle atomically, but there is a brief
+            # interval where Info.plist is unavailable. Keep polling through
+            # that valid installation state instead of letting `set -e` abort.
+            build=$(defaults read "$app/Contents/Info" CFBundleVersion 2>/dev/null || true)
+            echo "update poll $attempt: bundle build $build"
+            if [[ "$build" == "$EXPECTED_UPDATE_BUILD" ]]; then
+              break
+            fi
+            sleep 1
+          done
+          test "$(defaults read "$app/Contents/Info" CFBundleVersion)" = "$EXPECTED_UPDATE_BUILD"
+          codesign --verify --deep --strict --verbose=2 "$app"
+
+          open "$app"
+          sleep 12
+          pgrep -x jcode-desktop >/dev/null
+          pkill -TERM -x jcode-desktop || true

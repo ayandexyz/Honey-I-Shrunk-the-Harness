@@ -1,0 +1,141 @@
+//! Panels remain level inside the shared folder body as focus changes.
+use super::*;
+
+#[gpui::test]
+fn folder_panels_share_a_level_body_without_individual_tabs(cx: &mut gpui::TestAppContext) {
+    cx.update(crate::bind_workspace_keys);
+    let (workspace, vcx) = cx.add_window_view(|_, cx| {
+        let mut workspace = Workspace::for_test(learning::Coach::new(), cx);
+        for name in ["Left folder", "Focused folder", "Right folder"] {
+            workspace.push_test_panel(name, cx);
+        }
+        for slot in &mut workspace.slots {
+            slot.width_fraction = 1.0 / 3.0;
+            slot.animated_width = AnimatedValue::new(
+                slot.width_fraction,
+                transition::policy(Transition::PanelWidth).duration,
+            );
+        }
+        workspace.active = 1;
+        workspace
+    });
+    let handle = vcx.update(|window, _| window.window_handle());
+    for (width, height) in [(800., 600.), (1440., 1000.)] {
+        vcx.simulate_window_resize(handle, gpui::size(px(width), px(height)));
+        for sidebar in [true, false] {
+            workspace.update(vcx, |workspace, cx| {
+                workspace.show_sidebar = sidebar;
+                workspace.active = 1;
+                workspace.camera_dirty.fill(true);
+                cx.notify();
+            });
+            vcx.run_until_parked();
+            for focused in [1, 0, 2] {
+                if focused != 1 {
+                    vcx.update(|window, cx| {
+                        window.focus(&workspace.read(cx).focus_handle.clone(), cx);
+                    });
+                    vcx.simulate_keystrokes(if focused == 0 { "super-u" } else { "super-p" });
+                    vcx.run_until_parked();
+                }
+                assert_eq!(workspace.read_with(vcx, |w, _| w.active), focused);
+                let canvas = vcx.debug_bounds("workspace-canvas").unwrap();
+                assert!(vcx.debug_bounds("native-folder-surface").is_some());
+                assert!(vcx.debug_bounds("folder-selected-sheet").is_none());
+                let tabs = vcx.debug_bounds("live-session-tabs").unwrap();
+                assert_eq!(
+                    tabs.bottom(),
+                    canvas.top() + px(STRIP_PADDING_TOP + FOLDER_CONTENT_INSET)
+                );
+                let expected_left = if sidebar {
+                    responsive::sidebar_width(true, responsive::is_compact(width))
+                        + FOLDER_CONNECTOR_WIDTH
+                } else {
+                    0.0
+                };
+                assert_eq!(canvas.left(), px(expected_left));
+                assert_eq!(canvas.right(), px(width - FOLDER_RIGHT_MARGIN));
+                // Panels wholly outside the viewport are not drawn at all, so
+                // check the rendered ones. The focused panel is always drawn.
+                let ids = ["panel-0", "panel-1", "panel-2"];
+                assert!(vcx.debug_bounds(ids[focused]).is_some());
+                let panels = ids
+                    .into_iter()
+                    .filter_map(|id| vcx.debug_bounds(id))
+                    .collect::<Vec<_>>();
+                for panel in &panels {
+                    let inset = FOLDER_CONTENT_INSET;
+                    assert!(
+                        (f32::from(panel.top() - canvas.top()) - STRIP_PADDING_TOP - inset).abs()
+                            < 1.
+                    );
+                    assert!(
+                        (f32::from(canvas.bottom() - panel.bottom()) - STRIP_PADDING_Y).abs() < 1.
+                    );
+                    assert!(panel.size.height > px(200.));
+                    assert_eq!(panel.bottom(), canvas.bottom() - px(STRIP_PADDING_Y));
+                }
+                for pair in panels.windows(2) {
+                    assert!(
+                        (f32::from(pair[0].right() - pair[1].left())).abs() < 1.,
+                        "folders must touch without gaps or overlap"
+                    );
+                    assert_eq!(
+                        pair[0].bottom(),
+                        pair[1].bottom(),
+                        "folders share one baseline"
+                    );
+                }
+                for panel in &panels {
+                    assert_eq!(
+                        panel.top(),
+                        panels[0].top(),
+                        "focus must not raise a panel tab"
+                    );
+                    assert_eq!(
+                        panel.top(),
+                        canvas.top() + px(STRIP_PADDING_TOP + FOLDER_CONTENT_INSET)
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[gpui::test]
+fn normal_mode_uses_separate_equal_height_panels_without_the_folder_surface(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (workspace, vcx) = cx.add_window_view(|_, cx| {
+        let mut workspace = Workspace::for_test(learning::Coach::new(), cx);
+        for name in ["Left", "Right"] {
+            workspace.push_test_panel(name, cx);
+        }
+        workspace.layout_mode = crate::config::LayoutMode::Normal;
+        workspace
+    });
+    vcx.run_until_parked();
+    assert!(vcx.debug_bounds("native-folder-surface").is_none());
+    assert!(vcx.debug_bounds("sidebar-section-trigger").is_none());
+    let a = vcx.debug_bounds("panel-0").unwrap();
+    let b = vcx.debug_bounds("panel-1").unwrap();
+    assert_eq!(a.top(), b.top());
+    assert_eq!(a.bottom(), b.bottom());
+    assert_eq!(b.left() - a.right(), px(12.));
+    workspace.update(vcx, |workspace, cx| {
+        workspace.layout_mode = crate::config::LayoutMode::FolderTabs;
+        workspace.camera_dirty.fill(true);
+        cx.notify();
+    });
+    vcx.run_until_parked();
+    assert!(vcx.debug_bounds("native-folder-surface").is_some());
+    let trigger = vcx.debug_bounds("sidebar-section-trigger").unwrap();
+    let navigation = vcx.debug_bounds("sidebar-navigation-tabs").unwrap();
+    assert!(trigger.top() >= navigation.top());
+    assert!(trigger.bottom() <= navigation.bottom());
+    assert!(vcx.debug_bounds("sidebar-sessions-tab").is_some());
+    let a = vcx.debug_bounds("panel-0").unwrap();
+    let b = vcx.debug_bounds("panel-1").unwrap();
+    assert_eq!(b.left(), a.right());
+    assert_eq!(a.top(), b.top());
+}

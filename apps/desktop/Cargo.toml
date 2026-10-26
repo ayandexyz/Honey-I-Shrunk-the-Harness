@@ -1,0 +1,216 @@
+[workspace]
+members = [
+    ".",
+    "crates/jcode-desktop-accounts-ui",
+    "crates/jcode-desktop-api",
+    "crates/jcode-desktop-harness",
+    "crates/jcode-desktop-model",
+    "crates/jcode-desktop-motion",
+    "crates/jcode-desktop-ui",
+    "crates/jcode-desktop-ui-core",
+    "crates/jcode-desktop-updater",
+    "crates/jcode-desktop-voice",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+# GPUI comes from Jcode's fork of gpui-fast, which adds retained-mode drawing to
+# upstream GPUI. Its `fast/` modules also carry what Desktop needs: the element
+# arena shared with the hot-reloaded UI library, list height hints kept on resize,
+# and native pinch pan. Every GPUI crate comes from this one revision.
+gpui = { git = "https://github.com/1jehuang/gpui", rev = "be875c56343dcbd45127a9805781a9e128057dd7", features = ["profiler", "test-api"] }
+gpui_platform = { git = "https://github.com/1jehuang/gpui", rev = "be875c56343dcbd45127a9805781a9e128057dd7" }
+jcode-desktop-accounts-ui = { path = "crates/jcode-desktop-accounts-ui" }
+jcode-desktop-api = { path = "crates/jcode-desktop-api" }
+jcode-desktop-harness = { path = "crates/jcode-desktop-harness" }
+jcode-desktop-model = { path = "crates/jcode-desktop-model" }
+jcode-desktop-motion = { path = "crates/jcode-desktop-motion" }
+jcode-desktop-ui-core = { path = "crates/jcode-desktop-ui-core" }
+jcode-desktop-updater = { path = "crates/jcode-desktop-updater" }
+jcode-desktop-voice = { path = "crates/jcode-desktop-voice" }
+
+[patch.crates-io]
+# Keep the orb library on the exact GPUI instance used by host and UI.
+gpui = { git = "https://github.com/1jehuang/gpui", rev = "be875c56343dcbd45127a9805781a9e128057dd7" }
+
+[package]
+name = "jcode-desktop"
+version = "0.6.5"
+edition.workspace = true
+description = "Jcode Desktop: a spatial, niri-inspired canvas of Jcode sessions"
+license.workspace = true
+
+[dependencies]
+anyhow = "1"
+jcode-desktop-model.workspace = true
+log = "0.4"
+gpui.workspace = true
+# `font-kit` selects the real platform text system. Without it, gpui_macos
+# builds `NoopTextSystem`, so the window paints every shape but no glyphs.
+# Linux enabled the feature already, which is why only macOS lost its text.
+gpui_platform = { workspace = true, features = ["font-kit"] }
+jcode-desktop-api.workspace = true
+jcode-desktop-ui = { path = "crates/jcode-desktop-ui" }
+libloading = "0.8"
+libc = "0.2"
+portable-pty = "0.9"
+tempfile = "3"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gpui_platform = { workspace = true, features = ["wayland", "x11", "font-kit"] }
+
+[target.'cfg(target_os = "freebsd")'.dependencies]
+# GPUI supports FreeBSD through gpui_linux, whose backend defaults are disabled.
+# Start with X11, with native graphical smoke required by the release job.
+gpui_platform = { workspace = true, features = ["x11", "font-kit"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+async-channel = "2"
+global-hotkey = "0.7"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+async-channel = "2"
+global-hotkey = "0.7"
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_Pipes", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Threading", "Win32_Security", "Win32_UI_WindowsAndMessaging"] }
+
+[dev-dependencies]
+handterm-common = { git = "https://github.com/1jehuang/handterm", rev = "ead926b6f13a1f30d58836c4fd8fb325660bae96" }
+async-channel = "2"
+global-hotkey = "0.7"
+gpui.workspace = true
+
+[profile.dev]
+opt-level = 0
+debug = "line-tables-only"
+incremental = true
+codegen-units = 256
+
+# Non-workspace crates (registry, git, and the sibling Jcode path crates) carry
+# no debug info. Panic backtraces still resolve Desktop frames with line
+# numbers, while every rebuild writes and links far less DWARF. Measured on a
+# one-file UI edit: 10.7 s -> 4.6 s and ~0.8 GiB less linker RSS.
+[profile.dev.package."*"]
+debug = 0
+
+# Runtime-hot dependencies, selected from live `perf` profiles of the running
+# development app. Layout (taffy), GPUI itself, text shaping (cosmic-text,
+# swash, harfrust, zeno), the Wayland/Calloop event loop, and the renderer
+# dominate steady-state CPU. Optimizing only these keeps the rest of the
+# dependency graph and all workspace crates at opt-level 0, so full and
+# incremental debug builds stay fast while the running app keeps release-like
+# frame costs. These crates are pinned by Cargo.lock and rarely rebuild.
+[profile.dev.package.taffy]
+opt-level = 2
+[profile.dev.package.gpui]
+opt-level = 2
+[profile.dev.package.gpui_linux]
+opt-level = 2
+[profile.dev.package.gpui_macos]
+opt-level = 2
+[profile.dev.package.gpui_apple]
+opt-level = 2
+[profile.dev.package.gpui_wgpu]
+opt-level = 2
+[profile.dev.package.gpui_platform]
+opt-level = 2
+[profile.dev.package.gpui_util]
+opt-level = 2
+[profile.dev.package.gpui_shared_string]
+opt-level = 2
+[profile.dev.package.jcode-desktop-motion]
+opt-level = 2
+[profile.dev.package.sum_tree]
+opt-level = 2
+[profile.dev.package.refineable]
+opt-level = 2
+[profile.dev.package.slotmap]
+opt-level = 2
+# The model picker runs the fuzzy DP over every route on each keystroke.
+[profile.dev.package.jcode-fuzzy]
+opt-level = 3
+[profile.dev.package.smallvec]
+opt-level = 2
+[profile.dev.package.cosmic-text]
+opt-level = 2
+[profile.dev.package.swash]
+opt-level = 2
+[profile.dev.package.harfrust]
+opt-level = 2
+[profile.dev.package.zeno]
+opt-level = 2
+[profile.dev.package.read-fonts]
+opt-level = 2
+[profile.dev.package.font-types]
+opt-level = 2
+[profile.dev.package.fontdb]
+opt-level = 2
+[profile.dev.package.zed-font-kit]
+opt-level = 2
+[profile.dev.package.calloop]
+opt-level = 2
+[profile.dev.package.calloop-wayland-source]
+opt-level = 2
+[profile.dev.package.wayland-client]
+opt-level = 2
+[profile.dev.package.wayland-backend]
+opt-level = 2
+[profile.dev.package.polling]
+opt-level = 2
+[profile.dev.package.async-task]
+opt-level = 2
+[profile.dev.package.parking]
+opt-level = 2
+[profile.dev.package.parking_lot]
+opt-level = 2
+[profile.dev.package.parking_lot_core]
+opt-level = 2
+[profile.dev.package.handterm-common]
+opt-level = 2
+[profile.dev.package.unicode-segmentation]
+opt-level = 2
+[profile.dev.package.unicode-linebreak]
+opt-level = 2
+[profile.dev.package.unicode-bidi]
+opt-level = 2
+[profile.dev.package.unicode-width]
+opt-level = 2
+# The wgpu stack records and submits every frame on the UI thread. A live
+# Vulkan profile of a streaming dev build spent about a quarter of the UI
+# thread in these crates at opt-level 0, plus the hash maps and allocators
+# they and GPUI lean on.
+[profile.dev.package.wgpu]
+opt-level = 2
+[profile.dev.package.wgpu-core]
+opt-level = 2
+[profile.dev.package.wgpu-hal]
+opt-level = 2
+[profile.dev.package.wgpu-types]
+opt-level = 2
+[profile.dev.package.ash]
+opt-level = 2
+[profile.dev.package.gpu-allocator]
+opt-level = 2
+[profile.dev.package.gpu-descriptor]
+opt-level = 2
+[profile.dev.package.hashbrown]
+opt-level = 2
+[profile.dev.package.indexmap]
+opt-level = 2
+[profile.dev.package.lyon_tessellation]
+opt-level = 2
+[profile.dev.package.lyon_path]
+opt-level = 2
+[profile.dev.package.lyon_geom]
+opt-level = 2
+[profile.dev.package.hdrhistogram]
+opt-level = 2
+[profile.dev.package.etagere]
+opt-level = 2
+[profile.dev.package.smol_str]
+opt-level = 2
+[profile.dev.package.arrayvec]
+opt-level = 2
