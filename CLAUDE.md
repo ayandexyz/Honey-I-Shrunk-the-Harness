@@ -364,6 +364,19 @@ Behavior changes are verified by evals, not by eyeballing a transcript. **Read
 
 ---
 
+## Desktop App (`apps/desktop`)
+
+The native desktop frontend is **vendored from [jcode-desktop](https://github.com/1jehuang/jcode-desktop)** (MIT), pulled in via `git subtree`, not a submodule or a one-time copy — it keeps upstream's history and can pull upstream's future commits. It replaced the old Tauri/React `apps/web-app` (retired, commit `21dc2260`), which also used to be what `apps/core/web-server.ts` served to phones/browsers — that path 404s until this app (or something else) ships a replacement bundle.
+
+- **Stack**: Rust, not TypeScript — a GPU-accelerated native UI (`crates/jcode-desktop-ui*`, motion, panels), separate from every other frontend in this repo. It does not go through `packages/shared` or the Node/bun toolchain.
+- **Thin-client boundary stays the same, just in Rust**: `crates/jcode-desktop-api` is the one crate that talks to a backend. Upstream, it talks to Jcode's own runtime SDK. Here, it must be rewired to speak freecode's JSON-RPC over stdin/stdout to `apps/core` (`packages/shared/src/ipc/protocol.ts` — `METHODS`, `StreamEvent`). **This is the only crate that should diverge from upstream.** Everything else (UI rendering, panels, motion, voice, accounts-ui) is meant to stay close to upstream so updates keep merging cleanly.
+- **Pulling upstream updates**: `git subtree pull --prefix=apps/desktop jcode-desktop-upstream main -m "..."` (remote `jcode-desktop-upstream` → `https://github.com/1jehuang/jcode-desktop.git`, already added). Do this periodically, not reflexively — check `apps/desktop/CHANGELOG.md` first for anything that touches `jcode-desktop-api` or assumes Jcode's own runtime, since that's exactly where our fork diverges and a merge there is the one place conflicts are expected.
+- **Pushing changes back upstream** (if ever wanted): `git subtree push --prefix=apps/desktop jcode-desktop-upstream <branch>`. Only do this for changes that make sense outside this fork (UI/UX fixes), never the backend-wiring crate.
+- **Don't rename/rebrand the binary, bundle id, or window title away from "Jcode" casually** — that's a product decision, not a refactor; do it only when asked, and keep the upstream LICENSE/copyright notice intact regardless (MIT requires it).
+- **Build/dev wiring is not set up yet** (no turbo/package.json task builds this crate, no doc points `cargo run` at `apps/core` instead of a sibling Jcode checkout) — needed before this is a real frontend, tracked as open work until done.
+
+---
+
 ## Deferred Items
 
 - **MCP server (expose)** — an MCP *client* exists (`mcp/`); serving FreeCode tools *as* an MCP server is not done.
