@@ -262,12 +262,27 @@ never comes from upstream is this `jcode-sdk` shim.
 
 ## Maintenance going forward
 
-- **Pulling upstream updates**: `git subtree pull --prefix=apps/desktop
-  jcode-desktop-upstream main -m "..."` (remote `jcode-desktop-upstream` →
-  `https://github.com/1jehuang/jcode-desktop.git`, already added). Check
-  `apps/desktop/CHANGELOG.md` first for anything that assumes Jcode's own
-  runtime — that's where conflicts are expected, confined to the shim
-  crate.
+- **Pulling upstream updates — `pnpm desktop:sync`**
+  (`scripts/desktop-sync-upstream.sh`; `--dry-run` lists what is new,
+  `--no-build` skips step 4). Remote `jcode-desktop-upstream` →
+  `https://github.com/1jehuang/jcode-desktop.git` (the script adds it if
+  missing; the subtree was added with full history, so no `--squash`).
+  Steps, each committed: (1) `desktop-rebrand.py revert`, (2) `git subtree
+  pull --prefix=apps/desktop`, (3) `desktop-rebrand.py apply` (renames new
+  upstream strings too), (4) overlay + `cargo build` against the shim. It
+  restores `apps/desktop/Cargo.lock` first (regenerated on every build) and
+  refuses any other dirty file. A merge conflict stops it — only our hand
+  hooks (`panel.rs`, `panel_composer.rs`, `harness.rs`, `panel_activity.rs`,
+  `APP_ID`, packaging, icon) can conflict; resolve, commit, then `apply` by
+  hand. **A build failure is the real maintenance signal**: upstream desktop
+  features usually come with jcode-sdk changes, so it now uses API the shim
+  lacks — add it to `apps/desktop-shim/jcode-sdk` and map it to core. Also
+  pull the jcode checkout behind `apps/jcode-upstream` (the script reports
+  how far behind it is), since the overlay links its other crates.
+  Verified 2026-10-27 against a fake upstream commit that rewords a renamed
+  line and adds a new "Jcode" string: clean merge, both came out as Honey.
+  Check `apps/desktop/CHANGELOG.md` for anything that assumes Jcode's own
+  runtime.
 - **Pushing changes back upstream** (if ever wanted): `git subtree push
   --prefix=apps/desktop jcode-desktop-upstream <branch>`. Only UI/UX fixes
   that make sense outside this fork — never the shim crate.

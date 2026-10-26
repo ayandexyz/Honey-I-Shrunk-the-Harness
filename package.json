@@ -14,6 +14,7 @@
     "build:sea": "node scripts/build-sea.mjs",
     "build:bun": "node scripts/build-bun.mjs",
     "desktop": "bash scripts/desktop.sh",
+    "desktop:sync": "bash scripts/desktop-sync-upstream.sh",
     "eval": "tsx apps/core/src/cli.ts eval",
     "eval:gate": "tsx apps/core/src/cli.ts eval trajectory --gate && tsx apps/core/src/cli.ts eval coding --gate && FREECODE_JUDGE_PROVIDER=${FREECODE_JUDGE_PROVIDER:-claude-cli} tsx apps/core/src/cli.ts eval judged --gate",
     "bench:recall": "tsx apps/core/src/memory/bench/run.ts",
