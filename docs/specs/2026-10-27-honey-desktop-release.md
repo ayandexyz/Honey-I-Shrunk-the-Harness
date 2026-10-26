@@ -1,7 +1,8 @@
 # Honey desktop — release, distribution and updates
 
-Status (2026-10-27): **R0 code done, R1 built and verified locally; CI not
-yet run on GitHub.** See §6 for what exists. Rest of the doc is the plan. Companion to
+Status (2026-10-27): **R0, R1 and R2 done** — Linux packages build on a
+`desktop-v*` tag and installed copies update themselves (proven beta.2 →
+beta.3). See §6 for what exists. Rest of the doc is the plan. Companion to
 `2026-10-26-jcode-sdk-shim-contract.md` (how the app works); this is how it
 ships.
 
@@ -257,7 +258,7 @@ borrow from).
   (`build_version.rs`), and CI always passes one.
 - `-beta` versions are now created as GitHub pre-releases.
 
-**R2 auto-update (built, not yet proven end to end)**
+**R2 auto-update (built and proven)**
 - The updater validates an archive against a **fixed file list compiled
   into the installed copy** (`archive.rs` `UNIX_FILES`), so the list is a
   contract: an archive with any other file is rejected forever by older
@@ -281,6 +282,16 @@ borrow from).
   `desktop-latest` release (pre-release, never "latest"), and re-fetches it
   anonymously until it serves the new tag. One channel: betas reach every
   install.
-- Proof still to run: install `0.1.0-beta.2` from its release, publish
-  `0.1.0-beta.3`, run the installed copy's `honey --update` and check every
-  file was swapped and `--version` reports beta.3.
+- **Proven end to end 2026-10-27.** `desktop-v0.1.0-beta.2` (CI 16 min) was
+  installed from its GitHub release into a fresh folder: checksum OK,
+  `v0.1.0-beta.2 (3be9aa7)` (no "dirty"), exactly the 7 files, and
+  `honey --update` said "up to date" against the feed. After
+  `desktop-v0.1.0-beta.3` published (the same commit, re-tagged), that copy's
+  `honey --update` printed "Downloading Honey Desktop 0.1.0-beta.3 …
+  Installed … (portable)", `--version` became `v0.1.0-beta.3`, all 7 files
+  were swapped, and the app then launched as beta.3 on its bundled core.
+  The replaced files stay beside the new ones (`*.jcode-old-*`, for
+  rollback) until the background updater's first pass, `FIRST_CHECK_DELAY`
+  after launch; with `JCODE_DESKTOP_LIVE_UPDATE_TEST=1` (1 s) a launch
+  removed all 7. Users also get the same check in the background every
+  `CHECK_INTERVAL`, from the version pill, and from `/update`.
