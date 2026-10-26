@@ -2,7 +2,7 @@
 
 Date: 2026-10-12  
 Reviewed base commit: `97793b1e`, with existing working-tree changes  
-Status: investigation and recommendations; no runtime changes or paid evaluations performed for this document.
+Status: partially implemented; task cost ledger built 2026-10-17, no paid evaluations performed.
 
 Companion: [UI and latency recommendations](2026-10-11-performance-recommendations.md). Keep these documents separate: a faster renderer usually does not reduce the provider bill, and a cheaper model can take longer to complete a task.
 
@@ -12,7 +12,7 @@ Companion: [UI and latency recommendations](2026-10-11-performance-recommendatio
 
 The constraint is the outcome: preserve required capabilities, instruction precedence, permissions, and task quality. Business logic stays in `apps/core`; frontends expose controls and measurements through IPC. A cost optimization should not silently turn a request into a smaller task.
 
-My first choices are to complete cost accounting, measure the assembled request, and then test smaller recurring instructions plus fewer unnecessary model turns. Model routing and compaction changes come after that baseline.
+Cost accounting is now complete for recorded runtime attempts. The next choices are to measure the assembled request, then test smaller recurring instructions plus fewer unnecessary model turns. Model routing and compaction changes come after that baseline.
 
 ## 1. Optimize cost per successful task
 
@@ -81,7 +81,6 @@ The [memory efficiency spec](specs/2026-09-25-memory-efficiency-and-graph-explor
 
 | Priority | Experiment                                           | Why it comes here                                                   | Main risk                                          |
 | -------- | ---------------------------------------------------- | ------------------------------------------------------------------- | -------------------------------------------------- |
-| P0       | Account for every paid operation and request segment | Otherwise comparisons can reward missing costs                      | Misattribution or double counting                  |
 | P1       | Modularize oversized project guidance                | Large recurring input is visible in this checkout                   | Important instructions stop being loaded           |
 | P1       | Refine system/tool guidance to reduce needless turns | One avoided request saves another context submission and generation | Weaker planning, verification, or scope discipline |
 | P1       | Make reads/searches/tool results more selective      | Reduce new context before it enters repeated history                | Extra recovery reads erase savings                 |
@@ -92,23 +91,21 @@ The [memory efficiency spec](specs/2026-09-25-memory-efficiency-and-graph-explor
 
 These are priorities for experiments. None has a measured saving assigned yet.
 
-## 4. Complete cost accounting before tuning behavior
+## 4. Complete cost accounting before tuning behavior — built 2026-10-17
 
-Existing [traceCost](../apps/core/src/rollout/cost.ts) prices model spans and separately recorded memory auxiliary spans. The [eval runner](../apps/core/src/eval/runner.ts) also combines explicitly tracked teaching sessions for multi-session cases and preserves unknown/partial costs.
+The body-free [task cost ledger](../apps/core/src/rollout/cost-ledger.ts) emits one row per provider attempt across a root session and every recorded child session. It records purpose, resolved model, auth mode, usage completeness, completion state, pricing vintage, and estimated USD without reading live configuration at fold time. Benchmark-grader attempts and totals remain structurally separate from runtime spending.
 
-There are concrete coverage questions to resolve:
+The implementation closes the previously identified coverage gaps:
 
-- `traceCost` does not itself walk child-session logs. [Subagents](../apps/core/src/agent/subagent.ts), including the verifier, execute under their own session IDs. Reconcile the whole task tree before claiming a delegation saving.
-- `cache.warm` is a separate event and is not directly included by that cost fold. Count refresh spending and actual later reuse when evaluating warming.
-- [createLlmSummarizer](../apps/core/src/compaction/llm-summarizer.ts) calls the provider and returns only the summary text; its return type does not expose usage. Audit and instrument compaction-call usage rather than assuming the main model spans include it.
-- Redirection tokens enter the loop's spend counters, but that does not prove they enter the same trace-dollar calculation. Reconcile both accounting paths.
-- `priceUsd` accepts one cache-write rate and no per-call TTL/tier argument. A comparison involving cache duration or tiered pricing needs enough recorded information to reproduce the correct price later.
+- foreground, subagent, and verifier calls are joined through recorded parent/child session relationships;
+- memory, compaction, redirection, prompt-hook, and final-flush calls share the auxiliary-call event;
+- successful and failed cache warming emits a cost-bearing event;
+- failed, timed-out, incomplete, and old-log attempts stay visible as partial or unknown rather than zero;
+- `freecode trace <session> --cost-ledger [--json]` exposes the reconciliation.
 
 Anthropic documents different cache write prices for different lifetimes and model-dependent read prices. Use the actual policy and rate rather than a universal multiplier. See [official prompt-caching documentation](https://platform.claude.com/docs/en/build-with-claude/prompt-caching).
 
-Recommended accounting unit: one provider attempt, linked to a root task, session, operation, resolved model, auth mode, usage, and pricing assumptions. Sum each attempt once. Keep benchmark-grader costs separate from runtime costs while reporting both. Unknown usage remains unknown, including a timeout after generation may have begun.
-
-Acceptance: a fixture containing a main turn, child agent, compaction, memory operation, and cache refresh reconciles with a known call ledger. Async costs must finish or remain visibly pending/partial.
+The regression fixture contains a main turn, verifier child, extraction, compaction, and cache refresh and reconciles all five attempts to an exact expected total. The remaining pricing limitation is policy metadata: comparisons involving cache TTL or a provider pricing tier still need those assumptions recorded when such policies are introduced.
 
 ### Measure the assembled request
 
@@ -128,7 +125,7 @@ There is a concrete local opportunity. At inspection time:
 | Root `AGENTS.md`                                        | 47,215 bytes |
 | Shipped `session/prompt/system.md` in this working tree | 8,094 bytes  |
 
-These are bytes, not exact token counts. [instructions.ts](../apps/core/src/context/instructions.ts) chooses the first nonempty `CLAUDE.md` or `AGENTS.md` at each of the global and project locations. It sends the selected file in full. It does **not** concatenate both root files. For this repository, root `CLAUDE.md` wins.
+These are bytes, not exact token counts. [instructions.ts](../apps/core/src/context/instructions.ts) loads global instructions, then repository ancestors from root to the active project, with `CLAUDE.md` preferred over `AGENTS.md` in each directory. It also supports bounded relative `@import`s and matching `.freecode/rules/*.md` files. For this repository, the root `CLAUDE.md` remains the selected root-level file.
 
 The project file is therefore a larger source-size target than the base system prompt. Global instructions and overrides can change the actual request; inspect `/context` rather than extrapolating these sizes to every user.
 
@@ -139,7 +136,7 @@ Proposed approach:
 3. Make the loading rule explicit: before touching a subsystem, read its indexed guide/spec. Preserve requirements that must always apply in the root guide.
 4. Verify retrieval across representative tasks: providers, memory, TUI, checkpoints, and cross-cutting changes. Count the topic-document reads as part of the cost.
 
-This loader currently does not implement automatic imports or directory-scoped inheritance. Adding links alone does not inject their contents; the agent must read them. If automatic scoped loading is built later, keep it in core and test instruction precedence and cache behavior.
+`/context` reports the loaded instruction sources and their byte/token contribution without exposing their contents. Scoped rules are selected from the deterministic session file scope so the static prompt prefix remains cacheable.
 
 Do not silently truncate user-authored instructions to a token cap. The current code deliberately removed such truncation. This proposal is an authored documentation restructure with behavioral validation.
 

@@ -32,6 +32,7 @@ import type { ProviderId } from "../providers/config.js";
 import type { AIProvider, ExecuteResult } from "../providers/types.js";
 import type { MemoryEntry } from "../memory/mem-types.js";
 import type { RolloutEvent } from "../rollout/types.js";
+import { newlyDelivered } from "./context-inject.js";
 
 function info(id: string) {
   return {
@@ -58,8 +59,8 @@ function toolLooper(id: string, tails: string[]) {
     info: info(id),
     create: (): AIProvider => ({
       info: info(id),
-      execute: async ({ ephemeralTail }): Promise<ExecuteResult> => {
-        tails.push(ephemeralTail ?? "");
+      execute: async (opts): Promise<ExecuteResult> => {
+        tails.push(newlyDelivered(opts));
         return {
           content: `step ${tails.length}`,
           toolCalls: [{ name: "does-not-exist", args: {}, id: `c${tails.length}` }],
@@ -131,7 +132,7 @@ async function run(
   }
 }
 
-test("a tool loop records one exposure per request that carried the block", async () => {
+test("a tool loop records one exposure per request, injected where the block was delivered", async () => {
   const tails: string[] = [];
   toolLooper("exposure-fake", tails);
   const events = await run("exposure-loop", "exposure-fake", [MEMORY], 4);
@@ -144,9 +145,11 @@ test("a tool loop records one exposure per request that carried the block", asyn
   assert.equal(exposures.length, requests.length, "one exposure per request");
 
   const carried = tails.filter((t) => t.includes("uses-pnpm")).length;
-  assert.ok(carried >= 2, `the block was resent (${carried} of ${tails.length})`);
+  // Append-only (the default): delivered once and kept in the conversation,
+  // not resent on every request as the old tail did.
+  assert.equal(carried, 1, `the block was delivered once (${carried} of ${tails.length})`);
   const injected = exposures.filter((e) => e.injected);
-  assert.equal(injected.length, carried, "every resend is counted, not deduped");
+  assert.equal(injected.length, carried, "exposure counts the request that delivered it");
   for (const e of injected) {
     assert.ok(e.blockBytes > 0);
     assert.equal(e.renderedCount, 1);

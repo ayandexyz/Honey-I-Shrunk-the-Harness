@@ -1,19 +1,9 @@
 import Image from "next/image";
-import localFont from "next/font/local";
 import { Layout, Navbar } from "nextra-theme-docs";
 import { getPageMap } from "nextra/page-map";
 import "nextra-theme-docs/style.css";
 import "./globals.css";
-
-// Departure Mono (Helena Zhang, SIL OFL 1.1) — see app/fonts/OFL.txt.
-// Single weight: bold text renders as synthetic bold.
-const departureMono = localFont({
-  src: "./fonts/DepartureMono-Regular.woff2",
-  variable: "--font-departure-mono",
-  weight: "400",
-  style: "normal",
-  display: "swap",
-});
+import "./hero.css";
 
 export const metadata = {
   title: "FreeCode",
@@ -23,7 +13,10 @@ export const metadata = {
 const navbar = (
   <Navbar
     logo={
-      <Image src="/logo.svg" alt="FreeCode" width={143} height={30} priority />
+      <span className="navbar-brand">
+        <Image src="/logo.png" alt="" width={28} height={28} priority />
+        <span className="navbar-brand-wordmark">Histh!</span>
+      </span>
     }
     projectLink="https://github.com/ayandexyz/omacode"
   />
@@ -35,15 +28,13 @@ export default async function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html
-      lang="en"
-      className={departureMono.variable}
-      suppressHydrationWarning
-    >
+    <html lang="en" suppressHydrationWarning>
       <body>
         <Layout
           navbar={navbar}
           pageMap={await getPageMap()}
+          darkMode={false}
+          nextThemes={{ defaultTheme: "light", forcedTheme: "light" }}
         >
           {children}
         </Layout>

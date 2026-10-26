@@ -133,34 +133,6 @@ export function removeMessageById(id: number): MessageInstance | undefined {
   return removeMessage(id);
 }
 
-/**
- * Update an in-progress message with new token counts
- */
-export function updateInProgressMessage(
-  id: number,
-  phrase: string,
-  inputTokens: number,
-  outputTokens: number,
-  contextLimit: number,
-  startTime: number,
-  turns: number,
-  cachedTokens = 0,
-  contextTokens?: number,
-): MessageInstance | undefined {
-  const component = createMessageComponent(
-    "in_progress",
-    phrase,
-    startTime,
-    inputTokens,
-    outputTokens,
-    contextLimit,
-    turns,
-    cachedTokens,
-    contextTokens,
-  );
-  return updateMessage(id, phrase, component);
-}
-
 export const createToolProgressMessage = (
   toolCallId: string,
   toolName: string,
@@ -245,6 +217,9 @@ export function loadSessionMessages(messages: SerializedMessage[]): void {
       createSystemMessage("*A background task finished and was reported to the agent.*");
       continue;
     }
+    // Memory / todos / reminders appended for the model; live it was never
+    // shown either.
+    if (msg.synthetic === "context") continue;
     // A `!cmd` the user ran. The text is already "I ran `cmd`" + a fenced
     // block, which reads fine as-is.
     if (msg.synthetic === "user_bash") {

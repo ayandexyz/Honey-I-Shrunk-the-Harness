@@ -899,7 +899,13 @@ export class MemoryGraphService {
 
   // Drop a session's prepared-memory cache (e.g. on session end).
   disposeSession(sessionId: string): void {
-    this.sessions.delete(sessionId);
+    if (this.sessions.delete(sessionId)) {
+      // Citation counters are debounced because they are updated during the
+      // turn. A short-lived `freecode run` can end before that timer fires, so
+      // persist them synchronously while the shared session-end path still
+      // owns the process lifecycle.
+      this.usage.flush();
+    }
   }
 
   // Full rebuild from files (maintenance). Clears vectors + graph, re-syncs.
@@ -957,15 +963,17 @@ const MAX_PROJECT_SERVICES = 16;
 const services = new Map<string, MemoryGraphService>();
 
 export function getMemoryGraphService(projectPath: string): MemoryGraphService {
-  const existing = services.get(projectPath);
+  const store = getMemoryStore(projectPath);
+  const key = store.getMemoryDir();
+  const existing = services.get(key);
   if (existing) {
     // LRU touch.
-    services.delete(projectPath);
-    services.set(projectPath, existing);
+    services.delete(key);
+    services.set(key, existing);
     return existing;
   }
-  const service = new MemoryGraphService(getMemoryStore(projectPath));
-  services.set(projectPath, service);
+  const service = new MemoryGraphService(store);
+  services.set(key, service);
   while (services.size > MAX_PROJECT_SERVICES) {
     const oldest = services.keys().next().value as string | undefined;
     if (oldest === undefined) break;
@@ -973,6 +981,13 @@ export function getMemoryGraphService(projectPath: string): MemoryGraphService {
     services.delete(oldest);
   }
   return service;
+}
+
+/** Dispose the graph service for the project's currently selected store. */
+export function disposeProjectMemory(projectPath: string): void {
+  const key = getMemoryStore(projectPath).getMemoryDir();
+  services.get(key)?.dispose();
+  services.delete(key);
 }
 
 // Drop a session's prepared-memory cache from whichever project holds it.

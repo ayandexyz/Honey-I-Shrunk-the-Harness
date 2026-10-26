@@ -13,35 +13,22 @@ skills (incl. `~/.claude/plugins` scope), permission rules via `.freecode/settin
 and `CLAUDE.md`/`AGENTS.md` instructions. Ranked by value per line of work.
 
 
-- [ ] **4. Rules hierarchy** — `context/instructions.ts` reads `CLAUDE.md`/`AGENTS.md` from
-      exactly two dirs (global `~/.freecode/`, project root), first match wins.
-      Missing: walk-up for monorepos, `@imports` (both deferred in the comment at line 6),
-      and glob-scoped rules (the Cursor `.mdc` model — "apply only for `**/*.tsx`").
-      Nested-directory rules would also give scoped skills somewhere to live.
-
-- [ ] **5. Multimodal input** — `MessagePart` (`packages/shared/src/types.ts:12-19`) is
-      text/code/tool only, and `read` cannot return an image. Blocks screenshots, design
-      mocks, and diagram debugging. Touches the shared protocol + every provider adapter.
-
 - [ ] **7. MCP server (expose)** — serve FreeCode's tools *as* an MCP server. The client
       side is done. Already listed as deferred in `CLAUDE.md`.
 
-**Suggested order:** 4 first. Item 5 is a larger, self-contained project.
-
 ## Subagent permission profiles (added 2026-09-08)
 
-User-defined subagents (Extensibility item 3) shipped without these: a definition restricts a subagent with its mode (explore/build) plus a tool allowlist, not a capability profile. The dead-code half of this (`PROFILES`, `PermissionChecker`, duplicate `PermissionProfile` interface) is also tracked under Tool system in `TODO.md`.
+User-defined subagents (Extensibility item 3) shipped without these: a definition restricts a subagent with its mode (explore/build) plus a tool allowlist, not a capability profile — and §5's agent envelope now bounds path and network reach. The dead-code half (`PROFILES`, `PermissionChecker`, duplicate `PermissionProfile` interface) has been deleted (2026-10-17).
 
 
-**Status:** partly mitigated. Item 3 shipped a per-definition tool allowlist (spec `2026-09-27-agent-control-and-definitions.md` §2.4), which narrows a writing subagent's tools; path and network scoping are still missing.
+**Status:** resolved. Item 3 shipped a per-definition tool allowlist (spec `2026-09-27-agent-control-and-definitions.md` §2.4), §5's capability envelope bounds a writable subagent's path and network reach, and the §5.5 sandbox (2026-10-17) jails a granted `shell` to the envelope's write roots with `--unshare-net` when `network: false`. One bound stays out of reach and is recorded in spec §5.6: a **granted** MCP tool runs in FreeCode's own process, which no mount namespace covers, so it can still reach its server's network — a grant is the explicit exception, and constraining that needs per-tool capability metadata or a separate process.
 
-`createToolOrchestrator()` is called with `{}` at all three production sites
-(`effect/layers.ts:63`, `:179`, `agent/loop.ts:429`). `OrchestratorOptions.permissionProfile`
-is real and checked (`tools/orchestrator.ts:150`, `:329`), but nothing outside
-`permission/` ever constructs a profile, so `PROFILES`, `PermissionChecker`,
-`TOOL_PERMISSIONS`, `getProfile`, `createProfile` and `validateProfile` are all
-dead — plus there is a duplicate `PermissionProfile` interface in
-`tools/types.ts:39`.
+The dead half is gone: `permission/profiles.ts` (its `PROFILES`,
+`PermissionChecker`, `TOOL_PERMISSIONS` map and duplicate `PermissionProfile`),
+the unreachable `OrchestratorOptions.permissionProfile` branch and
+`ToolContext.permissionProfile` were deleted (2026-10-17). Operations now come
+from each tool's own `permissions.operations`; there is no second map to keep in
+sync.
 
 Subagents are **not** unsandboxed, which is the part that is easy to overstate:
 `executeSubagent` maps `defaultReadOnly` to `agentMode: "explore"`
@@ -61,16 +48,13 @@ cannot mutate anything. Neither is a substitute for per-agent capabilities: a
 `readOnly: false` subagent under a `danger` parent has the whole toolbox and
 nothing scopes it to the files it was asked about.
 
-Wiring `permissionProfile` in **as it stands would break subagents
-immediately**: the profile axes (`fileRead`/`fileWrite`/`network`/`shell`/
-`subprocess`) are a second, coarser permission model bolted beside
-`permission/rules.ts` + `mode-policy.ts`, and `isToolAllowed` fails closed on
-any tool missing from the hand-maintained `TOOL_PERMISSIONS` map — which today
-lacks `ls`, `grep`, `glob`, `webfetch`, `todowrite`, `lsp`, `bashoutput`,
-`killbash`, and every MCP tool. So before item 3 binds user-defined agents to
-profiles, either complete that map or replace it with a per-subagent tool
-allowlist that rides the existing rules evaluation rather than sitting beside
-it.
+Tool registration and target extraction are now the single source of the
+capability answer (`tools/tool.types.ts` + `permission/rules.ts`), which the
+envelope evaluates — nothing sits beside `permission/rules.ts` +
+`mode-policy.ts` any more. The sandbox is now implemented in
+`apps/core/src/sandbox/`; future work is limited to separately designed
+capability metadata or process isolation for explicitly granted in-process MCP
+tools.
 
 ## Memory: knowledge-graph roadmap (docs audit 2026-08-23)
 
@@ -188,27 +172,12 @@ check both hold. The two bugs those docs found are in `TODO.md`.
 
 ### Measurement first (blocks everything below)
 
-- [ ] **Local performance harness.** Deterministic fixtures for cold start,
-      send, resume and streaming (long Markdown reply in fixed chunk sizes,
-      large transcripts, small/large git repos). Report p50/p95 and work counts
-      (parses, renders, bytes read), paired before/after on one machine. Local
-      and free — not an `evals/*.jsonl` case. Perf doc §1 and "A practical
-      implementation sequence".
-- [ ] **Experiment ledger.** One append-only record per experiment
-      (hypothesis, variants, workload, quality, cost, kept/rejected/inconclusive)
-      so a rejected idea such as `FREECODE_BASH_COMPRESS` is not retried. Cost
-      doc §11.
 - [ ] **Closed loop via `freecode night`.** Objective taken from this list,
       `--verify` running the harness or `eval ab`, `--max-usd` as the limit. Only
       possible once the harness exists.
 
 ### TUI and web app
 
-- [ ] **TUI: stop re-parsing the whole reply while it streams.**
-      `StreamingAssistantMessage` rebuilds the full Markdown component when
-      dirty (`apps/tui/src/components/message-row.ts:382`), so total work grows
-      faster than the reply. Reuse stable regions; rendered lines must stay
-      identical. Perf doc §3.
 - [ ] **Web app: memoize unchanged messages and follow output only near the
       bottom.** Perf doc §4.
 
@@ -223,10 +192,6 @@ check both hold. The two bugs those docs found are in `TODO.md`.
 
 ### Cost
 
-- [ ] **Complete cost accounting.** `traceCost` does not include subagent
-      sessions, `cache.warm` events, or compaction summarizer calls
-      (`compaction/llm-summarizer.ts` does not return usage). Fix before any
-      cost A/B, or a cheaper-looking variant may just be uncounted. Cost doc §4.
 - [ ] **Split root `CLAUDE.md`** (75,962 bytes, sent in full on every session)
       into a short guide plus topic docs, and check that the right topic doc
       still gets read. Changes what the model sees → `eval ab`. Cost doc §5.

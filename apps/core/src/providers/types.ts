@@ -107,6 +107,11 @@ export interface ExecuteOptions {
   // downstream breakpoint. At the tail it costs only its own tokens and the
   // cached prefix stays byte-stable. Never persisted to history.
   ephemeralTail?: string;
+  // "none" keeps the tool definitions in the request (the cached prefix stays
+  // byte-stable) but forbids calling them: the model must answer in text. The
+  // loop sets it on the last turn before its iteration cap (opencode's
+  // `toolChoice: "none"` on the final step) — a reminder alone is ignorable.
+  toolChoice?: "none";
 }
 
 /**

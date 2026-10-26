@@ -11,6 +11,7 @@
     "check-types": "next typegen && tsc --noEmit"
   },
   "dependencies": {
+    "@repo/tokens": "workspace:*",
     "@repo/ui": "workspace:*",
     "next": "^15.5.23",
     "nextra": "4.6.0",

@@ -19,8 +19,8 @@ import { envInt } from "../utils/env.js";
 import { drainMemoryJobs } from "../memory/background-jobs.js";
 import {
   countMemories,
-  FROZEN_MEMORY_ENV,
-  removeMemoryStore,
+  isolateTrialMemory,
+  memoryEnvironmentForCase,
   seedMemories,
 } from "./memory-fixture.js";
 import { trackMemoryJob } from "../memory/background-jobs.js";
@@ -119,6 +119,8 @@ export async function runTrial(
   // its project root; an unsandboxed one runs in the real working directory
   // (and `dataset.ts` has already refused to let it mutate anything).
   const sandbox = kase.files ? createSandbox(kase.files) : undefined;
+  const projectPath = sandbox?.dir ?? config.projectPath;
+  const memoryIsolation = isolateTrialMemory(projectPath, kase);
   // Scoped to the trial and restored after it, including on the throw path.
   // Safe because `suite.ts` awaits each trial in turn — a parallel runner would
   // have to carry this into the loop's own configuration instead.
@@ -127,9 +129,9 @@ export async function runTrial(
   // gate; this is the A/B variant value we restore for its controlled pass.
   const originalConsolidationGate =
     process.env.FREECODE_DISABLE_MEMORY_CONSOLIDATION;
-  // A memory case measures recall over a frozen corpus: seed it into the
-  // sandbox's own store and stop anything writing to it for the trial.
-  // `dataset.ts` guarantees `memories` implies a sandbox.
+  // Every case gets a private corpus. A memory case seeds its committed
+  // fixture; an ordinary case deliberately recalls from an empty store.
+  // `dataset.ts` guarantees `memories` implies a working-tree sandbox.
   // Fixtures freeze automatic writers. Consolidation cases release only that
   // one gate after their teaching sessions, then call the production scheduler
   // explicitly once; extraction stays disabled throughout — the corpus is
@@ -140,27 +142,16 @@ export async function runTrial(
   // build the store across the teaching sessions. Only consolidation itself
   // is frozen during teaching, so the forced pass below is genuinely the
   // FIRST one, not one of several the production per-turn gate already ran.
-  const restoreMemoryEnv = kase.memories
-    ? applyEnv(
-        kase.consolidateBeforeFinal
-          ? { FREECODE_DISABLE_MEMORY_EXTRACTION: "1", FREECODE_DISABLE_MEMORY_CONSOLIDATION: "1" }
-          : FROZEN_MEMORY_ENV,
-      )
-    : kase.sessions && kase.consolidateBeforeFinal
-      ? applyEnv({ FREECODE_DISABLE_MEMORY_CONSOLIDATION: "1" })
-      : () => {};
-  let removeMemories = () => {};
+  const restoreMemoryEnv = applyEnv(memoryEnvironmentForCase(kase));
   try {
     if (kase.memories && sandbox) {
-      removeMemories = await seedMemories(sandbox.dir, kase.memories);
+      await seedMemories(projectPath, kase.memories);
     }
     return await runTrialIn(kase, config, sandbox, originalConsolidationGate);
   } finally {
-    removeMemories();
-    // A multi-session case writes into the sandbox's store as it learns.
-    if (kase.sessions && sandbox) removeMemoryStore(sandbox.dir);
     restoreMemoryEnv();
     restoreEnv();
+    memoryIsolation.cleanup();
     sandbox?.cleanup();
   }
 }
@@ -174,9 +165,8 @@ export async function runTrial(
 async function buildUnattendedContext(
   tree: string,
 ): Promise<import("../autonomous/types.js").UnattendedContext> {
-  const { decideUnattendedAsk, REFUSAL_TEXT } = await import(
-    "../autonomous/envelope.js"
-  );
+  const { decideUnattendedAsk, REFUSAL_TEXT } =
+    await import("../autonomous/envelope.js");
   return {
     iteration: 1,
     decideAsk(toolName, args) {
@@ -225,6 +215,7 @@ async function runTrialIn(
   const { SessionStoreTag } = await import("../effect/context.js");
   const { getAgentRegistry } = await import("../agent/registry/index.js");
   const { disposeShellRegistry } = await import("../tools/shells/index.js");
+  const { disposeCacheWarmer } = await import("../providers/cache-warmer.js");
 
   const projectPath = sandbox?.dir ?? config.projectPath;
 
@@ -326,6 +317,10 @@ async function runTrialIn(
     for (const id of [sessionId, ...earlierSessionIds]) {
       getAgentRegistry().disposeRoot(id);
       disposeShellRegistry(id);
+      // Only endSession disposed it, and the scored session never gets one:
+      // each warmer's onWarmed closure held its whole AgentLoop, so every
+      // trial's conversation stayed live and a 190-trial `eval ab` OOM'd at 4GB.
+      disposeCacheWarmer(id);
     }
   };
 
@@ -440,7 +435,8 @@ async function runTrialIn(
         // value before the controlled pass: `=1` is the real off arm.
         const frozen = process.env.FREECODE_DISABLE_MEMORY_CONSOLIDATION;
         const external = originalConsolidationGate;
-        if (external === undefined) delete process.env.FREECODE_DISABLE_MEMORY_CONSOLIDATION;
+        if (external === undefined)
+          delete process.env.FREECODE_DISABLE_MEMORY_CONSOLIDATION;
         else process.env.FREECODE_DISABLE_MEMORY_CONSOLIDATION = external;
         try {
           const metas = await manager.list({ projectPath });
@@ -465,13 +461,15 @@ async function runTrialIn(
                 outputTokens: call.usage?.outputTokens,
                 cacheReadTokens: call.usage?.cacheReadInputTokens,
                 cacheWriteTokens:
-                  call.usage?.cacheWriteInputTokens ?? call.usage?.cacheCreationInputTokens,
+                  call.usage?.cacheWriteInputTokens ??
+                  call.usage?.cacheCreationInputTokens,
                 authMode: subscriptionAuth(call.provider),
               }),
           });
         } finally {
           // The final agent loop must still see the fixture's frozen state.
-          if (frozen === undefined) delete process.env.FREECODE_DISABLE_MEMORY_CONSOLIDATION;
+          if (frozen === undefined)
+            delete process.env.FREECODE_DISABLE_MEMORY_CONSOLIDATION;
           else process.env.FREECODE_DISABLE_MEMORY_CONSOLIDATION = frozen;
         }
       }
@@ -511,20 +509,28 @@ async function runTrialIn(
         });
       }
     })();
-    await Promise.race([
-      turns,
-      // The backstop for anything that blocks without a timeout of its own.
-      // Deliberately spans the WHOLE trial rather than each turn: the budget is
-      // what a case may cost, and a three-turn case that takes three times as
-      // long is not three times as informative.
-      new Promise<never>((_, reject) => {
-        const timer = setTimeout(
-          () => reject(new Error(`trial exceeded ${TRIAL_TIMEOUT_MS}ms`)),
-          TRIAL_TIMEOUT_MS,
-        );
-        timer.unref?.();
-      }),
-    ]);
+    let trialTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        turns,
+        // The backstop for anything that blocks without a timeout of its own.
+        // Deliberately spans the WHOLE trial rather than each turn: the budget is
+        // what a case may cost, and a three-turn case that takes three times as
+        // long is not three times as informative.
+        new Promise<never>((_, reject) => {
+          trialTimer = setTimeout(
+            () => reject(new Error(`trial exceeded ${TRIAL_TIMEOUT_MS}ms`)),
+            TRIAL_TIMEOUT_MS,
+          );
+          trialTimer.unref?.();
+        }),
+      ]);
+    } finally {
+      // Left pending, the timer's closure kept this trial's whole AgentLoop
+      // alive for 5 minutes after it finished — dozens of conversations at
+      // once in a fast `eval ab`, which OOM'd at 4GB.
+      clearTimeout(trialTimer);
+    }
     memoryJobsPending += (
       await drainMemoryJobs(sessionId, MEMORY_DRAIN_TIMEOUT_MS)
     ).pending;
@@ -640,6 +646,7 @@ async function runTrialIn(
     ...trace,
     modelSpans: [trace, ...earlierTraces].flatMap((t) => t.modelSpans),
     auxiliarySpans: [trace, ...earlierTraces].flatMap((t) => t.auxiliarySpans),
+    cacheWarmSpans: [trace, ...earlierTraces].flatMap((t) => t.cacheWarmSpans),
   };
   const sumOf = (pick: (t: Trace) => number) =>
     [trace, ...earlierTraces].reduce((n, t) => n + pick(t), 0);

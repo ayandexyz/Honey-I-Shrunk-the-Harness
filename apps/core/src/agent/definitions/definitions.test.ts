@@ -160,3 +160,111 @@ test("a spawn from a definition gets its role prompt and only its tools; any oth
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("frontmatter: a bare key followed by indented key: lines is a map", () => {
+  const p = parseFrontmatter(
+    "---\nname: a\nenvelope:\n  operations: [file.read]\n  network: false\n---\nBody.",
+  );
+  assert.deepEqual(p?.fields, {
+    name: "a",
+    envelope: { operations: ["file.read"], network: "false" },
+  });
+});
+
+test("frontmatter: a nested key carries an inline list or a block list", () => {
+  const inline = parseFrontmatter('---\nenvelope:\n  read: ["**", README.md]\n---\n');
+  assert.deepEqual(inline?.fields.envelope, { read: ["**", "README.md"] });
+  const block = parseFrontmatter('---\nenvelope:\n  read:\n    - "**"\n    - README.md\n---\n');
+  assert.deepEqual(block?.fields.envelope, { read: ["**", "README.md"] });
+});
+
+test("frontmatter: an indented list under a bare key stays a list", () => {
+  const p = parseFrontmatter("---\nname: a\nskills:\n  - x\n  - y\n---\nBody.");
+  assert.deepEqual(p?.fields, { name: "a", skills: ["x", "y"] });
+});
+
+test("frontmatter: indentation deeper than one level is ignored, not fatal", () => {
+  const p = parseFrontmatter("---\nname: a\nenvelope:\n  read:\n    deep: x\n---\nBody.");
+  assert.deepEqual(p?.fields, { name: "a", envelope: { read: [] } });
+});
+
+test("frontmatter: an inline list splits on commas, so a glob containing one needs the block form", () => {
+  const inline = parseFrontmatter("---\nwrite: [docs/a,b.md]\n---\n");
+  assert.deepEqual(inline?.fields, { write: ["docs/a", "b.md"] });
+  const block = parseFrontmatter("---\nwrite:\n  - docs/a,b.md\n---\n");
+  assert.deepEqual(block?.fields, { write: ["docs/a,b.md"] });
+});
+
+test("resolve: the definition's envelope rides on the role", () => {
+  const dir = project({
+    ".freecode/agents/doc-writer.md":
+      "---\nname: doc-writer\ndescription: Docs\ntools: Read, Write\nenvelope:\n  operations: [file.read, file.write]\n  read: [\"**\"]\n  write: [docs/**]\n---\nDocs.",
+  });
+  try {
+    const spawn = resolveSpawn({ subagent_type: "doc-writer" }, dir);
+    assert.ok(spawn && "role" in spawn, "resolved");
+    const role = spawn.role;
+    assert.ok(role, "the role exists");
+    assert.deepEqual(role.envelope, {
+      operations: ["file.read", "file.write"],
+      read: ["**"],
+      write: ["docs/**"],
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("resolve: an envelope-only definition still gets a role", () => {
+  const dir = project({
+    ".freecode/agents/bare.md":
+      "---\nname: bare\ndescription: Nothing but an envelope\nenvelope:\n  operations: [file.read]\n  read: [\"**\"]\n---\n",
+  });
+  try {
+    const spawn = resolveSpawn({ subagent_type: "bare" }, dir);
+    assert.ok(spawn && "role" in spawn, "resolved");
+    const role = spawn.role;
+    assert.ok(role, "no prompt and no allowlist, but the envelope is the role");
+    assert.deepEqual(role.envelope?.read, ["**"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("scopes: a definition refused for its envelope does not shadow a lower one", () => {
+  const h = mkdtempSync(join(tmpdir(), "freecode-agent-defs-env-"));
+  mkdirSync(join(h, ".freecode", "agents"), { recursive: true });
+  writeFileSync(
+    join(h, ".freecode", "agents", "scout.md"),
+    "---\nname: scout\ndescription: user scout\ntools: Read\n---\nUser.",
+  );
+  const dir = project({
+    ".freecode/agents/scout.md":
+      "---\nname: scout\ndescription: project scout\ntools: Read\nenvelope:\n  operations: [file.write]\n---\nProject.",
+  });
+  try {
+    const { definitions } = loadAgentDefinitions({ projectPath: dir, knownTools: KNOWN, homeDir: h, env: {} });
+    const scout = definitions.find((d) => d.name === "scout");
+    assert.equal(scout?.scope, "user");
+    assert.equal(scout?.description, "user scout");
+  } finally {
+    rmSync(h, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("frontmatter: a block-form child does not swallow its siblings", () => {
+  const sibling = parseFrontmatter('---\nenvelope:\n  read:\n    - "**"\n  write: [docs/**]\n---\n');
+  assert.deepEqual(sibling?.fields, { envelope: { read: ["**"], write: ["docs/**"] } });
+  const boolean = parseFrontmatter('---\nenvelope:\n  read:\n    - "**"\n  shell: true\n---\n');
+  assert.deepEqual(boolean?.fields, { envelope: { read: ["**"], shell: "true" } });
+  const both = parseFrontmatter('---\nenvelope:\n  read:\n    - docs/**\n  write:\n    - "**"\n---\n');
+  assert.deepEqual(both?.fields, { envelope: { read: ["docs/**"], write: ["**"] } });
+});
+
+test("a nested block where a tool allowlist belongs is refused, not read as no allowlist", () => {
+  assert.equal(
+    parseAgentFile("---\nname: m\ndescription: d\ntools:\n  Read: true\n---\n", "/x/m.md", "user", KNOWN),
+    null,
+  );
+});

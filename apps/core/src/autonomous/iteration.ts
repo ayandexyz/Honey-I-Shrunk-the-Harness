@@ -9,6 +9,7 @@
 // =============================================================================
 
 import { createAgentLoopEffect } from "../agent/loop.js";
+import { worktreeAxes } from "../sandbox/index.js";
 import { getAppRuntime } from "../effect/runtime.js";
 import { getSessionManager } from "../session/index.js";
 import { classifyLoopFailure } from "../agent/recovery/manager.js";
@@ -96,7 +97,7 @@ export async function runIteration(
       return { allowed: true };
     },
     record: input.onDecision,
-    ...(input.sandbox ? { sandbox: { projectPath: input.projectPath } } : {}),
+    ...(input.sandbox ? { sandbox: worktreeAxes(input.projectPath) } : {}),
   };
 
   // Belt and braces with the run's own deadline: a single iteration that hangs

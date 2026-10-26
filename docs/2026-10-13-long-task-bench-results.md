@@ -17,14 +17,14 @@ long-task run to see whether the harness or the model is at fault.
 
 ## 2. Setup
 
-| | |
-|---|---|
-| Scorer | `pnpm bench:pathology` (`bench/harness-signals/pathology.ts`), free fold of rollout logs. Unit = one user prompt. Flags: `long_dry`, `compact_loop`, `reread_heavy`, `search_circles`, `repeat_commands`, `stuck_error`, `hung_call` |
-| Tasks | `freecode-commits` set — three of this repo's own commits, approved 2026-10-12: `fix-night-envelope`, `add-agent-control`, `implement-night-morning` |
-| Agent | freecode **0.44.0** (released binary in the `agent-bench` image), `--agent danger`, MiniMax-M3 |
-| Isolation | `--isolate` (docker); final checks with `--network none`; rollout logs kept per trial (`<trial>/rollout`) |
-| Trials | 3 per task, 9 total, `--contamination-unchecked` → **smoke run, unpublishable** |
-| Judge | `pnpm bench:judge` — GPT fallback only (Gemini key invalid, §5) |
+|           |                                                                                                                                                                                                                                      |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Scorer    | `pnpm bench:pathology` (`bench/harness-signals/pathology.ts`), free fold of rollout logs. Unit = one user prompt. Flags: `long_dry`, `compact_loop`, `reread_heavy`, `search_circles`, `repeat_commands`, `stuck_error`, `hung_call` |
+| Tasks     | `freecode-commits` set — three of this repo's own commits, approved 2026-10-12: `fix-night-envelope`, `add-agent-control`, `implement-night-morning`                                                                                 |
+| Agent     | freecode **0.44.0** (released binary in the `agent-bench` image), `--agent danger`, MiniMax-M3                                                                                                                                       |
+| Isolation | `--isolate` (docker); final checks with `--network none`; rollout logs kept per trial (`<trial>/rollout`)                                                                                                                            |
+| Trials    | 3 per task, 9 total, `--contamination-unchecked` → **smoke run, unpublishable**                                                                                                                                                      |
+| Judge     | `pnpm bench:judge` — GPT fallback only (Gemini key invalid, §5)                                                                                                                                                                      |
 
 Reproduce:
 
@@ -49,17 +49,17 @@ not a harness one.
 
 Active minutes exclude setup (wall clock including setup is ~1–1.5 min more).
 
-| Task / trial | Min | Turns | Input tok (cache) | Cost | Edits | Compactions | Rereads (after cmp / all) | Flags | Tests vs baseline | Judge /10 |
-|---|---|---|---|---|---|---|---|---|---|---|
-| implement-night-morning t1 | **41.8** | 460 | 27.6M (98%) | $1.96 | 78 | 5 | 24/25 | `stuck_error` ×8 | ok | 4.0 |
-| implement-night-morning t2 | 17.9 | 206 | 11.3M (96%) | $0.88 | 41 | 3 | 18/18 | — | ok | 3.5 |
-| implement-night-morning t3 | 19.8 | 191 | 11.0M (97%) | $0.84 | 46 | 2 | 10/14 | — | ok | 5.0 |
-| fix-night-envelope t1 | **32.3** | 368 | 20.7M (97%) | $1.54 | 78 | 5 | 14/14 | `stuck_error` ×4 (`search_circles` before the scorer fix = missing `rg`, §3.4) | ok | 4.5 |
-| fix-night-envelope t2 | 11.8 | 128 | 6.4M (96%) | $0.50 | 24 | — | — | — | ok | 5.2 |
-| fix-night-envelope t3 | 10.8 | 152 | 8.6M (96%) | $0.65 | 29 | — | — | — | ok | 5.5 |
-| add-agent-control t1 | 19.7 | 194 | 11.6M (97%) | $0.85 | 31 | — | — | `stuck_error` ×4 (`not ok 709` ×5) | ok | 5.0 |
-| add-agent-control t2 | 11.6 | 164 | 8.5M (96%) | $0.65 | 35 | — | — | — | **+2 regressions** | 6.8 |
-| add-agent-control t3 | 9.9 | 139 | 7.3M (96%) | $0.56 | 24 | — | — | — | **+1 regression** | 3.5 |
+| Task / trial               | Min      | Turns | Input tok (cache) | Cost  | Edits | Compactions | Rereads (after cmp / all) | Flags                                                                          | Tests vs baseline  | Judge /10 |
+| -------------------------- | -------- | ----- | ----------------- | ----- | ----- | ----------- | ------------------------- | ------------------------------------------------------------------------------ | ------------------ | --------- |
+| implement-night-morning t1 | **41.8** | 460   | 27.6M (98%)       | $1.96 | 78    | 5           | 24/25                     | `stuck_error` ×8                                                               | ok                 | 4.0       |
+| implement-night-morning t2 | 17.9     | 206   | 11.3M (96%)       | $0.88 | 41    | 3           | 18/18                     | —                                                                              | ok                 | 3.5       |
+| implement-night-morning t3 | 19.8     | 191   | 11.0M (97%)       | $0.84 | 46    | 2           | 10/14                     | —                                                                              | ok                 | 5.0       |
+| fix-night-envelope t1      | **32.3** | 368   | 20.7M (97%)       | $1.54 | 78    | 5           | 14/14                     | `stuck_error` ×4 (`search_circles` before the scorer fix = missing `rg`, §3.4) | ok                 | 4.5       |
+| fix-night-envelope t2      | 11.8     | 128   | 6.4M (96%)        | $0.50 | 24    | —           | —                         | —                                                                              | ok                 | 5.2       |
+| fix-night-envelope t3      | 10.8     | 152   | 8.6M (96%)        | $0.65 | 29    | —           | —                         | —                                                                              | ok                 | 5.5       |
+| add-agent-control t1       | 19.7     | 194   | 11.6M (97%)       | $0.85 | 31    | —           | —                         | `stuck_error` ×4 (`not ok 709` ×5)                                             | ok                 | 5.0       |
+| add-agent-control t2       | 11.6     | 164   | 8.5M (96%)        | $0.65 | 35    | —           | —                         | —                                                                              | **+2 regressions** | 6.8       |
+| add-agent-control t3       | 9.9      | 139   | 7.3M (96%)        | $0.56 | 24    | —           | —                         | —                                                                              | **+1 regression**  | 3.5       |
 
 Total ≈ **$8.40**. Judge mean **4.8/10**. Every trial produced a patch that
 passes `tsc`.
@@ -161,7 +161,7 @@ calibrated thinking-loop detector; grok-build does it server-side and resamples.
 - The 3 core tests that fail offline need fixing or a cached catalogue. (Fixed 2026-10-13: fixture catalogues.)
 - The global pre-commit malware-scan hook (`~/.git-hooks`) false-flags task
   JSONs; disabled for this repo only with `git config --local core.hooksPath
-  .git/hooks` (undo: `git config --local --unset core.hooksPath`).
+.git/hooks` (undo: `git config --local --unset core.hooksPath`).
 
 ## 6. To do later
 
@@ -172,36 +172,36 @@ In suggested order. Each is also a TODO.md entry or a spec phase.
        (2026-10-13). Rebuild with `pnpm bench:image` and treat every v2 number
        as measured with a broken `grep` tool (§3.4); rerun before comparing
        against any fix.
-0. [x] **`grep` tool without `rg`** — fixed 2026-10-13 the way Claude Code
+1. [x] **`grep` tool without `rg`** — fixed 2026-10-13 the way Claude Code
        does it: release archives ship `rg` beside the binary
        (`release.yml`, `tools/grep.ts` `ripgrepPath`), and a missing `rg` is
        `success: false` with "use bash `grep -rn`" instead of a silent "no
        matches". `bench:pathology` no longer counts a repeated search that
-       *errored* as a search circle (re-scored: the flag on fix-envelope t1
+       _errored_ as a search circle (re-scored: the flag on fix-envelope t1
        is gone, the 12K-run local history is unchanged).
-1. [x] **Fix the judge** — 2026-10-13: Gemini replaced by Haiku 4.5 through
+2. [x] **Fix the judge** — 2026-10-13: Gemini replaced by Haiku 4.5 through
        `claude -p` on the Claude subscription (GPT stays the auditor). Left:
        `--baseline-only` (item 2), then
        `pnpm bench:judge --rejudge bench/agent-bench/results/pathology-commits-v2`.
-2. [x] **Judge gets the baseline** (2026-10-13): `bench:agents` runs each
+3. [x] **Judge gets the baseline** (2026-10-13): `bench:agents` runs each
        task's checks once on the untouched parent (`<run>/<task>/baseline-checks.json`)
        and the judge prompt lists those failures as already broken. For v2:
        `pnpm bench:agents --set freecode-commits --isolate --baseline-only
-       --contamination-unchecked --out <v2 dir>`, then item 1's `--rejudge`.
-3. [x] **Keep `not ok` lines in full** in `final-checks.json` — `tail()` in
+--contamination-unchecked --out <v2 dir>`, then item 1's `--rejudge`.
+4. [x] **Keep `not ok` lines in full** in `final-checks.json` — `tail()` in
        `runner/judged-trial.ts` keeps `not ok` / `error TS` lines from the
        cut part (≤5K), 2026-10-13. Applies to new runs only.
-4. [x] **Fix the 3 offline-failing core tests** (`modelSupportsImages` ×2,
+5. [x] **Fix the 3 offline-failing core tests** (`modelSupportsImages` ×2,
        `providers.list…`) — 2026-10-13: they read a fixture catalogue via
        `FREECODE_MODELS_CACHE_FILE` instead of the developer's cache or the
        network. Commits before the fix still fail them, so the baseline
        (item 2) stays useful for older tasks.
-5. [ ] **Spec: finish-time checks** — "built but never wired" + unverified
+6. [ ] **Spec: finish-time checks** — "built but never wired" + unverified
        finish. `bench:pathology` flag `unverified_finish` (was the full test
        command run after the last edit?), a finish-time reminder ("trace the
        user-facing entry point to your new code; run the full suite"), an
        end-to-end test per feature. Not written yet.
-6. [ ] **Stuck-loop recovery** (spec `2026-10-13-stuck-loop-recovery.md`) —
+7. [ ] **Stuck-loop recovery** (spec `2026-10-13-stuck-loop-recovery.md`) —
        **Phases 1, 2, 3 and 5 built 2026-10-13; only Phase 4 (release + rerun) left**:
    - Phase 1: offline calibration of signal E on recorded logs — must fire on
      implement t1 and add-agent t1, stay quiet on fix-envelope t1 and on
@@ -217,14 +217,9 @@ In suggested order. Each is also a TODO.md entry or a spec phase.
      2026-10-13 as a hint on the failing bash output only
      (`tools/scratch-hint.ts`): it happens in ~0.3% of sessions, so an
      always-on line was not worth its tokens.
-7. [ ] **`compact.occurred` under-reports** (records the estimated transcript,
-       not the measured request) — existing TODO.md entry.
 8. [ ] **37 zero-edit runs with 30–56% reread share** in the 12,370-run history
        scan — open a few with `freecode trace` to tell forgetting from
        truncated/unclear read output.
-9. [ ] **Publishable run**: regenerate candidates with `--since` so the task
-       file records a window, add `minimax-m3` to
-       `instances/model-releases.json`, drop `--contamination-unchecked`.
 
 No release is needed for any of the tooling above; one is needed after a
 behaviour change (item 6 Phase 4).

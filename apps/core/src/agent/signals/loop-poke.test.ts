@@ -35,6 +35,7 @@ import type {
 } from "../../providers/types.js";
 import { clearTodos } from "../../tools/todo.js";
 import { bus } from "../../bus/index.js";
+import { newlyDelivered } from "../context-inject.js";
 
 const info = {
   id: "poke-fake",
@@ -64,7 +65,7 @@ registerProvider("poke-fake" as ProviderId, {
     // Turn 1: write a plan with one item done and one open, rated low on
     // confidence. Every later turn: plain text — the model declares victory.
     stream: async function* (opts: ExecuteOptions): AsyncGenerator<ProviderChunk> {
-      tailsSeen.push(opts.ephemeralTail ?? "");
+      tailsSeen.push(newlyDelivered(opts));
       const users = (opts.messages ?? []).filter((m) => m.role === "user");
       const last = users[users.length - 1];
       lastUserSeen.push(
@@ -256,7 +257,12 @@ test("the poke and the stop are both surfaced to the frontend as notices", async
 
 test("the poke is persisted as a synthetic user message, so the transcript alternates on resume", async () => {
   const { stored } = await runLoop("poke-stored", { autoPoke: { enabled: true, maxPerRun: 3 } });
-  const roles = stored.map((m) => `${m.role}${m.synthetic ? `:${m.synthetic}` : ""}`);
+  // Appended context (the todo list) is model-only and skipped on resume like
+  // the TUI skips it; the poke turns must still alternate around it.
+  assert.ok(stored.some((m) => m.synthetic === "context"), "the todo list was appended");
+  const roles = stored
+    .filter((m) => m.synthetic !== "context")
+    .map((m) => `${m.role}${m.synthetic ? `:${m.synthetic}` : ""}`);
   // prompt, plan (tool call), "All done.", poke, "All done.", re-poke, "All done."
   assert.deepEqual(roles, [
     "user",

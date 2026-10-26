@@ -116,7 +116,9 @@ export const runCommand: CommandModule<object, RunArgs> = {
     // Lazy imports: `run` pulls in the full backend, which no other command
     // (or the --help path) should pay for.
     const { initProviders } = await import("../../providers/index.js");
-    const { initMcpServers } = await import("../../mcp/index.js");
+    const { initMcpServers, stopMcpServers } = await import(
+      "../../mcp/index.js"
+    );
     const { readConfig, fallbackProviderFromCredentials } = await import(
       "../../providers/config.js"
     );
@@ -125,6 +127,20 @@ export const runCommand: CommandModule<object, RunArgs> = {
     const { getSessionManager } = await import("../../session/index.js");
     const { bus } = await import("../../bus/index.js");
     const { initHooks } = await import("../../hooks/bootstrap.js");
+    const { endSession } = await import("../../session/end-session.js");
+    const { sessionMemoryFlush } = await import(
+      "../../session/session-flush.js"
+    );
+    const { SessionStoreTag } = await import("../../effect/context.js");
+    const { disposeAllShellRegistries } = await import(
+      "../../tools/shells/index.js"
+    );
+    const { disposeAllAgents } = await import(
+      "../../agent/registry/index.js"
+    );
+    const { disposeAll: disposeLspServers } = await import(
+      "../../tools/lsp/client.js"
+    );
 
     let prompt = argv.message.join(" ").trim();
     if (!prompt && !process.stdin.isTTY) {
@@ -132,88 +148,86 @@ export const runCommand: CommandModule<object, RunArgs> = {
     }
     if (!prompt) {
       console.error("Error: no message provided");
-      process.exit(1);
-    }
-
-    await initProviders();
-    await initMcpServers();
-    const { loadExtensions } = await import("../../extensions/index.js");
-    await loadExtensions(process.cwd());
-    // Same hooks a served session gets. Not watched: this process runs one turn
-    // and exits, so a settings.json edit mid-run could not take effect anyway.
-    const hookSettings = initHooks(process.cwd(), { watch: false });
-
-    const config = readConfig();
-    // --model provider/model overrides the configured current model.
-    let provider = config.current?.provider;
-    let model = config.current?.model;
-    if (argv.model) {
-      const slash = argv.model.indexOf("/");
-      if (slash > 0) {
-        provider = argv.model.slice(0, slash);
-        model = argv.model.slice(slash + 1);
-      } else {
-        model = argv.model;
-      }
-    }
-
-    if (!provider) {
-      // A sole configured credential (e.g. only ANTHROPIC_API_KEY exported)
-      // selects the provider; several throw naming them, none falls through
-      // to the setup error below.
-      try {
-        provider = fallbackProviderFromCredentials();
-      } catch (err) {
-        console.error(err instanceof Error ? err.message : String(err));
-        process.exit(1);
-      }
-    }
-    if (!provider) {
-      console.error(
-        "No provider configured. Set current.provider in ~/.freecode/config.json, " +
-          "export a provider API key (e.g. ANTHROPIC_API_KEY), " +
-          "or pass --model <provider>/<model>.",
-      );
-      process.exit(1);
+      process.exitCode = 1;
+      return;
     }
 
     const projectPath = process.cwd();
-    const manager = await getSessionManager();
-
-    // Resolve the session: explicit id > continue last > fresh.
-    let sessionId: string;
-    if (argv.session) {
-      sessionId = (await manager.resume(argv.session)).id;
-    } else if (argv.continue) {
-      const [latest] = await manager.list({ projectPath, status: "active" });
-      sessionId = latest
-        ? (await manager.resume(latest.id)).id
-        : await manager.start(projectPath, provider);
-    } else {
-      sessionId = await manager.start(projectPath, provider);
-    }
-
-    // Stream relay → console. Assistant text goes to stdout (pipeable); tool
-    // activity and thinking go to stderr so they never pollute the payload.
-    const unsubscribe = bus.subscribe("stream", (e) => {
-      if (e.sessionId !== sessionId) return;
-      const ev = e.event;
-      switch (ev.type) {
-        case "text_delta":
-          process.stdout.write(ev.delta);
-          break;
-        case "tool_start":
-          process.stderr.write(`\n\x1b[2m• ${ev.toolName}\x1b[0m\n`);
-          break;
-        case "error":
-          process.stderr.write(`\n\x1b[31m${ev.content}\x1b[0m\n`);
-          break;
-      }
-    });
-
-    // Safe: yargs `choices` rejected anything outside AGENT_MODES already.
-    const agentMode = argv.agent as AgentMode;
+    let provider: string | undefined;
+    let sessionId: string | undefined;
+    let unsubscribe = () => {};
+    let disposeHooks = () => {};
+    let exitCode = 1;
     try {
+      await initProviders();
+      await initMcpServers();
+      const { loadExtensions } = await import("../../extensions/index.js");
+      await loadExtensions(projectPath);
+      // Same hooks a served session gets. Not watched: this process runs one
+      // turn and exits, so a settings edit mid-run cannot take effect anyway.
+      const hookSettings = initHooks(projectPath, { watch: false });
+      disposeHooks = () => hookSettings.dispose();
+
+      const config = readConfig();
+      // --model provider/model overrides the configured current model.
+      provider = config.current?.provider;
+      let model = config.current?.model;
+      if (argv.model) {
+        const slash = argv.model.indexOf("/");
+        if (slash > 0) {
+          provider = argv.model.slice(0, slash);
+          model = argv.model.slice(slash + 1);
+        } else {
+          model = argv.model;
+        }
+      }
+
+      if (!provider) {
+        // A sole configured credential (e.g. only ANTHROPIC_API_KEY exported)
+        // selects the provider; several throw naming them.
+        provider = fallbackProviderFromCredentials();
+      }
+      if (!provider) {
+        throw new Error(
+          "No provider configured. Set current.provider in ~/.freecode/config.json, " +
+            "export a provider API key (e.g. ANTHROPIC_API_KEY), " +
+            "or pass --model <provider>/<model>.",
+        );
+      }
+
+      const manager = await getSessionManager();
+      // Resolve the session: explicit id > continue last > fresh.
+      if (argv.session) {
+        sessionId = (await manager.resume(argv.session)).id;
+      } else if (argv.continue) {
+        const [latest] = await manager.list({ projectPath, status: "active" });
+        sessionId = latest
+          ? (await manager.resume(latest.id)).id
+          : await manager.start(projectPath, provider);
+      } else {
+        sessionId = await manager.start(projectPath, provider);
+      }
+
+      // Stream relay → console. Assistant text goes to stdout (pipeable); tool
+      // activity and thinking go to stderr so they never pollute the payload.
+      unsubscribe = bus.subscribe("stream", (e) => {
+        if (e.sessionId !== sessionId) return;
+        const ev = e.event;
+        switch (ev.type) {
+          case "text_delta":
+            process.stdout.write(ev.delta);
+            break;
+          case "tool_start":
+            process.stderr.write(`\n\x1b[2m• ${ev.toolName}\x1b[0m\n`);
+            break;
+          case "error":
+            process.stderr.write(`\n\x1b[31m${ev.content}\x1b[0m\n`);
+            break;
+        }
+      });
+
+      // Safe: yargs `choices` rejected anything outside AGENT_MODES already.
+      const agentMode = argv.agent as AgentMode;
       const loop = await getAppRuntime().runPromise(
         // Unbounded unless --max-turns is passed, matching Claude Code's
         // headless mode (maxTurns is opt-in there too, not a default cap).
@@ -239,14 +253,49 @@ export const runCommand: CommandModule<object, RunArgs> = {
         }),
       );
       process.stdout.write("\n");
-      unsubscribe();
-      hookSettings.dispose();
-      process.exit(result.success ? 0 : 1);
+      exitCode = result.success ? 0 : 1;
     } catch (err) {
+      console.error(`\nError: ${err instanceof Error ? err.message : String(err)}`);
+      exitCode = 1;
+    } finally {
       unsubscribe();
-      hookSettings.dispose();
-      console.error(`\nError: ${(err as Error).message}`);
-      process.exit(1);
+      if (sessionId && provider) {
+        const drain = await endSession(sessionId, {
+          reason: "exit",
+          flush: sessionMemoryFlush({
+            sessionId,
+            projectPath,
+            provider,
+            getStore: () => getAppRuntime().runPromise(SessionStoreTag),
+          }),
+        });
+        if (drain.memoryDrainTimedOut || drain.pendingMemoryJobs > 0) {
+          process.stderr.write(
+            `[freecode] memory shutdown timed out with ${drain.pendingMemoryJobs} job(s) still pending\n`,
+          );
+        }
+      }
+
+      // Process-owned resources are not scoped to endSession. Tear each down
+      // before selecting the exit code so a child cannot keep a headless run
+      // alive after its answer has already been printed.
+      const dispose = (name: string, fn: () => void) => {
+        try {
+          fn();
+        } catch (error) {
+          process.stderr.write(
+            `[freecode] ${name} shutdown failed: ${String(error)}\n`,
+          );
+        }
+      };
+      dispose("hook", disposeHooks);
+      await stopMcpServers().catch((error: unknown) => {
+        process.stderr.write(`[freecode] MCP shutdown failed: ${String(error)}\n`);
+      });
+      dispose("shell", disposeAllShellRegistries);
+      dispose("agent", disposeAllAgents);
+      dispose("language-server", disposeLspServers);
+      process.exitCode = exitCode;
     }
   },
 };

@@ -122,6 +122,7 @@ export function buildGenerateOptions(
     temperature: opts.temperature,
     maxOutputTokens: opts.maxTokens || entry.maxOutputTokens,
     tools: tools as any,
+    ...(opts.toolChoice && tools ? { toolChoice: opts.toolChoice } : {}),
     abortSignal: opts.abortSignal,
     maxRetries: PROVIDER_MAX_RETRIES,
   };

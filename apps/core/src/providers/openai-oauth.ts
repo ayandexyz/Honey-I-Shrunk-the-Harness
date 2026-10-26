@@ -198,7 +198,12 @@ export function createOpenAIOAuthFetch(
     headers.set("chatgpt-account-id", login.account_id);
     headers.set("originator", OPENAI_OAUTH.originator);
     headers.set("accept", "text/event-stream");
-    const { body, callerStreams } = rewriteCodexBody(init.body);
+    const { body, callerStreams, cacheKey } = rewriteCodexBody(init.body);
+    // The backend routes its prompt cache on this header, not on the body's
+    // `prompt_cache_key` (Codex CLI, pi and opencode all send it). Without it
+    // each request lands on an arbitrary cache shard: a 2026-10-19 session
+    // read 0 or a fixed 18.8K (system + tools) of ~100K every turn.
+    if (cacheKey) headers.set("session-id", cacheKey);
 
     const resp = await baseFetch(OPENAI_OAUTH.endpoint, { ...init, headers, body });
     if (!resp.ok) return resp;

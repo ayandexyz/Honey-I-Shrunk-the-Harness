@@ -126,3 +126,12 @@ test("full panel: a one-judge trial is degraded; more than 10% of them is not a 
   assert.equal(panelVerdict(worse.counts, rows.length).ok, false);
   assert.equal(panelVerdict(s.counts, 0).ok, false, "no trials is not a two-judge run");
 });
+
+test("a panel configured with one judge is never a two-judge run, however clean its counts look", () => {
+  const s = summarize([row({ score: 6, trial: 1 }), row({ score: 6, trial: 2 })]);
+  // No judge failed, so nothing is counted degraded — that silence is how
+  // BuffBench's panel quietly became one model.
+  assert.equal(s.counts.degraded, 0);
+  assert.deepEqual(panelVerdict(s.counts, 2, 1), { ok: false, share: 1 });
+  assert.deepEqual(panelVerdict(s.counts, 2, 2), { ok: true, share: 0 });
+});

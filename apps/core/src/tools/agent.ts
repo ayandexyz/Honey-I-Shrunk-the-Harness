@@ -9,7 +9,7 @@ import type { Tool, ToolExecutionResult, JsonSchema } from "./tool.types.js";
 import { buildTool } from "./factory.js";
 import { AgentLoop } from "../agent/loop.js";
 import { BusEvents } from "../bus/index.js";
-import type { AgentMode, HookContext } from "../agent/types.js";
+import type { AgentMode, HookContext, LoopFailure } from "../agent/types.js";
 import type { HookRuntime } from "../hooks/runtime.js";
 import { createSessionStore, type SessionStore } from "../session/store.js";
 import { coerceBoolean } from "./coerce-args.js";
@@ -20,6 +20,26 @@ import { getAgentRegistry } from "../agent/registry/index.js";
 import { disposeSubagentShells } from "./shells/index.js";
 import { notifyTask, taskNotificationsEnabled } from "../agent/task-notify.js";
 import { recordEnd, recordStart } from "../agent/background-ledger.js";
+
+/**
+ * The loop reports a turn cap, a loop-health stop and a timeout as a clean
+ * completion (it hands back the model's last words), so `Status: SUCCESS`
+ * alone told a parent that unfinished work was done (session 7de8e317: a
+ * scope-update agent hit its 50-turn cap and went straight to review).
+ */
+export function subagentStatus(success: boolean, failure?: LoopFailure): string {
+  if (!success) return "FAILED";
+  switch (failure?.kind) {
+    case "turn_cap":
+      return "INCOMPLETE (hit its turn limit; the work may be unfinished)";
+    case "stuck":
+      return "INCOMPLETE (stopped by loop-health; the work may be unfinished)";
+    case "timeout":
+      return "INCOMPLETE (timed out; the work may be unfinished)";
+    default:
+      return "SUCCESS";
+  }
+}
 
 interface AgentParams {
   task: string;
@@ -66,7 +86,7 @@ const agentSchema: JsonSchema = {
     model: {
       type: "string",
       description:
-        "Optional: run it on another model, as provider or provider/model (e.g. anthropic/claude-opus-5). Default: this session's model.",
+        "NEVER set this unless the user explicitly asks for a particular model. Leave it out to use this session's model. Written as provider or provider/model (e.g. anthropic/claude-opus-5), never a bare model id.",
     },
     forkContext: {
       type: "boolean",
@@ -162,9 +182,14 @@ async function executeSubagent(
   // unknown name is a readable refusal, not a session left behind. A
   // continuation takes all of it from the agent it continues.
   const continued = params.continue
-    ? resolveContinuation(params as unknown as Record<string, unknown>, ctx.sessionId, agents)
+    ? resolveContinuation(
+        params as unknown as Record<string, unknown>,
+        ctx.sessionId,
+        agents,
+      )
     : undefined;
-  if (continued && "error" in continued) return { success: false, error: continued.error };
+  if (continued && "error" in continued)
+    return { success: false, error: continued.error };
   const spawn = continued
     ? {
         agentLabel: continued.config.definition,
@@ -181,7 +206,8 @@ async function executeSubagent(
           provider: r.provider,
           model: r.model,
           // An explicit readOnly wins; otherwise the definition's mode decides.
-          readOnly: coerceBoolean(params.readOnly) ?? r.definition.mode === "explore",
+          readOnly:
+            coerceBoolean(params.readOnly) ?? r.definition.mode === "explore",
           role: r.role,
         };
       })();
@@ -229,7 +255,8 @@ async function executeSubagent(
     if (forking) await discardSession();
     return {
       success: false,
-      error: "agent: no provider — none was given, and the parent session has none",
+      error:
+        "agent: no provider — none was given, and the parent session has none",
     };
   }
 
@@ -349,7 +376,7 @@ async function executeSubagent(
         parentSessionId,
         params.task,
       );
-      parentRecorder?.recordSubagentStart(subagentId, params.task);
+      parentRecorder?.recordSubagentStart(subagentId, params.task, agentLabel);
 
       const subAgentLoop = new AgentLoop(subagentId, {
         maxIterations: 50,
@@ -383,6 +410,9 @@ async function executeSubagent(
         projectPath,
         agentMode: subagentMode,
         role: spawn.role,
+        // The ceiling this run is under, so the child's own envelope
+        // intersects with it rather than replacing it (spec §5.4).
+        envelope: ctx.envelope,
       });
 
       // The loop reports its own interrupt as a clean completion (that is the
@@ -396,7 +426,9 @@ async function executeSubagent(
         ...subAgentLoop
           .takeUndeliveredSteers()
           .filter((s) => s.synthetic === "steer")
-          .map((s) => s.text.replace(/^Message from the agent that started you:\n/, "")),
+          .map((s) =>
+            s.text.replace(/^Message from the agent that started you:\n/, ""),
+          ),
         ...agents.takeUndelivered(subagentId),
       ];
       const message = interrupted ? "interrupted" : result.message;
@@ -426,7 +458,7 @@ async function executeSubagent(
         // The id has to be in the text: metadata never reaches the model, and
         // without it `continue` got the type name instead (delegation eval).
         `Agent id: ${subagentId}${continued ? ` (continued from ${continued.sourceId})` : ""}`,
-        `Status: ${success ? "SUCCESS" : "FAILED"}`,
+        `Status: ${subagentStatus(success, result.failure)}`,
         `Turns: ${result.turnCount}`,
         `Iterations: ${result.iterationCount}`,
         !success && message ? `Reason: ${message}` : "",

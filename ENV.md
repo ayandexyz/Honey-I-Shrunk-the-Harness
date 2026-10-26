@@ -77,6 +77,7 @@ left out.
 | `FREECODE_MODEL_OVERLAY` | on | `0` drops the per-model prompt overlays (fixes for known model gaps). `eval ab`. |
 | `FREECODE_CONTEXT_FRAMING` | current | `legacy` restores the pre-2026-09-21 project-context framing. Measurement only. `eval ab`. |
 | `FREECODE_EPHEMERAL_TAIL` | on | `0` puts per-turn state (memory recalls, todos, reminders) back in the system prompt instead of a trailing message. Breaks the prompt cache; measurement only. `eval ab`. |
+| `FREECODE_APPEND_CONTEXT` | on | Per-turn state is delivered append-only (`agent/context-inject.ts`, Claude Code / opencode style): appended once as a persisted `synthetic: "context"` message, only when new, so every request extends the last. Fixes the ChatGPT backend's cache freezing behind a per-request tail. `0` restores the tail. `eval ab`. |
 
 ## Prompt cache
 

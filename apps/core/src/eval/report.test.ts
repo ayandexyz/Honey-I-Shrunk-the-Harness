@@ -84,6 +84,48 @@ test("a baseline from a different model is refused", () => {
   assert.equal(baselineFor("trajectory", "openai/gpt-4o")?.passed, 2);
 });
 
+test("a baseline from a different judge is refused", () => {
+  writeReport(
+    report({ judge: { provider: "gemini", model: "gemini-3.6-flash" } }),
+  );
+  assert.equal(
+    baselineFor("trajectory", "anthropic/claude-sonnet-4-5", "api-key", {
+      provider: "claude-cli",
+      model: "claude-haiku-4-5",
+    }),
+    null,
+  );
+});
+
+test("the same normalized judge remains comparable", () => {
+  writeReport(
+    report({ judge: { provider: "Claude-CLI", model: "Claude-Haiku-4-5" } }),
+  );
+  assert.equal(
+    baselineFor("trajectory", "anthropic/claude-sonnet-4-5", "api-key", {
+      provider: " claude-cli ",
+      model: "claude-haiku-4-5",
+    })?.passed,
+    2,
+  );
+});
+
+test("a legacy history row without a judge is not a baseline for a known judge", () => {
+  writeReport(report());
+  assert.equal(
+    baselineFor("trajectory", "anthropic/claude-sonnet-4-5", "api-key", {
+      provider: "claude-cli",
+      model: "claude-haiku-4-5",
+    }),
+    null,
+  );
+  // It remains usable for another legacy/unjudged lookup.
+  assert.equal(
+    baselineFor("trajectory", "anthropic/claude-sonnet-4-5")?.passed,
+    2,
+  );
+});
+
 test("a baseline from the other auth mode is refused (OAuth spec §8)", () => {
   // The subscription endpoint sends a different beta set and an extra system
   // block, so an OAuth run is a different instrument — its numbers must not

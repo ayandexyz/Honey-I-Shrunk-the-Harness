@@ -269,12 +269,19 @@ First run (2026-09-26, MiniMax-M3, 3 trials, both comparisons —
 consolidation off (still learning) passed 8/15, on-schedule 11/15 (cost per
 passed probe -41% on top of that). No break-even in teaching cost itself —
 learning costs 20–50% more by session 12 regardless of arm; the return is
-entirely the final probe passing. `long-incremental-assembly` never passed in
-any of the 4 arms (0/12). Its fixture confound (an immutable `regions.mjs`
-the teaching tells the model to edit) is fixed in `595b9dd3`; the re-run is
-still 0/3 vs 0/3 (`-3`, rejected), now for memory reasons — the last-taught
-fact is not retained, and consolidation dropped an earlier one in 2 of 3
-trials. See `TODO.md`. Full numbers: spec §7.3.
+entirely the final probe passing. Historically, `long-incremental-assembly`
+failed all 4 arms (0/12), then remained 0/3 vs 0/3 after its immutable-fixture
+confound was fixed in `595b9dd3`; full historical numbers are in spec §7.3.
+
+Resolved 2026-10-18: extraction now checks latest-concrete anchor coverage,
+independent same-topic facts are additive, lossy consolidation is refused, and
+the recall prompt requires complete list/map assembly with units. On commit
+`d547c4eb`, the case improved 0/3 → 2/3
+(`04a55941-40c5-4e38-8cf8-439781ac20d4`); all three taught regions survived in
+all three candidate trials. The lone outcome failure wrote every correct
+percentage value but used percentage points as multipliers, a coding error
+rather than memory loss. `long-late-correction` separately improved 0/3 → 3/3
+in `5d8a97e5-080e-4c98-be19-345271d88f68`.
 
 ## 3. Grow the suite — `freecode eval add <session-id>`
 

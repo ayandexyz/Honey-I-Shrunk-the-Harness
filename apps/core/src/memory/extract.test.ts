@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { extractMemories, MAX_SAVES_PER_RUN } from "./extract.js";
 import { getMemoryStore } from "./mem-store.js";
+import type { MemoryWriteTrace } from "./failure-trace.js";
 import { bus } from "../bus/index.js";
 
 function fixture(): { projectPath: string; cleanup: () => void } {
@@ -43,6 +44,37 @@ test("saves proposals up to the per-run cap and drops the rest", async () => {
 
     assert.equal(saved, MAX_SAVES_PER_RUN);
     assert.equal(getMemoryStore(projectPath).list().length, MAX_SAVES_PER_RUN);
+  } finally {
+    cleanup();
+  }
+});
+
+test("when capped, prioritizes a fact from the latest user message", async () => {
+  const { projectPath, cleanup } = fixture();
+  try {
+    const proposals = [
+      proposal("old-one"),
+      proposal("old-two"),
+      proposal("old-three"),
+      {
+        type: "project",
+        name: "ap-northeast-rate",
+        description: "ap-northeast-1 is 10 percent",
+        content: "The region table also needs ap-northeast-1 at 10 percent.",
+      },
+    ];
+    await extractMemories({
+      transcript:
+        "user: the region table also needs ap-northeast-1 at 10 percent\nassistant: noted",
+      projectPath,
+      provider: "anthropic",
+      complete: async () => JSON.stringify(proposals),
+    });
+    const names = getMemoryStore(projectPath)
+      .list()
+      .map((entry) => entry.name);
+    assert.ok(names.includes("ap-northeast-rate"));
+    assert.equal(names.length, MAX_SAVES_PER_RUN);
   } finally {
     cleanup();
   }
@@ -96,6 +128,135 @@ test("an empty transcript never calls the provider", async () => {
     });
     assert.equal(called, false);
     assert.equal(saved, 0);
+  } finally {
+    cleanup();
+  }
+});
+
+test("the extractor treats no-edit acknowledgement language as turn-local", async () => {
+  const { projectPath, cleanup } = fixture();
+  let system = "";
+  try {
+    await extractMemories({
+      transcript:
+        "user: Production moved to api.v2. Don't edit yet, just acknowledge.\nassistant: noted",
+      projectPath,
+      provider: "anthropic",
+      complete: async (prompt) => {
+        system = prompt;
+        return "[]";
+      },
+    });
+
+    assert.match(system, /apply only to that turn/i);
+    assert.match(system, /never save them/i);
+    assert.match(system, /save the durable fact underneath/i);
+    assert.match(
+      system,
+      /concrete enduring rule, identifier, value, or correction/i,
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("an empty result retries once for a concrete identifier and value", async () => {
+  const { projectPath, cleanup } = fixture();
+  let calls = 0;
+  try {
+    const saved = await extractMemories({
+      transcript:
+        "user: The region table also needs ap-northeast-1 at 10 percent.\n" +
+        "assistant: noted\nuser: Just acknowledge, no edits.\nassistant: acknowledged",
+      projectPath,
+      provider: "anthropic",
+      complete: async (_system, prompt) => {
+        calls++;
+        assert.equal(
+          calls === 2,
+          prompt.startsWith("Re-evaluate the latest user message"),
+        );
+        return calls === 1
+          ? "[]"
+          : JSON.stringify([
+              {
+                type: "project",
+                name: "ap-northeast-1-tax-rate",
+                description: "ap-northeast-1 tax rate is 10 percent",
+                content: "The tax rate for ap-northeast-1 is 10 percent.",
+              },
+            ]);
+      },
+    });
+
+    assert.equal(calls, 2);
+    assert.equal(saved, 1);
+    assert.ok(
+      getMemoryStore(projectPath).load("ap-northeast-1-tax-rate", "project"),
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("an unchanged result retries the latest concrete fact", async () => {
+  const { projectPath, cleanup } = fixture();
+  let calls = 0;
+  try {
+    const store = getMemoryStore(projectPath);
+    const existing = {
+      type: "project" as const,
+      name: "tax-rates",
+      description: "Known regional tax rates",
+      content: "The tax rate for us-east-1 is 8.875 percent.",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    store.save(existing);
+
+    const saved = await extractMemories({
+      transcript:
+        "user: The region table also needs ap-northeast-1 at 10 percent.\n" +
+        "assistant: noted\nuser: Just acknowledge, no edits.\nassistant: acknowledged",
+      projectPath,
+      provider: "anthropic",
+      complete: async (_system, prompt) => {
+        calls++;
+        if (calls === 1) return JSON.stringify([existing]);
+        assert.match(prompt, /previous proposals omitted/i);
+        return JSON.stringify([
+          {
+            type: "project",
+            name: "ap-northeast-1-tax-rate",
+            description: "ap-northeast-1 tax rate is 10 percent",
+            content: "The tax rate for ap-northeast-1 is 10 percent.",
+          },
+        ]);
+      },
+    });
+
+    assert.equal(calls, 2);
+    assert.equal(saved, 1);
+    assert.ok(store.load("ap-northeast-1-tax-rate", "project"));
+  } finally {
+    cleanup();
+  }
+});
+
+test("an empty result does not retry generic chatter", async () => {
+  const { projectPath, cleanup } = fixture();
+  let calls = 0;
+  try {
+    await extractMemories({
+      transcript: "user: Just acknowledge, no edits.\nassistant: noted",
+      projectPath,
+      provider: "anthropic",
+      complete: async () => {
+        calls++;
+        return "[]";
+      },
+    });
+    assert.equal(calls, 1);
   } finally {
     cleanup();
   }
@@ -215,6 +376,179 @@ test("stays silent when nothing was saved", async () => {
     assert.equal(cap.events.length, 0, "an empty extraction must not notify");
   } finally {
     cap.stop();
+    cleanup();
+  }
+});
+
+// -----------------------------------------------------------------------------
+// Multi-turn additive facts under one topic. Extraction is idempotent on
+// (type, name) — a later turn updates the entry — so the failure to guard
+// against is a rewrite that carries less than what is already stored, with
+// nothing new in its place.
+// -----------------------------------------------------------------------------
+
+function withContent(name: string, content: string) {
+  return { type: "project", name, description: `about ${name}`, content };
+}
+
+const teach = (
+  projectPath: string,
+  ...entries: Array<{
+    type: string;
+    name: string;
+    description: string;
+    content: string;
+  }>
+) =>
+  extractMemories({
+    transcript: TRANSCRIPT,
+    projectPath,
+    provider: "anthropic",
+    complete: async () => JSON.stringify(entries),
+  });
+
+const TWO_RULES = "We always deploy on Fridays and never on Mondays";
+
+test("a rewrite that only subtracts facts is refused, and the entry keeps them", async () => {
+  const { projectPath, cleanup } = fixture();
+  try {
+    assert.equal(
+      await teach(projectPath, withContent("deploy-cadence", TWO_RULES)),
+      1,
+    );
+    // The next turn's extractor reuses the topic and drops the second rule. A
+    // stored fact is not the extractor's to forget, so the write is refused.
+    assert.equal(
+      await teach(
+        projectPath,
+        withContent("deploy-cadence", "We always deploy on Fridays"),
+      ),
+      0,
+    );
+    assert.equal(
+      getMemoryStore(projectPath).load("deploy-cadence", "project")?.content,
+      TWO_RULES,
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("a same-name rewrite that adds a fact still updates the entry", async () => {
+  const { projectPath, cleanup } = fixture();
+  try {
+    await teach(
+      projectPath,
+      withContent("deploy-cadence", "We always deploy on Fridays"),
+    );
+    assert.equal(
+      await teach(projectPath, withContent("deploy-cadence", TWO_RULES)),
+      1,
+      "learning more is an update, not a loss",
+    );
+    assert.equal(
+      getMemoryStore(projectPath).load("deploy-cadence", "project")?.content,
+      TWO_RULES,
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("a rewrite that restates the facts in new words still updates the entry", async () => {
+  const { projectPath, cleanup } = fixture();
+  try {
+    await teach(
+      projectPath,
+      withContent("deploy-cadence", "The campaign deadline is Nov 3"),
+    );
+    assert.equal(
+      await teach(
+        projectPath,
+        withContent("deploy-cadence", "The campaign deadline moved to Dec 1"),
+      ),
+      1,
+    );
+    assert.equal(
+      getMemoryStore(projectPath).load("deploy-cadence", "project")?.content,
+      "The campaign deadline moved to Dec 1",
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("a low-overlap same-name proposal preserves the earlier fact", async () => {
+  const { projectPath, cleanup } = fixture();
+  try {
+    await teach(
+      projectPath,
+      withContent("sso-provider", "SSO is required for all internal tools"),
+    );
+    assert.equal(
+      await teach(
+        projectPath,
+        withContent("sso-provider", "The SSO provider is Okta"),
+      ),
+      1,
+    );
+    const content =
+      getMemoryStore(projectPath).load("sso-provider", "project")?.content ??
+      "";
+    assert.ok(content.includes("SSO is required for all internal tools"));
+    assert.ok(content.includes("The SSO provider is Okta"));
+  } finally {
+    cleanup();
+  }
+});
+
+test("independent anchored facts survive a high-overlap topic rewrite", async () => {
+  const { projectPath, cleanup } = fixture();
+  try {
+    await teach(
+      projectPath,
+      withContent(
+        "regional-tax-rates",
+        "The tax rate for us-east-1 is 8.875 percent.",
+      ),
+    );
+    await teach(
+      projectPath,
+      withContent(
+        "regional-tax-rates",
+        "The tax rate for ap-northeast-1 is 10 percent.",
+      ),
+    );
+
+    const content =
+      getMemoryStore(projectPath).load("regional-tax-rates", "project")
+        ?.content ?? "";
+    assert.match(content, /us-east-1.*8\.875 percent/s);
+    assert.match(content, /ap-northeast-1.*10 percent/s);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a refused rewrite is recorded instead of vanishing", async () => {
+  const { projectPath, cleanup } = fixture();
+  const trace: MemoryWriteTrace = {};
+  try {
+    await teach(projectPath, withContent("deploy-cadence", TWO_RULES));
+    await extractMemories({
+      transcript: TRANSCRIPT,
+      projectPath,
+      provider: "anthropic",
+      complete: async () =>
+        JSON.stringify([
+          withContent("deploy-cadence", "We always deploy on Fridays"),
+        ]),
+      trace,
+    });
+    assert.deepEqual(trace.extraction?.skipped, [
+      { body: "We always deploy on Fridays", reason: "lossy" },
+    ]);
+  } finally {
     cleanup();
   }
 });

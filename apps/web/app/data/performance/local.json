@@ -1,0 +1,344 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-10-17T08:16:47.854Z",
+  "environment": {
+    "node": "v26.8.2",
+    "platform": "linux",
+    "arch": "x64",
+    "iterations": 7,
+    "warmup": 2,
+    "networkCalls": 0
+  },
+  "results": [
+    {
+      "name": "cold_backend_ready",
+      "layer": "backend",
+      "unit": "ms",
+      "samples": 7,
+      "distribution": {
+        "min": 551.1402889999999,
+        "p50": 587.259344,
+        "p75": 634.0300724999997,
+        "p95": 645.6051298999994,
+        "max": 646.7831419999993
+      },
+      "work": {
+        "processMode": "compiled",
+        "rpc": "config.get"
+      }
+    },
+    {
+      "name": "first_session_start",
+      "layer": "backend",
+      "unit": "ms",
+      "samples": 7,
+      "distribution": {
+        "min": 17.217302000000018,
+        "p50": 18.74181899999985,
+        "p75": 20.49266650000004,
+        "p95": 21.127633099999866,
+        "max": 21.20437099999981
+      },
+      "work": {
+        "processMode": "compiled",
+        "filesystemWrites": 2
+      }
+    },
+    {
+      "name": "prompt_to_first_visible_text",
+      "layer": "provider",
+      "unit": "ms",
+      "samples": 7,
+      "distribution": {
+        "min": 2.0880010000000766,
+        "p50": 2.1519499999994878,
+        "p75": 2.176597000000129,
+        "p95": 2.289230000000225,
+        "max": 2.334584000000177
+      },
+      "work": {
+        "chunks": 1,
+        "visibleCharacters": 18,
+        "configuredDelayMs": 2
+      }
+    },
+    {
+      "name": "prompt_to_first_visible_text",
+      "layer": "backend",
+      "unit": "ms",
+      "samples": 7,
+      "distribution": {
+        "min": 0.00507000000015978,
+        "p50": 0.00785600000017439,
+        "p75": 0.01624549999996816,
+        "p95": 0.02985720000033324,
+        "max": 0.033183000000462926
+      },
+      "work": {
+        "chunks": 1,
+        "visibleCharacters": 18,
+        "configuredDelayMs": 2
+      }
+    },
+    {
+      "name": "prompt_to_first_visible_text",
+      "layer": "frontend",
+      "unit": "ms",
+      "samples": 7,
+      "distribution": {
+        "min": 0.06689900000037596,
+        "p50": 0.1179309999997713,
+        "p75": 0.18322300000045288,
+        "p95": 0.48422509999991203,
+        "max": 0.5993239999997968
+      },
+      "work": {
+        "chunks": 1,
+        "visibleCharacters": 18,
+        "configuredDelayMs": 2
+      }
+    },
+    {
+      "name": "prompt_to_first_visible_text",
+      "layer": "end_to_end",
+      "unit": "ms",
+      "samples": 7,
+      "distribution": {
+        "min": 2.1627410000000964,
+        "p50": 2.296251000000666,
+        "p75": 2.355442999999923,
+        "p95": 2.8003895999996526,
+        "max": 2.9680439999992814
+      },
+      "work": {
+        "chunks": 1,
+        "visibleCharacters": 18,
+        "configuredDelayMs": 2
+      }
+    },
+    {
+      "name": "stream_16384b_128b_chunks",
+      "layer": "backend",
+      "unit": "ms",
+      "samples": 7,
+      "distribution": {
+        "min": 0.225998999996591,
+        "p50": 0.24606599999879109,
+        "p75": 0.2670820000025742,
+        "p95": 0.3159123000032195,
+        "max": 0.3342030000021623
+      },
+      "work": {
+        "bytesStreamed": 16384,
+        "chunks": 129,
+        "maxChunkBytes": 128,
+        "markdownRenders": 2,
+        "renderRequests": 130
+      }
+    },
+    {
+      "name": "stream_16384b_128b_chunks",
+      "layer": "frontend",
+      "unit": "ms",
+      "samples": 7,
+      "distribution": {
+        "min": 74.33889799999815,
+        "p50": 82.21519000000899,
+        "p75": 86.80910000000495,
+        "p95": 89.85468470000197,
+        "max": 90.32791100000031
+      },
+      "work": {
+        "bytesStreamed": 16384,
+        "chunks": 129,
+        "maxChunkBytes": 128,
+        "markdownRenders": 2,
+        "renderRequests": 130
+      }
+    },
+    {
+      "name": "stream_16384b_128b_chunks",
+      "layer": "end_to_end",
+      "unit": "ms",
+      "samples": 7,
+      "distribution": {
+        "min": 74.65570299999945,
+        "p50": 82.5127849999999,
+        "p75": 87.13338699999986,
+        "p95": 90.15864759999968,
+        "max": 90.6324939999995
+      },
+      "work": {
+        "bytesStreamed": 16384,
+        "chunks": 129,
+        "maxChunkBytes": 128,
+        "markdownRenders": 2,
+        "renderRequests": 130
+      }
+    },
+    {
+      "name": "stream_16384b_1024b_chunks",
+      "layer": "backend",
+      "unit": "ms",
+      "samples": 7,
+      "distribution": {
+        "min": 0.10198700000091776,
+        "p50": 0.10820000000057917,
+        "p75": 0.11514800000031755,
+        "p95": 0.12517560000023875,
+        "max": 0.1289969999997993
+      },
+      "work": {
+        "bytesStreamed": 16384,
+        "chunks": 16,
+        "maxChunkBytes": 1024,
+        "markdownRenders": 2,
+        "renderRequests": 17
+      }
+    },
+    {
+      "name": "stream_16384b_1024b_chunks",
+      "layer": "frontend",
+      "unit": "ms",
+      "samples": 7,
+      "distribution": {
+        "min": 77.39786200000162,
+        "p50": 79.73277100000087,
+        "p75": 82.74944750000122,
+        "p95": 94.46549640000038,
+        "max": 99.07170899999983
+      },
+      "work": {
+        "bytesStreamed": 16384,
+        "chunks": 16,
+        "maxChunkBytes": 1024,
+        "markdownRenders": 2,
+        "renderRequests": 17
+      }
+    },
+    {
+      "name": "stream_16384b_1024b_chunks",
+      "layer": "end_to_end",
+      "unit": "ms",
+      "samples": 7,
+      "distribution": {
+        "min": 77.54609299999993,
+        "p50": 79.84890500000074,
+        "p75": 82.87084700000014,
+        "p95": 94.59894239999966,
+        "max": 99.21006299999954
+      },
+      "work": {
+        "bytesStreamed": 16384,
+        "chunks": 16,
+        "maxChunkBytes": 1024,
+        "markdownRenders": 2,
+        "renderRequests": 17
+      }
+    },
+    {
+      "name": "session_resume_small",
+      "layer": "backend",
+      "unit": "ms",
+      "samples": 7,
+      "distribution": {
+        "min": 0.15427400000044145,
+        "p50": 0.17487600000004022,
+        "p75": 0.19891099999995276,
+        "p95": 0.20962779999927078,
+        "max": 0.2135919999991529
+      },
+      "work": {
+        "entriesConverted": 24,
+        "bytesParsed": 9822
+      }
+    },
+    {
+      "name": "session_resume_large",
+      "layer": "backend",
+      "unit": "ms",
+      "samples": 7,
+      "distribution": {
+        "min": 4.243988000000172,
+        "p50": 4.424496999999974,
+        "p75": 5.289604999999938,
+        "p95": 6.071689600000172,
+        "max": 6.269371000000319
+      },
+      "work": {
+        "entriesConverted": 2400,
+        "bytesParsed": 996270
+      }
+    },
+    {
+      "name": "history_load_unchanged",
+      "layer": "backend",
+      "unit": "ms",
+      "samples": 7,
+      "distribution": {
+        "min": 3.779548000000432,
+        "p50": 4.620451999999204,
+        "p75": 4.6901645000002645,
+        "p95": 4.866682700000274,
+        "max": 4.941842000000179
+      },
+      "work": {
+        "entriesConverted": 2400,
+        "bytesParsed": 996270,
+        "mutations": 0
+      }
+    },
+    {
+      "name": "history_load_after_append",
+      "layer": "backend",
+      "unit": "ms",
+      "samples": 7,
+      "distribution": {
+        "min": 4.356463999999505,
+        "p50": 5.712700000000041,
+        "p75": 5.847235500000352,
+        "p95": 7.348429499999927,
+        "max": 7.965248999999858
+      },
+      "work": {
+        "entriesConverted": 2401,
+        "bytesParsed": 996690,
+        "mutations": 1
+      }
+    },
+    {
+      "name": "checkpoint_capture_small",
+      "layer": "backend",
+      "unit": "ms",
+      "samples": 7,
+      "distribution": {
+        "min": 20.62749199999962,
+        "p50": 21.301368999999795,
+        "p75": 21.74113699999998,
+        "p95": 23.218257200000423,
+        "max": 23.69643200000064
+      },
+      "work": {
+        "filesScanned": 26,
+        "filesStatted": 26
+      }
+    },
+    {
+      "name": "checkpoint_capture_large",
+      "layer": "backend",
+      "unit": "ms",
+      "samples": 7,
+      "distribution": {
+        "min": 54.89086299999872,
+        "p50": 57.69062500000109,
+        "p75": 58.343331000000035,
+        "p95": 59.38144200000024,
+        "max": 59.71569900000031
+      },
+      "work": {
+        "filesScanned": 1001,
+        "filesStatted": 1001
+      }
+    }
+  ]
+}

@@ -214,12 +214,14 @@ export interface SerializedMessage {
   // "task_notification": a background task finished (agent/task-notify.ts);
   // the frontend renders a one-line notice, not the XML.
   // "user_bash": output of a `!cmd` the user ran; context for the next prompt.
+  // "context": memory / todos / reminders appended for the model; not shown.
   synthetic?:
     | "auto_poke"
     | "steer"
     | "branch_summary"
     | "task_notification"
-    | "user_bash";
+    | "user_bash"
+    | "context";
   /** True if the previous turn ended mid-stream; core appends a resume marker. */
   interrupted?: boolean;
 }
@@ -333,6 +335,15 @@ export interface ContextSegmentStat {
   tokens: number;
 }
 
+export interface ContextInstructionSource {
+  path: string;
+  kind: "global" | "hierarchy" | "import" | "scoped-rule";
+  precedence: number;
+  scope?: string[];
+  bytes: number;
+  tokens: number;
+}
+
 /**
  * Where the context window is going, as of right now.
  *
@@ -354,6 +365,8 @@ export interface ContextBreakdown {
   toolCount: number;
   mcpToolCount: number;
   messageCount: number;
+  /** Loaded instruction sources; contents are intentionally never returned. */
+  instructionSources?: ContextInstructionSource[];
 }
 
 // =============================================================================

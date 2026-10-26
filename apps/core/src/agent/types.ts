@@ -7,7 +7,7 @@
 //          is critical as changing them later becomes painful
 // =============================================================================
 
-import type { AgentRole } from "./definitions/types.js";
+import type { AgentEnvelope, AgentRole } from "./definitions/types.js";
 import type { EffortLevel } from "@thisisayande/freecode-shared";
 import { createRedirectState, type RedirectState } from "./redirect/policy.js";
 
@@ -54,6 +54,12 @@ export interface SubagentConfig {
   maxIterations?: number;
   /** Whether this subagent can modify files */
   readOnly?: boolean;
+  /**
+   * The spawning run's effective envelope — a ceiling this subagent inherits
+   * and cannot widen (spec §5.4). Absent only for the exported helpers that
+   * predate the envelope; the finish-gate verifier passes its parent's.
+   */
+  envelope?: AgentEnvelope;
   /** System prompt additions */
   systemPrompt?: string;
   /** Task-specific prompt */
@@ -260,6 +266,11 @@ export interface SessionState {
   effort?: EffortLevel;
   /** Set for a subagent spawned from a definition; see UserInput.role. */
   role?: AgentRole;
+  /**
+   * The ceiling in force for this run: the spawning loop's effective envelope
+   * intersected with this run's own (spec §5.4). Undefined at the top level.
+   */
+  envelope?: AgentEnvelope;
 }
 
 export function createInitialSessionState(
@@ -328,6 +339,11 @@ export interface UserInput {
   synthetic?: "task_notification";
   /** A subagent's definition (`agent({ subagent_type })`): its prompt and tool allowlist. */
   role?: AgentRole;
+  /**
+   * The spawning run's effective envelope. `run()` intersects it with
+   * `role.envelope`, so a child can narrow what it inherits and never widen it.
+   */
+  envelope?: AgentEnvelope;
 }
 
 /**

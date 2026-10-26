@@ -19,7 +19,7 @@ drop the messages it replaces, and carry on. In the
 
 > **Name collision, worth knowing up front.** The class that implements this is
 > called `MemoryService` (`compaction/service.ts:36`) and its state lives in
-> `~/.freecode/memory/<sessionId>/memory.json`. That is *not* the persistent
+> `~/.freecode/memory/<sessionId>/memory.json`. That is _not_ the persistent
 > memory system, which is `MemoryStore` under
 > `~/.freecode/projects/<project>/memory/`. Same word, different layer.
 
@@ -27,12 +27,12 @@ drop the messages it replaces, and carry on. In the
 
 Compaction is one of two mechanisms, and confusing them makes both look broken:
 
-| | Compaction | Tool-result pruning |
-| --- | --- | --- |
-| What it does | summarizes old turns, deletes them | replaces oversized tool results with a short marker |
-| Scope | rewrites history wholesale | only the *view* sent to the provider |
-| Prompt cache | **invalidates it** — expected, and recorded | designed to *never* invalidate it |
-| Lives in | `compaction/` | `agent/prune-state.ts` + `loop.ts:422` |
+|              | Compaction                                  | Tool-result pruning                                 |
+| ------------ | ------------------------------------------- | --------------------------------------------------- |
+| What it does | summarizes old turns, deletes them          | replaces oversized tool results with a short marker |
+| Scope        | rewrites history wholesale                  | only the _view_ sent to the provider                |
+| Prompt cache | **invalidates it** — expected, and recorded | designed to _never_ invalidate it                   |
+| Lives in     | `compaction/`                               | `agent/prune-state.ts` + `loop.ts:422`              |
 
 Pruning is the gentle one and runs constantly: every decision is recorded and
 re-applied verbatim on later turns, and any result already sent at full size is
@@ -55,8 +55,8 @@ flowchart TD
 
 ### Measured beats estimated
 
-The service keeps its own running token count, and it is an *estimate over the
-memory transcript* — not a measurement of the request. A turn that calls tools
+The service keeps its own running token count, and it is an _estimate over the
+memory transcript_ — not a measurement of the request. A turn that calls tools
 used to be recorded as the four-token stub `[Executed N tools]`, so tool
 arguments and results — the bulk of a coding session — were invisible to it.
 
@@ -70,11 +70,15 @@ no measurement exists.
 The two numbers stay far apart even so, and that is worth knowing when reading a
 trace: on a measured run of the `compaction-boundary` eval case the request was
 **16K** tokens while the memory transcript the summarizer works over was **872**.
-The trigger is judged on the former; `compact.occurred` records the latter.
+The trigger is judged on the former. `compact.occurred` records that measured
+request size separately from the estimated transcript before/after values, so
+the trace never presents unlike quantities as a token saving.
+`compactedEstimatedTranscriptTokens` names the derived estimate explicitly;
+`compactedTokens` remains as a deprecated JSON compatibility alias.
 
 ### Cost is the real trigger, not fit
 
-Compaction used to fire only when the next request wouldn't *fit*. That is a hard
+Compaction used to fire only when the next request wouldn't _fit_. That is a hard
 constraint, not the objective. On a 1M-window model it puts the trigger near
 968K, so a session peaking at 270K never compacts — and every one of its requests
 carries the full history. One recorded 7-message session cost **48.1M input
@@ -83,7 +87,7 @@ tokens** that way (`tokens.ts:31`).
 So the threshold is whichever binds first:
 
 ```ts
-const limit = Math.min(windowLimit, getCompactTarget());   // tokens.ts:131
+const limit = Math.min(windowLimit, getCompactTarget()); // tokens.ts:131
 return tokenCount >= Math.max(0, limit - bufferTokens);
 ```
 
@@ -92,15 +96,15 @@ at cache-read rates, above it the per-turn cost dominates. A 200K model and a 1M
 model therefore compact at the same point, because a 120K request costs the same
 either way.
 
-| Setting | Default | Purpose |
-| --- | --- | --- |
-| `autoCompactBufferTokens` | 13,000 | headroom below the limit |
-| `preserveRecentTurns` | 2 | user turns kept verbatim |
-| `maxPreserveRecentTokens` | 8,000 | cap on what "recent" may cost |
-| `maxToolOutputChars` | 2,000 | truncation for tool text in the record |
+| Setting                          | Default | Purpose                                        |
+| -------------------------------- | ------- | ---------------------------------------------- |
+| `autoCompactBufferTokens`        | 13,000  | headroom below the limit                       |
+| `preserveRecentTurns`            | 2       | user turns kept verbatim                       |
+| `maxPreserveRecentTokens`        | 8,000   | cap on what "recent" may cost                  |
+| `maxToolOutputChars`             | 2,000   | truncation for tool text in the record         |
 | `FREECODE_COMPACT_TARGET_TOKENS` | 120,000 | the cost ceiling; raise for fit-only behaviour |
-| `FREECODE_AUTO_COMPACT_TOKENS` | — | force the trigger low, for testing |
-| `FREECODE_MAX_TURN_TOKENS` | — | opt-in per-run spend circuit breaker |
+| `FREECODE_AUTO_COMPACT_TOKENS`   | —       | force the trigger low, for testing             |
+| `FREECODE_MAX_TURN_TOKENS`       | —       | opt-in per-run spend circuit breaker           |
 
 The env overrides are read **per call**, not at module load, so a long-running
 daemon and a test both see a change without restarting. A malformed value logs a
@@ -137,9 +141,9 @@ Two summarizers, and the second is the fallback for the first.
 **The LLM summarizer** (`llm-summarizer.ts`) asks the current provider for a
 handoff document with seven fixed sections — Goal, Done, In Progress, Blocked,
 Decisions, Relevant Files, Next Steps — at `temperature: 0` and 1,024 max tokens.
-The prompt is explicit about what compaction must not do: *don't invent progress
-that isn't in the transcript*, *preserve exact file paths, identifiers, commands,
-and unresolved errors*, and *under Blocked, list only real, still-open blockers*.
+The prompt is explicit about what compaction must not do: _don't invent progress
+that isn't in the transcript_, _preserve exact file paths, identifiers, commands,
+and unresolved errors_, and _under Blocked, list only real, still-open blockers_.
 A summary that hallucinates completed work is worse than no summary, because the
 model will believe it.
 
@@ -147,7 +151,7 @@ model will believe it.
 builds the same section layout by keyword: file paths by regex, status buckets by
 word-boundary matching (with negation handling, so "no errors" is not a blocker),
 the first user message as the goal, the last three assistant messages as progress.
-It runs *first*, and the LLM result replaces it only if the call succeeds — so a
+It runs _first_, and the LLM result replaces it only if the call succeeds — so a
 provider failure downgrades the summary instead of failing the compaction
 (`service.ts:168`).
 
@@ -180,9 +184,11 @@ Around that, `runCompaction()` (`loop.ts:1078`) handles the consequences:
 - `recordInvalidation(...)` + `bumpCacheGeneration(...)` — compaction rebuilds the
   prefix, so the next request **must** be a cache miss. Recording it means cache
   analysis reports an expected miss instead of a harness bug.
-- `compact.occurred` in the rollout log with before/after tokens, so the erased
-  turns are still accounted for in [replay](/internals/sessions).
-- `lastMeasuredContextTokens = 0` — the measurement describes the *pre-trim*
+- `compact.occurred` in the rollout log with estimated transcript tokens,
+  measured pre-compaction request tokens, message counts, and body-free ids for
+  the compacted and preserved entries, so the erased turns remain inspectable
+  in [replay](/internals/sessions).
+- `lastMeasuredContextTokens = 0` — the measurement describes the _pre-trim_
   request and would immediately re-trigger compaction if left in place.
 
 ## Hooks can veto it
@@ -195,7 +201,7 @@ The interesting part is what happens next. Without a guard, the next message wou
 re-cross the threshold and re-run the blocked hook — forever. So the service
 records `blockedAtTokenCount` and refuses to retry until the conversation has
 grown another 5,000 tokens (`service.ts:34`). The count remembered is the same
-*kind* of count the decision was made on: mixing a measured 196K with an estimated
+_kind_ of count the decision was made on: mixing a measured 196K with an estimated
 14.5K would make the guard compare across scales and never hold
 (`service.ts:101`).
 
@@ -206,7 +212,7 @@ context into the freshly-shortened conversation.
 
 Sometimes the request is rejected as too long despite all of the above — a bad
 estimate, a sudden huge tool result. `compactAndRetry()` (`loop.ts:996`) catches
-*only* context-overflow errors, compacts, and sends once more.
+_only_ context-overflow errors, compacts, and sends once more.
 
 Three guards, each earned:
 
@@ -228,7 +234,7 @@ Three guards, each earned:
 
 Messages, summaries, token count, compaction count. Written atomically
 (temp file, then rename) so a crash mid-write can't corrupt it, and a file that
-*is* unreadable is treated as "no memory" and starts fresh rather than bricking
+_is_ unreadable is treated as "no memory" and starts fresh rather than bricking
 the session (`storage.ts:39`).
 
 A fresh `MemoryService` is constructed per turn and loads this file in its
@@ -237,45 +243,38 @@ separate instance) and the loop's own instance stay consistent across turns.
 
 ## Known gaps
 
-1. **`compact.occurred` under-reports what compaction did.** It records
-   `MemoryService`'s estimated transcript sizes — 872 → 748 tokens on a measured
-   run — while the actual trim is `keepLastNUserTurns` over the session store,
-   against a request that measured 16K. So `freecode trace` and the eval
-   harness's `Trace.compactedTokens` understate the saving by an order of
-   magnitude. `ApplyCompactionResult` already carries `messagesBefore` /
-   `messagesAfter`; neither is recorded.
-2. **`renderPromptMemoryContext()` is dead code.** Exported from `selector.ts:64`,
-   referenced only by comments in `loop.ts` explaining why it must *not* be used
+1. **`renderPromptMemoryContext()` is dead code.** Exported from `selector.ts:64`,
+   referenced only by comments in `loop.ts` explaining why it must _not_ be used
    (it renders `recentMessages`, which are already in history verbatim and would
    rewrite the prefix every turn).
-3. **`getContextLimit(model)` ignores its argument** and returns the constant
+2. **`getContextLimit(model)` ignores its argument** and returns the constant
    floor (`tokens.ts:20`). Harmless, but the name promises a per-model table that
    no longer exists.
-4. **The estimator is `chars ÷ 4` for every model and provider**
+3. **The estimator is `chars ÷ 4` for every model and provider**
    (`tokens.ts:13`) — no tokenizer, no per-provider adjustment. Acceptable only
    because the measured count is preferred; it is the fallback that under-reports.
-5. **`context.overflow` is never recorded.** The loop detects overflow and retries
+4. **`context.overflow` is never recorded.** The loop detects overflow and retries
    (`loop.ts:1003`) but never calls `recorder.recordContextOverflow()`, so the one
    event designed to make this visible in replay is absent. It is one of seven
    rollout event types with no emitter — see
    [Sessions, store & rollout](/internals/sessions#known-gaps).
-6. **The blocked-retry threshold is a fixed 5,000 tokens** (`service.ts:34`) and
+5. **The blocked-retry threshold is a fixed 5,000 tokens** (`service.ts:34`) and
    not part of `CompactionConfig`, so a hook that wants tighter control can't have
    it.
 
 ## Where to look
 
-| You want | File |
-| --- | --- |
-| The service, hooks, blocked-retry guard | `apps/core/src/compaction/service.ts` |
-| Thresholds, estimator, env overrides | `apps/core/src/compaction/tokens.ts` |
-| What is kept vs summarized | `apps/core/src/compaction/selector.ts` |
-| The heuristic summary | `apps/core/src/compaction/summarizer.ts` |
-| The provider-backed summary | `apps/core/src/compaction/llm-summarizer.ts` |
-| Persisted state | `apps/core/src/compaction/storage.ts` |
-| Trimming the session log | `apps/core/src/session/compact-apply.ts` |
-| Trigger, retry, cache bookkeeping | `apps/core/src/agent/loop.ts` (`maybeCompact`, `runCompaction`, `compactAndRetry`) |
-| Cache-stable tool-result pruning | `apps/core/src/agent/prune-state.ts` |
+| You want                                | File                                                                               |
+| --------------------------------------- | ---------------------------------------------------------------------------------- |
+| The service, hooks, blocked-retry guard | `apps/core/src/compaction/service.ts`                                              |
+| Thresholds, estimator, env overrides    | `apps/core/src/compaction/tokens.ts`                                               |
+| What is kept vs summarized              | `apps/core/src/compaction/selector.ts`                                             |
+| The heuristic summary                   | `apps/core/src/compaction/summarizer.ts`                                           |
+| The provider-backed summary             | `apps/core/src/compaction/llm-summarizer.ts`                                       |
+| Persisted state                         | `apps/core/src/compaction/storage.ts`                                              |
+| Trimming the session log                | `apps/core/src/session/compact-apply.ts`                                           |
+| Trigger, retry, cache bookkeeping       | `apps/core/src/agent/loop.ts` (`maybeCompact`, `runCompaction`, `compactAndRetry`) |
+| Cache-stable tool-result pruning        | `apps/core/src/agent/prune-state.ts`                                               |
 
 Related: [Sessions, store & rollout](/internals/sessions) for the log this trims,
 [Lifecycle hooks](/internals/hooks) for `PreCompact`/`PostCompact`, and

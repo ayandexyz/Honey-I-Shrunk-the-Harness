@@ -9,13 +9,14 @@
 stuck"** from the append-only rollout log alone — no live process to attach to,
 nothing to enable first. Every session already writes one.
 
-| Thing | Where |
-| --- | --- |
-| Event log | `~/.freecode/rollout/sessions/<id>/events.jsonl` |
-| Fold (pure, no IO) | `apps/core/src/rollout/trace.ts` — `buildTrace()` |
-| Rendering | `apps/core/src/rollout/trace-render.ts` |
-| OTLP export | `apps/core/src/rollout/otlp.ts` — OTLP/HTTP JSON, no SDK dependency |
-| CLI | `apps/core/src/cli/commands/trace.ts` |
+| Thing              | Where                                                               |
+| ------------------ | ------------------------------------------------------------------- |
+| Event log          | `~/.freecode/rollout/sessions/<id>/events.jsonl`                    |
+| Fold (pure, no IO) | `apps/core/src/rollout/trace.ts` — `buildTrace()`                   |
+| Rendering          | `apps/core/src/rollout/trace-render.ts`                             |
+| Task cost ledger   | `apps/core/src/rollout/cost-ledger.ts` — root plus child sessions   |
+| OTLP export        | `apps/core/src/rollout/otlp.ts` — OTLP/HTTP JSON, no SDK dependency |
+| CLI                | `apps/core/src/cli/commands/trace.ts`                               |
 
 The log **deliberately carries no message bodies** — no prompts, no
 completions. That is what keeps the OTLP export leak-free, and it is why eval
@@ -35,15 +36,16 @@ Omitting `sessionId` picks the **most recently written rollout log by mtime**,
 which is nearly always the one in question — but it is file mtime, not session
 start, so a resumed old session can win.
 
-| Flag | Does what |
-| --- | --- |
-| `[sessionId]` | session to trace; defaults to the most recent |
-| `--follow, -f` | full redraw once a second against the wall clock — the only way to watch a hang happen |
-| `--slow N` | hide model calls faster than N ms |
-| `--tools` | include the per-tool waterfall rows. **Default true**; `--no-tools` turns it off |
-| `--json` | emit the assembled `Trace` as JSON |
-| `--list` | list recorded sessions instead of tracing one |
-| `--otlp [url]` | ship the trace to a collector; empty value falls back to `$OTEL_EXPORTER_OTLP_ENDPOINT` |
+| Flag            | Does what                                                                                                                                |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `[sessionId]`   | session to trace; defaults to the most recent                                                                                            |
+| `--follow, -f`  | full redraw once a second against the wall clock — the only way to watch a hang happen                                                   |
+| `--slow N`      | hide model calls faster than N ms                                                                                                        |
+| `--tools`       | include the per-tool waterfall rows. **Default true**; `--no-tools` turns it off                                                         |
+| `--json`        | emit the assembled `Trace` as JSON                                                                                                       |
+| `--list`        | list recorded sessions instead of tracing one                                                                                            |
+| `--otlp [url]`  | ship the trace to a collector; empty value falls back to `$OTEL_EXPORTER_OTLP_ENDPOINT`                                                  |
+| `--cost-ledger` | emit one body-free row per provider attempt across the root session and recorded child agents; combine with `--json` for the full schema |
 
 ### Flags that quietly override each other
 
@@ -59,6 +61,9 @@ These are all reasonable in isolation and surprising in combination:
 - **`--otlp` returns before rendering.** It exports and prints one line; it
   never draws the waterfall, and it does not combine with `--follow` (there is
   no live streaming path — §7 of the spec defers it).
+- **`--cost-ledger` returns before the waterfall.** `--json` switches its
+  human-readable rows to JSON. Runtime and benchmark-grader attempts remain
+  separate totals; `--follow` only changes how open attempts are aged.
 
 ## 2. Reading the output
 
@@ -83,34 +88,34 @@ no hangs, no model errors
 **The verdict line at the bottom is the diagnosis.** Five possible states, and
 two of them are easy to misread:
 
-| Line | Means |
-| --- | --- |
-| `no hangs, no model errors` (green) | healthy |
-| `N request(s) open for over 5m` (red) | **hung on the provider, not on a tool** |
-| `N model call(s) failed` (yellow) | errored spans — check `errorKind`: `stall`, `abort`, or `provider` |
-| `a request is in flight` (cyan) | **not a fault.** Normal under `--follow`; still within budget |
-| `no model calls recorded` (yellow) | **not a healthy session.** The log predates model tracing, so every gap above is unattributed |
+| Line                                  | Means                                                                                         |
+| ------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `no hangs, no model errors` (green)   | healthy                                                                                       |
+| `N request(s) open for over 5m` (red) | **hung on the provider, not on a tool**                                                       |
+| `N model call(s) failed` (yellow)     | errored spans — check `errorKind`: `stall`, `abort`, or `provider`                            |
+| `a request is in flight` (cyan)       | **not a fault.** Normal under `--follow`; still within budget                                 |
+| `no model calls recorded` (yellow)    | **not a healthy session.** The log predates model tracing, so every gap above is unattributed |
 
 Other things the render will and won't say:
 
 - **A refused tool call shows as a `deny` row with no duration**, and appears
-  *unconditionally* within the tool block — a refusal took no time, so a
+  _unconditionally_ within the tool block — a refusal took no time, so a
   duration threshold would hide exactly the turns that explain a session where
   nothing got done. It is folded into `Trace.deniedSpans` and **never** into
   `toolSpans`, which means "tools that ran" and has seven consumers depending
   on that.
 - **The cost line is silent when nothing in the session is priced.** An
   unpriced model shows no line at all, because `cost $0.00` reads as free. A
-  `*` marks a partially-priced trace. A memory call (judge, extraction,
-  consolidation, final flush) that failed or reported no usage is **unknown,
-  not free** — it makes the total partial rather than adding $0.
-- **Memory lines appear only when memory did something.** `memory` (time and
-  call count) and `memory tokens` cover auxiliary calls; `by op` splits the
-  cost into `agent` and each memory operation (`unpriced` = ran, price
-  unknown) and flags calls that reported no usage. `memory context` counts
+  `*` marks a partially-priced trace. An auxiliary call (memory, compaction,
+  redirection, prompt hook, or cache warm) that failed or reported no usage is
+  **unknown, not free** — it makes the total partial rather than adding $0.
+- **Auxiliary lines appear only when auxiliary work ran.** `aux` (time and
+  call count) and `aux tokens` cover the recorded calls; `by op` splits the
+  cost into `agent` and each operation (`unpriced` = ran, price unknown) and
+  flags calls that reported no usage. `memory context` counts
   request exposures — one per provider request that carried the block, so a
   tool loop resending it ten times shows ten — with its bytes and a local
-  token *estimate* that is never added to provider input, which already
+  token _estimate_ that is never added to provider input, which already
   includes the block.
 - **The redirect line only appears when something fired.** `redirects 0` on
   every healthy session is noise, and the feature is off by default.
@@ -166,7 +171,7 @@ every span. `attrs()` rounds numerics to ints **except** an explicit
 reports 0.5 as 1.**
 
 The eval harness has its own `--otlp` (`apps/core/src/eval/otlp.ts`) that ships
-*scores* linked to the traces that produced them. See `EVAL.md`.
+_scores_ linked to the traces that produced them. See `EVAL.md`.
 
 ## 5. Adjacent
 
@@ -180,17 +185,18 @@ freecode eval add <session-id>    # turn a traced session into an eval case — 
 
 ## Which mode answers which question
 
-| Question | Command |
-| --- | --- |
-| Why was that turn slow? | `freecode trace` — read the "where the time went" block first |
-| It's hanging *right now* | `freecode trace --follow` — watch for `in_flight` aging past 5m |
-| Which model call is the expensive one? | `freecode trace --slow 5000` (drops the tool noise) |
-| The agent did nothing — why? | `freecode trace` and look for `deny` rows; a mode-blocked call leaves no `toolSpans` entry |
-| Did redirection fire? | `freecode trace` — the `redirect fired=/skipped=` line, present only when nonzero |
-| What did the provider actually serve? | `freecode trace --json \| jq '.modelSpans[].echoedModel'` |
-| Which session was that? | `freecode trace --list` |
-| I want this in Langfuse/Phoenix | `freecode trace <id> --otlp <url>` |
-| Is my token/cost accounting right? | `--json`, then check `inputTokens` / `cacheReadTokens` — a cache read is a **discount off the inclusive `inputTokens`, not an addend** |
+| Question                                                                              | Command                                                                                               |
+| ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Why was that turn slow?                                                               | `freecode trace` — read the "where the time went" block first                                         |
+| It's hanging _right now_                                                              | `freecode trace --follow` — watch for `in_flight` aging past 5m                                       |
+| Which model call is the expensive one?                                                | `freecode trace --slow 5000` (drops the tool noise)                                                   |
+| The agent did nothing — why?                                                          | `freecode trace` and look for `deny` rows; a mode-blocked call leaves no `toolSpans` entry            |
+| Did redirection fire?                                                                 | `freecode trace` — the `redirect fired=/skipped=` line, present only when nonzero                     |
+| What did the provider actually serve?                                                 | `freecode trace --json \| jq '.modelSpans[].echoedModel'`                                             |
+| Did root, subagent, verifier, compaction, memory, hooks, and cache warming reconcile? | `freecode trace <id> --cost-ledger --json`                                                            |
+| Which session was that?                                                               | `freecode trace --list`                                                                               |
+| I want this in Langfuse/Phoenix                                                       | `freecode trace <id> --otlp <url>`                                                                    |
+| Is my token/cost accounting right?                                                    | `--cost-ledger --json`; a cache read is a **discount off the inclusive `inputTokens`, not an addend** |
 
 ## What is not built
 

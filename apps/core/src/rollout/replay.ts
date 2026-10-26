@@ -31,7 +31,11 @@ export interface ReplayResult {
   sessionId: string;
   totalTurns: number;
   totalCalls: number;
+  totalEstimatedTranscriptTokensBefore: number;
+  totalEstimatedTranscriptTokensAfter: number;
+  /** @deprecated Local transcript estimate; use the explicit field above. */
   totalTokensBefore: number;
+  /** @deprecated Local transcript estimate; use the explicit field above. */
   totalTokensAfter: number;
   turns: ReplayedTurn[];
   compactCount: number;
@@ -49,6 +53,8 @@ export function replaySession(sessionId: string): ReplayResult | null {
     sessionId,
     totalTurns: 0,
     totalCalls: 0,
+    totalEstimatedTranscriptTokensBefore: 0,
+    totalEstimatedTranscriptTokensAfter: 0,
     totalTokensBefore: 0,
     totalTokensAfter: 0,
     turns: [],
@@ -103,8 +109,14 @@ export function replaySession(sessionId: string): ReplayResult | null {
       }
 
       case "compact.occurred": {
-        result.totalTokensBefore += (event as any).beforeTokens ?? 0;
-        result.totalTokensAfter += (event as any).afterTokens ?? 0;
+        const estimatedBefore =
+          event.estimatedTranscriptTokensBefore ?? event.beforeTokens ?? 0;
+        const estimatedAfter =
+          event.estimatedTranscriptTokensAfter ?? event.afterTokens ?? 0;
+        result.totalEstimatedTranscriptTokensBefore += estimatedBefore;
+        result.totalEstimatedTranscriptTokensAfter += estimatedAfter;
+        result.totalTokensBefore += estimatedBefore;
+        result.totalTokensAfter += estimatedAfter;
         result.compactCount++;
         break;
       }
@@ -166,8 +178,17 @@ export function getSessionSummary(sessionId: string): string | null {
  * Replay with compact information
  */
 export interface CompactInfo {
-  beforeTokens: number;
-  afterTokens: number;
+  estimatedTranscriptTokensBefore?: number;
+  estimatedTranscriptTokensAfter?: number;
+  /** @deprecated Local transcript estimate; use the explicit field above. */
+  beforeTokens?: number;
+  /** @deprecated Local transcript estimate; use the explicit field above. */
+  afterTokens?: number;
+  providerRequestTokensBefore?: number;
+  messagesBefore?: number;
+  messagesAfter?: number;
+  compactedMessageIds: string[];
+  preservedMessageIds: string[];
   timestamp: number;
 }
 
@@ -179,9 +200,20 @@ export function getCompactions(session: SessionEvents): CompactInfo[] {
 
   for (const event of session.events) {
     if (event.type === "compact.occurred") {
+      const estimatedTranscriptTokensBefore =
+        event.estimatedTranscriptTokensBefore ?? event.beforeTokens;
+      const estimatedTranscriptTokensAfter =
+        event.estimatedTranscriptTokensAfter ?? event.afterTokens;
       compactions.push({
-        beforeTokens: (event as any).beforeTokens ?? 0,
-        afterTokens: (event as any).afterTokens ?? 0,
+        estimatedTranscriptTokensBefore,
+        estimatedTranscriptTokensAfter,
+        beforeTokens: estimatedTranscriptTokensBefore,
+        afterTokens: estimatedTranscriptTokensAfter,
+        providerRequestTokensBefore: event.providerRequestTokensBefore,
+        messagesBefore: event.messagesBefore,
+        messagesAfter: event.messagesAfter,
+        compactedMessageIds: event.compactedMessageIds ?? [],
+        preservedMessageIds: event.preservedMessageIds ?? [],
         timestamp: event.timestamp,
       });
     }

@@ -43,35 +43,59 @@ test("economics: a large idle prompt is worth warming, a small one is not", () =
 });
 
 test("economics: unknown price or empty prompt never warms", () => {
-  assert.equal(decideWarm(undefined, 200_000, "idle").economicsAvailable, false);
+  assert.equal(
+    decideWarm(undefined, 200_000, "idle").economicsAvailable,
+    false,
+  );
   assert.equal(decideWarm(undefined, 200_000, "idle").action, "stop");
   assert.equal(decideWarm(price, 0, "idle").action, "stop");
 });
 
 test("mode: env beats settings, unknown values fall back to off", () => {
-  assert.equal(resolveCacheWarmingMode(undefined, { FREECODE_CACHE_WARMING: "idle" }), "idle");
-  assert.equal(resolveCacheWarmingMode(undefined, { FREECODE_CACHE_WARMING: "bogus", HOME: "/nonexistent" }), "off");
+  assert.equal(
+    resolveCacheWarmingMode(undefined, { FREECODE_CACHE_WARMING: "idle" }),
+    "idle",
+  );
+  assert.equal(
+    resolveCacheWarmingMode(undefined, {
+      FREECODE_CACHE_WARMING: "bogus",
+      HOME: "/nonexistent",
+    }),
+    "off",
+  );
 });
 
 // --- scheduling, with a fake clock and a fake provider -----------------------
 
-function rig(mode: CacheWarmingMode = "idle") {
+function rig(mode: CacheWarmingMode = "idle", fail = false) {
   let now = 1_000_000;
   const timers: Array<{ fn: () => void; at: number; id: number }> = [];
   let nextId = 1;
   const executed: ExecuteOptions[] = [];
   const warmed: WarmedReport[] = [];
   const stopped: string[] = [];
+  const failed: WarmedReport[] = [];
   const provider: AIProvider = {
-    info: { id: "anthropic", name: "a", defaultModel: "m", supportsStreaming: false, supportsTools: true },
+    info: {
+      id: "anthropic",
+      name: "a",
+      defaultModel: "m",
+      supportsStreaming: false,
+      supportsTools: true,
+    },
     execute: async (opts): Promise<ExecuteResult> => {
       executed.push(opts);
+      if (fail) throw new Error("offline");
       return {
         content: "",
         stopReason: "max_tokens",
         provider: "anthropic",
         model: "claude-sonnet-4-5",
-        usage: { inputTokens: 150_000, outputTokens: 1, cacheReadInputTokens: 149_000 },
+        usage: {
+          inputTokens: 150_000,
+          outputTokens: 1,
+          cacheReadInputTokens: 149_000,
+        },
       };
     },
   };
@@ -80,6 +104,7 @@ function rig(mode: CacheWarmingMode = "idle") {
     getMode: () => mode,
     getPrice: () => price,
     onWarmed: (r) => warmed.push(r),
+    onFailed: (r) => failed.push({ ...r, usage: undefined }),
     onStopped: (r) => stopped.push(r),
     now: () => now,
     setTimer: (fn, ms) => {
@@ -110,10 +135,24 @@ function rig(mode: CacheWarmingMode = "idle") {
   const request = {
     provider: "anthropic",
     model: "claude-sonnet-4-5",
-    options: { messages: [], system: "s", model: "claude-sonnet-4-5", maxTokens: 8000 },
+    options: {
+      messages: [],
+      system: "s",
+      model: "claude-sonnet-4-5",
+      maxTokens: 8000,
+    },
     promptTokens: 300_000,
   };
-  return { warmer, advance, executed, warmed, stopped, timers, request };
+  return {
+    warmer,
+    advance,
+    executed,
+    warmed,
+    failed,
+    stopped,
+    timers,
+    request,
+  };
 }
 
 test("replays the last request with a one-token cap at 90% of the TTL, then re-arms", async () => {
@@ -132,7 +171,11 @@ test("replays the last request with a one-token cap at 90% of the TTL, then re-a
   assert.equal(warmed.length, 1);
   assert.equal(warmed[0]!.phase, "idle");
   assert.equal(warmed[0]!.decision.action, "warm");
-  assert.equal(warmer.status.state, "scheduled", "re-armed after a successful refresh");
+  assert.equal(
+    warmer.status.state,
+    "scheduled",
+    "re-armed after a successful refresh",
+  );
 
   await advance(270_000);
   assert.equal(executed.length, 2);
@@ -152,6 +195,16 @@ test("a new real request replaces the pending warm; cancel clears it", async () 
   assert.equal(executed.length, 0);
 });
 
+test("a failed refresh remains observable and re-arms", async () => {
+  const { warmer, advance, failed, request } = rig("idle", true);
+  warmer.start(request);
+  warmer.onRunSettled();
+  await advance(270_000);
+  assert.equal(failed.length, 1);
+  assert.equal(failed[0]!.provider, "anthropic");
+  assert.equal(warmer.status.state, "scheduled");
+});
+
 test("streaming mode stops when the run settles; idle mode stops at the 30-minute limit", async () => {
   const s = rig("streaming");
   s.warmer.start(s.request);
@@ -163,7 +216,10 @@ test("streaming mode stops when the run settles; idle mode stops at the 30-minut
   i.warmer.start(i.request);
   i.warmer.onRunSettled();
   await i.advance(MAX_IDLE_WARMING_AGE_MS + 60_000);
-  assert.ok(i.executed.length >= 5 && i.executed.length <= 7, `warmed ${i.executed.length} times in 30 min`);
+  assert.ok(
+    i.executed.length >= 5 && i.executed.length <= 7,
+    `warmed ${i.executed.length} times in 30 min`,
+  );
   assert.equal(i.warmer.status.state, "inactive");
   assert.ok(i.stopped.includes("30-minute idle limit reached"));
 });

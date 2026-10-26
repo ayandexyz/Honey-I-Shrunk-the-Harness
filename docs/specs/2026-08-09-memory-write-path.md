@@ -241,7 +241,9 @@ the model may ignore.
 
 `profiles.ts:263` still gains `memory: ["file.write"]` — the tool is real and
 reachable by any agent, and without the entry `isToolAllowed` fails closed on
-the unknown-tool branch (`profiles.ts:285`).
+the unknown-tool branch (`profiles.ts:285`). *(Both the file and the map are
+retired as of 2026-10-17; the operation now comes from the tool's own
+`permissions.operations` in `tools/memory.ts`.)*
 
 **Subagents do not extract.** `executeSubagent` passes `memoryExtraction: false`
 (new `AgentLoopConfig` field, default `true`). Not in the original spec, and a
@@ -280,7 +282,7 @@ parent's mode.
 | ✅ | `permission/mode-policy.ts` | **no change** | Deliberate omission from `READONLY_TOOLS` (D7). Listed so a reviewer working the tool checklist sees it was considered, not forgotten |
 | ✅ | `permission/rules.ts` | **no change** | Deliberate omission from `PATH_TOOLS`/`URL_TOOLS` — the tool takes no path or url argument, so path-scoped rules have nothing to match |
 | ✅ | `permission/suggest.ts` | modified | `DISPLAY_NAMES["memory"] = "Memory"` |
-| ✅ | `permission/profiles.ts` | modified | `TOOL_PERMISSIONS.memory = ["file.write"]` (D6) |
+| ✅ | `permission/profiles.ts` | modified | `TOOL_PERMISSIONS.memory = ["file.write"]` (D6) — **file deleted 2026-10-17** |
 | ✅ | `context/compiler.ts` | modified | Guidance block emitted into the cached static prefix (D2) |
 | ✅ | `agent/loop.ts` | modified | `kickMemoryExtraction()` at the `complete("Done", …)` branch; `memoryExtraction` config field (D5) |
 | ✅ | `agent/subagent.ts` | modified | Passes `memoryExtraction: false` (D6) |

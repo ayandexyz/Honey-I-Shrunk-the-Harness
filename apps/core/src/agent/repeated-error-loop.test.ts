@@ -19,6 +19,7 @@ import { createRecorder } from "../rollout/recorder.js";
 import { registerProvider } from "../providers/registry.js";
 import type { ProviderId } from "../providers/config.js";
 import type { AIProvider, ExecuteOptions, ProviderChunk } from "../providers/types.js";
+import { newlyDelivered } from "./context-inject.js";
 
 const ERROR = "src/a.ts(3,1): error TS1110: Type expected.";
 const info = {
@@ -46,7 +47,7 @@ registerProvider("stuck-error-fake" as ProviderId, {
     },
     // Turn 1: a clean check (the baseline). Then forever: edit, same error.
     stream: async function* (opts: ExecuteOptions): AsyncGenerator<ProviderChunk> {
-      tails.push(opts.ephemeralTail ?? "");
+      tails.push(newlyDelivered(opts));
       const n = tails.length;
       const edit = n > 1 && n % 2 === 0;
       const command = `node ${join(projectPath, "check.mjs")}${SPELLINGS[(n >> 1) % 3]}`;

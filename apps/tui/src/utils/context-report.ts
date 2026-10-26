@@ -232,6 +232,16 @@ export function renderContextReport(
     );
   }
   lines.push(chalk.dim(clip(`  ${notes.join(" · ")}`)));
+  for (const source of stats.instructionSources ?? []) {
+    const scope = source.scope?.length ? ` [${source.scope.join(", ")}]` : "";
+    lines.push(
+      chalk.dim(
+        clip(
+          `  instruction: ${source.path} (${source.kind}, ${formatTokenCount(source.tokens)} tokens${scope})`,
+        ),
+      ),
+    );
+  }
   lines.push(
     chalk.dim(
       clip("  Sizes are estimated (~4 chars/token) and exclude image content."),

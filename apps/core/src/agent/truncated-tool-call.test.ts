@@ -22,6 +22,7 @@ import {
   malformedToolCallReminder,
   truncatedToolCallReminder,
 } from "./reminders.js";
+import { newlyDelivered } from "./context-inject.js";
 
 test("truncatedToolCallReminder names the tool and says the call never ran", () => {
   const r = truncatedToolCallReminder(["memory"]);
@@ -237,7 +238,7 @@ registerProvider("malformed-once-fake" as ProviderId, {
     execute: async () => done,
     stream: async function* (opts): AsyncGenerator<ProviderChunk> {
       malformedCalls += 1;
-      tails.malformed.push(opts.ephemeralTail ?? "");
+      tails.malformed.push(newlyDelivered(opts));
       if (malformedCalls === 1) {
         yield { type: "tool_call_invalid", id: "call-1", name: "read" };
         yield { type: "done", stopReason: "tool_use" };
@@ -286,7 +287,7 @@ registerProvider("cutoff-once-fake" as ProviderId, {
     execute: async () => done,
     stream: async function* (opts): AsyncGenerator<ProviderChunk> {
       cutoffCalls += 1;
-      tails.cutoff.push(opts.ephemeralTail ?? "");
+      tails.cutoff.push(newlyDelivered(opts));
       if (cutoffCalls === 1) {
         yield { type: "text_delta", delta: "Let me think about the pairs (1, 2) from list_1, (2, 3)" };
         yield { type: "done", stopReason: "max_tokens" };

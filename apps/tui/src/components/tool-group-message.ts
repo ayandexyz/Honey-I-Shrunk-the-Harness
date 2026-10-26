@@ -3,7 +3,6 @@ import chalk from "chalk";
 import { palette } from "../palette.js";
 import {
   ToolResultMessage,
-  compactToolNarration,
   type ToolResultMessageOptions,
 } from "./tool-result-message.js";
 import type { ToolProgressMessage } from "./tool-progress-message.js";
@@ -63,7 +62,7 @@ export class ToolGroupMessage implements Component {
   private items: ToolResultMessage[] = [];
   private entries: ToolResultMessageOptions[] = [];
   private pending: ToolProgressMessage[] = [];
-  private narrations: string[] = [];
+  private hasNarration = false;
   private sealed = false;
   private expanded = false;
   private lineOwners: LineOwner[] = [];
@@ -86,12 +85,9 @@ export class ToolGroupMessage implements Component {
     this.pending.push(progress);
   }
 
-  /** Fold model-written tool preambles into one quiet line for the whole run. */
+  /** Remember that hidden model-written prose occupied this point in the run. */
   addNarration(content: string): void {
-    const narration = compactToolNarration(content);
-    if (narration && this.narrations[this.narrations.length - 1] !== narration) {
-      this.narrations.push(narration);
-    }
+    if (content.replace(/^\*\*FreeCode:\*\*\s*/, "").trim()) this.hasNarration = true;
   }
 
   removePending(progress: ToolProgressMessage): void {
@@ -167,10 +163,9 @@ export class ToolGroupMessage implements Component {
     }
     push(truncateToWidth(summary, Math.max(20, width - 1)), "summary");
 
-    if (this.narrations.length > 0) {
-      const narration = this.narrations.join(" · ");
-      push(chalk.dim(truncateToWidth(`  ${narration}`, Math.max(20, width - 1))), null);
-    }
+    // A blank separator preserves the visual pause before the tool call without
+    // filling long transcripts with model-written "I will..." narration.
+    if (this.hasNarration) push("", null);
 
     for (const p of this.pending) {
       // Progress rows frame themselves with blank lines for standalone use;

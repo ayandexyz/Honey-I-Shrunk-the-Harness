@@ -83,7 +83,8 @@ export function decideWarm(
   promptTokens: number,
   phase: "streaming" | "idle",
 ): WarmDecision {
-  const continuationProbability = phase === "idle" ? IDLE_CONTINUATION_PROBABILITY : 1;
+  const continuationProbability =
+    phase === "idle" ? IDLE_CONTINUATION_PROBABILITY : 1;
   if (!price || promptTokens <= 0) {
     return {
       phase,
@@ -101,7 +102,8 @@ export function decideWarm(
   const missCost = (promptTokens / MILLION) * write;
   const warmCostUsd = hitCost + price.output / MILLION;
   const missCostUsd = Math.max(0, missCost - hitCost);
-  const expectedSavingsUsd = continuationProbability * missCostUsd - warmCostUsd;
+  const expectedSavingsUsd =
+    continuationProbability * missCostUsd - warmCostUsd;
   return {
     phase,
     warmCostUsd,
@@ -132,9 +134,12 @@ export function resolveCacheWarmingMode(
   env: NodeJS.ProcessEnv = process.env,
 ): CacheWarmingMode {
   const fromEnv = env.FREECODE_CACHE_WARMING;
-  if (fromEnv === "off" || fromEnv === "streaming" || fromEnv === "idle") return fromEnv;
+  if (fromEnv === "off" || fromEnv === "streaming" || fromEnv === "idle")
+    return fromEnv;
   const files = [
-    projectRoot ? path.join(projectRoot, ".freecode", "settings.json") : undefined,
+    projectRoot
+      ? path.join(projectRoot, ".freecode", "settings.json")
+      : undefined,
     path.join(os.homedir(), ".freecode", "settings.json"),
   ];
   for (const f of files) {
@@ -165,6 +170,8 @@ export interface WarmedReport {
   delayMs: number;
 }
 
+export type FailedWarmReport = Omit<WarmedReport, "usage">;
+
 export interface CacheWarmerDeps {
   /** Provider lookup, deferred so tests can inject a fake. */
   getProvider: (id: string) => AIProvider;
@@ -173,6 +180,8 @@ export interface CacheWarmerDeps {
   getPrice?: (provider: string, model: string) => ModelPrice | undefined;
   /** Every successful refresh — the loop's rollout/usage bookkeeping. */
   onWarmed?: (report: WarmedReport) => void;
+  /** Every provider attempt that failed before reporting usage. */
+  onFailed?: (report: FailedWarmReport) => void;
   /** Why warming stopped, for `freecode trace` and debug logs. */
   onStopped?: (reason: string, decision?: WarmDecision) => void;
   now?: () => number;
@@ -192,7 +201,9 @@ interface ActiveRun extends WarmRequest {
 
 export class CacheWarmer {
   private run?: ActiveRun;
-  private readonly deps: Required<Pick<CacheWarmerDeps, "now" | "setTimer" | "clearTimer">> &
+  private readonly deps: Required<
+    Pick<CacheWarmerDeps, "now" | "setTimer" | "clearTimer">
+  > &
     CacheWarmerDeps;
 
   constructor(deps: CacheWarmerDeps) {
@@ -209,7 +220,11 @@ export class CacheWarmer {
   }
 
   /** Status for `/session`-style displays and tests. */
-  get status(): { state: "inactive" | "scheduled" | "refreshing"; nextWarmAt?: number; phase?: "streaming" | "idle" } {
+  get status(): {
+    state: "inactive" | "scheduled" | "refreshing";
+    nextWarmAt?: number;
+    phase?: "streaming" | "idle";
+  } {
     const run = this.run;
     if (!run) return { state: "inactive" };
     return {
@@ -274,9 +289,14 @@ export class CacheWarmer {
   private schedule(run: ActiveRun): void {
     run.nextWarmAt = this.deps.now() + run.delayMs;
     const deadline =
-      run.startedAt + (run.phase === "idle" ? MAX_IDLE_WARMING_AGE_MS : MAX_WARMING_AGE_MS);
+      run.startedAt +
+      (run.phase === "idle" ? MAX_IDLE_WARMING_AGE_MS : MAX_WARMING_AGE_MS);
     if (run.nextWarmAt > deadline || this.deps.now() >= deadline) {
-      this.stop(run.phase === "idle" ? "30-minute idle limit reached" : "one-hour limit reached");
+      this.stop(
+        run.phase === "idle"
+          ? "30-minute idle limit reached"
+          : "one-hour limit reached",
+      );
       return;
     }
     run.timer = this.deps.setTimer(
@@ -296,7 +316,9 @@ export class CacheWarmer {
     const decision = decideWarm(price, run.promptTokens, run.phase);
     if (decision.action === "stop") {
       this.stop(
-        decision.economicsAvailable ? "expected savings below threshold" : "economics unavailable",
+        decision.economicsAvailable
+          ? "expected savings below threshold"
+          : "economics unavailable",
         decision,
       );
       return;
@@ -322,6 +344,15 @@ export class CacheWarmer {
     } catch {
       // Best-effort: a failed refresh must never touch the real run. The
       // next tick decides again; a persistent failure ends at the age limit.
+      if (this.run === run) {
+        this.deps.onFailed?.({
+          provider: run.provider,
+          model: run.model,
+          phase: run.phase,
+          decision,
+          delayMs: run.delayMs,
+        });
+      }
     } finally {
       run.refreshing = false;
     }
@@ -338,7 +369,10 @@ export function isCacheWarmable(provider: string): boolean {
 
 const warmers = new Map<string, CacheWarmer>();
 
-export function getCacheWarmer(sessionId: string, deps: CacheWarmerDeps): CacheWarmer {
+export function getCacheWarmer(
+  sessionId: string,
+  deps: CacheWarmerDeps,
+): CacheWarmer {
   let w = warmers.get(sessionId);
   if (!w) {
     w = new CacheWarmer(deps);

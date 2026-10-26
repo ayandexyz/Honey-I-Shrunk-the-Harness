@@ -19,10 +19,14 @@ import { createRecorder } from "../rollout/recorder.js";
 import { registerProvider } from "../providers/registry.js";
 import type { ProviderId } from "../providers/config.js";
 import type { AIProvider, ExecuteOptions, ProviderChunk } from "../providers/types.js";
+import type { AgentEnvelope } from "./definitions/types.js";
+import { newlyDelivered } from "./context-inject.js";
 
-type Step = { write?: [string, string]; say?: string };
+type Step = { write?: [string, string]; bash?: string; say?: string };
 let script: Step[] = [];
 const tails: string[] = [];
+/** The tools the finish-gate verifier was offered, captured per run. */
+let verifierTools: string[] = [];
 const info = { id: "finish-fake", name: "finish-fake", defaultModel: "m", supportsStreaming: true, supportsTools: true };
 
 registerProvider("finish-fake" as ProviderId, {
@@ -33,14 +37,17 @@ registerProvider("finish-fake" as ProviderId, {
     stream: async function* (opts: ExecuteOptions): AsyncGenerator<ProviderChunk> {
       // The verifier subagent: always passes, so it never consumes the script.
       if (JSON.stringify(opts).includes("adversarially verify")) {
+        verifierTools = (opts.tools ?? []).map((t) => (t as unknown as { name: string }).name);
         yield { type: "text_delta", delta: "Looks fine.\nVERDICT: PASS" };
         yield { type: "usage", usage: { inputTokens: 1, outputTokens: 1 } };
         return;
       }
-      tails.push(opts.ephemeralTail ?? "");
+      tails.push(newlyDelivered(opts));
       const step = script.shift() ?? { say: "done" };
       if (step.write) {
         yield { type: "tool_call", id: `c${tails.length}`, name: "write", args: { filePath: step.write[0], content: step.write[1] } };
+      } else if (step.bash) {
+        yield { type: "tool_call", id: `c${tails.length}`, name: "bash", args: { command: step.bash } };
       } else {
         yield { type: "text_delta", delta: step.say ?? "done" };
       }
@@ -49,9 +56,14 @@ registerProvider("finish-fake" as ProviderId, {
   }),
 });
 
-async function run(projectPath: string, steps: Step[], config: { finishTests?: boolean } = {}) {
+async function run(
+  projectPath: string,
+  steps: Step[],
+  config: { finishTests?: boolean; envelope?: AgentEnvelope } = {},
+) {
   script = steps;
   tails.length = 0;
+  verifierTools = [];
   const sessionId = `finish-${Math.random().toString(36).slice(2)}`;
   const rolloutDir = mkdtempSync(join(tmpdir(), "freecode-finish-rollout-"));
   const runtime = makeRuntime(
@@ -66,7 +78,16 @@ async function run(projectPath: string, steps: Step[], config: { finishTests?: b
     const store = await runtime.runPromise(SessionStoreTag);
     await store.createSession({ title: "t", projectPath, provider: "finish-fake" }, sessionId);
     const loop = await runtime.runPromise(createAgentLoopEffect(sessionId, { maxIterations: 20, ...config }));
-    await loop.run({ prompt: "change it", sessionId, provider: "finish-fake", projectPath, agentMode: "danger" });
+    await loop.run({
+      prompt: "change it",
+      sessionId,
+      provider: "finish-fake",
+      projectPath,
+      agentMode: "danger",
+      role: config.envelope
+        ? { name: "captain", prompt: "", envelope: config.envelope }
+        : undefined,
+    });
     const f = join(rolloutDir, "events.jsonl");
     return existsSync(f) ? readFileSync(f, "utf-8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
   } finally {
@@ -95,6 +116,28 @@ test("the verify gate says what it runs and how it went, and logs the real scrip
     assert.deepEqual(ran.map((e) => e.script), ["typecheck"]);
   } finally {
     unsub();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a read-only bash call must not trigger the typecheck gate (bash is unconditionally isDestructive)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "freecode-finish-readonly-bash-"));
+  try {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { typecheck: "node -e 0" } }));
+    const events = await run(dir, [{ bash: "git log -1" }, { say: "done" }]);
+    assert.equal(events.filter((e) => e.type === "verify.ran" && e.kind === "typecheck").length, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a write-shaped bash call still triggers the typecheck gate", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "freecode-finish-write-bash-"));
+  try {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { typecheck: "node -e 0" } }));
+    const events = await run(dir, [{ bash: `sed -i 's/a/b/' ${join(dir, "package.json")}` }, { say: "done" }]);
+    assert.equal(events.filter((e) => e.type === "verify.ran" && e.kind === "typecheck").length, 1);
+  } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -180,6 +223,62 @@ test("a subagent-style loop (finishTests: false) leaves the suite to its parent"
       { finishTests: false },
     );
     assert.equal(events.filter((e) => e.type === "verify.ran" && e.kind === "tests").length, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The finish-gate spawn is the one production `loop.run` that used to take no
+// ceiling (spec §5.4). It must now inherit the parent's envelope: `network:
+// false` withholds the network tools from the verifier, even though it runs in
+// read-only explore mode, which would otherwise offer them.
+test("the finish-gate verifier inherits the parent's ceiling", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "freecode-finish-cap-"));
+  try {
+    await run(
+      dir,
+      [
+        { write: [join(dir, "a.txt"), "a"] },
+        { write: [join(dir, "b.txt"), "b"] },
+        { write: [join(dir, "c.txt"), "c"] },
+        { say: "done" },
+      ],
+      {
+        envelope: {
+          operations: ["file.read", "file.write", "network"],
+          write: ["**"],
+          network: false,
+        },
+      },
+    );
+    assert.ok(verifierTools.length > 0, "the verifier ran and was offered tools");
+    assert.ok(!verifierTools.includes("webfetch"), "network:false withholds webfetch from the verifier");
+    assert.ok(!verifierTools.includes("websearch"), "network:false withholds websearch from the verifier");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the same envelope with network allowed leaves the verifier its network tools", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "freecode-finish-net-"));
+  try {
+    await run(
+      dir,
+      [
+        { write: [join(dir, "a.txt"), "a"] },
+        { write: [join(dir, "b.txt"), "b"] },
+        { write: [join(dir, "c.txt"), "c"] },
+        { say: "done" },
+      ],
+      {
+        envelope: {
+          operations: ["file.read", "file.write", "network"],
+          write: ["**"],
+          network: true,
+        },
+      },
+    );
+    assert.ok(verifierTools.includes("webfetch"), "with network granted the verifier keeps webfetch");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

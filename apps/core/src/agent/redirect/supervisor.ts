@@ -40,8 +40,19 @@ export type SupervisorOutcome =
       directions: string[];
       latency_ms: number;
       usage?: ExecuteUsage;
+      provider: string;
+      model?: string;
+      providerOutcome: "succeeded";
     }
-  | { ok: false; skip: RedirectSkipReason; latency_ms: number };
+  | {
+      ok: false;
+      skip: RedirectSkipReason;
+      latency_ms: number;
+      usage?: ExecuteUsage;
+      provider: string;
+      model?: string;
+      providerOutcome: "succeeded" | "failed";
+    };
 
 export interface SupervisorInput {
   packet: EvidencePacket;
@@ -52,7 +63,12 @@ export interface SupervisorInput {
     system: string,
     prompt: string,
     signal: AbortSignal,
-  ) => Promise<{ content: string; usage?: ExecuteUsage }>;
+  ) => Promise<{
+    content: string;
+    usage?: ExecuteUsage;
+    provider?: string;
+    model?: string;
+  }>;
 }
 
 /**
@@ -91,7 +107,12 @@ async function oneShot(
   system: string,
   prompt: string,
   signal: AbortSignal,
-): Promise<{ content: string; usage?: ExecuteUsage }> {
+): Promise<{
+  content: string;
+  usage?: ExecuteUsage;
+  provider?: string;
+  model?: string;
+}> {
   const provider = getProvider(input.provider as ProviderId);
   if (!provider) throw new Error("no provider");
   const result = await provider.execute({
@@ -105,7 +126,12 @@ async function oneShot(
     maxTokens: SUPERVISOR_MAX_TOKENS,
     abortSignal: signal,
   });
-  return { content: result.content ?? "", usage: result.usage };
+  return {
+    content: result.content ?? "",
+    usage: result.usage,
+    provider: result.provider,
+    model: result.model,
+  };
 }
 
 export async function requestRedirect(
@@ -144,6 +170,10 @@ export async function requestRedirect(
         ok: false,
         skip: "unparseable",
         latency_ms: Date.now() - startedAt,
+        usage: result.usage,
+        provider: result.provider ?? input.provider,
+        model: result.model ?? input.model,
+        providerOutcome: "succeeded",
       };
     }
     return {
@@ -151,6 +181,9 @@ export async function requestRedirect(
       directions,
       latency_ms: Date.now() - startedAt,
       usage: result.usage,
+      provider: result.provider ?? input.provider,
+      model: result.model ?? input.model,
+      providerOutcome: "succeeded",
     };
   } catch (error) {
     const timedOut =
@@ -160,6 +193,9 @@ export async function requestRedirect(
       ok: false,
       skip: timedOut ? "timeout" : "provider_error",
       latency_ms: Date.now() - startedAt,
+      provider: input.provider,
+      model: input.model,
+      providerOutcome: "failed",
     };
   } finally {
     clearTimeout(timer);

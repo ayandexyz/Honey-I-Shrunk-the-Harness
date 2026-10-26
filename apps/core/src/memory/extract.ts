@@ -9,9 +9,13 @@ import type { ProviderId } from "../providers/index.js";
 import { getMemoryStore } from "./mem-store.js";
 import { AUTHORABLE_MEMORY_TYPES, type MemoryType } from "./mem-types.js";
 import { containsSecret } from "./graph/secret-filter.js";
+import { lexicalSimilarity } from "./graph/index.js";
+import { isSubtractive } from "./claim-subset.js";
+import { anchorClaims } from "./claim-anchors.js";
 import { BusEvents } from "../bus/index.js";
 import { logger } from "../utils/logger.js";
 import type { MemoryAuxiliaryObserver } from "./auxiliary.js";
+import type { ExtractionTrace, MemoryWriteTrace } from "./failure-trace.js";
 
 // A runaway extractor fills the store with noise faster than anything cleans it
 // up, and there is no consolidation pass yet. Bound it hard.
@@ -34,6 +38,12 @@ Save only what will still be true next week:
 Never save: anything derivable from the code, git history, or project docs; how a
 bug was fixed; task details that stop mattering when this task ends; credentials.
 
+Instructions such as "just acknowledge", "don't edit yet", "don't change files
+right now", or "only tell me" apply only to that turn. Never save them or carry
+them into a memory's description/content. Save the durable fact underneath them.
+When the user gives a concrete enduring rule, identifier, value, or correction
+that is not in the repository, save it even when the turn asks for no edit.
+
 Most turns contain nothing worth saving. Returning [] is the common, correct
 answer — prefer it over a weak memory. Never return more than ${MAX_SAVES_PER_RUN}.`;
 
@@ -48,6 +58,8 @@ export interface ExtractInput {
   complete?: (system: string, prompt: string) => Promise<string>;
   /** Reports provider usage when this path makes a real auxiliary call. */
   onAuxiliaryCall?: MemoryAuxiliaryObserver;
+  /** Records the write path for failure diagnosis (plan 2026-10-15 §5 Phase 0). */
+  trace?: MemoryWriteTrace;
 }
 
 interface Proposal {
@@ -98,6 +110,89 @@ function parseProposals(raw: string): Proposal[] {
   return out;
 }
 
+function userTexts(transcript: string): string[] {
+  return [
+    ...transcript.matchAll(
+      /(?:^|\n)user:\s*([\s\S]*?)(?=\n(?:user|assistant):|$)/gi,
+    ),
+  ]
+    .map((match) => match[1]?.trim() ?? "")
+    .filter(Boolean);
+}
+
+function latestUserText(transcript: string): string {
+  return userTexts(transcript).at(-1) ?? "";
+}
+
+function latestConcreteUserText(transcript: string): string {
+  return (
+    userTexts(transcript)
+      .reverse()
+      .find((text) => anchorClaims(text).length >= 2) ?? ""
+  );
+}
+
+function durablePartOfUserText(text: string): string {
+  return text
+    .replace(
+      /\b(?:do not|don't)\s+(?:change|edit|modify)\b[^.!?]*(?:[.!?]|$)/gi,
+      "",
+    )
+    .replace(
+      /\bjust\s+(?:acknowledge|confirm|tell me)\b[^.!?]*(?:[.!?]|$)/gi,
+      "",
+    )
+    .trim();
+}
+
+function proposalsCoverLatest(
+  proposals: Proposal[],
+  latestConcreteUser: string,
+): boolean {
+  const claims = anchorClaims(durablePartOfUserText(latestConcreteUser));
+  if (claims.length === 0) return true;
+  const proposed = new Set(
+    anchorClaims(
+      proposals
+        .map((proposal) => `${proposal.description}\n${proposal.content}`)
+        .join("\n"),
+    ),
+  );
+  return claims.every((claim) => proposed.has(claim));
+}
+
+/**
+ * The provider is free to return proposals in any order.  When the bounded
+ * write cap is hit, keeping the first N silently drops the fact from the last
+ * user message — exactly the fact most likely to be needed on the next turn.
+ * Rank only when there is competition, using the latest user message as a
+ * salience signal; ties retain provider order for deterministic behavior.
+ */
+function prioritizeLatest(
+  proposals: Proposal[],
+  transcript: string,
+): Proposal[] {
+  if (proposals.length <= MAX_SAVES_PER_RUN) return proposals;
+  const latestUser =
+    latestConcreteUserText(transcript) || latestUserText(transcript);
+  if (!latestUser) return proposals;
+  const ranked = proposals.map((proposal, index) => ({
+    proposal,
+    index,
+    score: lexicalSimilarity(
+      latestUser,
+      `${proposal.name} ${proposal.description} ${proposal.content}`,
+    ),
+  }));
+  // A single shared stop-word such as "the" is not evidence of relevance.
+  // Reuse the graph's topic threshold so generic transcripts retain provider
+  // order rather than causing an arbitrary reorder at the cap.
+  if (Math.max(...ranked.map((entry) => entry.score)) < 0.12) return proposals;
+  return ranked
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .map(({ proposal }) => proposal);
+}
+
 async function oneShot(
   input: ExtractInput,
   system: string,
@@ -146,50 +241,143 @@ export async function extractMemories(input: ExtractInput): Promise<number> {
     if (transcript.length === 0) return 0;
 
     const complete = input.complete ?? ((s, p) => oneShot(input, s, p));
-    const raw = await complete(
+    let raw = await complete(
       SYSTEM,
       `Session transcript:\n\n${transcript.slice(-MAX_TRANSCRIPT_CHARS)}`,
     );
+    let parsed = parseProposals(raw);
+    const latestConcreteUser = latestConcreteUserText(transcript);
+    // A cheap extractor occasionally returns [] for an explicit value-bearing
+    // fact even though the latest user message contains several concrete
+    // anchors (for example `ap-northeast-1` and `10`). Give only that narrow
+    // contradiction one second look. Generic chatter and genuine empty turns
+    // still cost one call, and the hard write cap remains unchanged.
+    if (
+      latestConcreteUser &&
+      !proposalsCoverLatest(parsed, latestConcreteUser)
+    ) {
+      raw = await complete(
+        SYSTEM,
+        `Re-evaluate the latest user message. The previous proposals omitted ` +
+          `one or more of its concrete identifiers or values. Returning no ` +
+          `proposal for that fact is correct only if it is not durable. ` +
+          `Do not save turn-local no-edit or acknowledgement instructions.\n\n` +
+          `Latest concrete user message:\n${latestConcreteUser}\n\n` +
+          `Session transcript:\n\n${transcript.slice(-MAX_TRANSCRIPT_CHARS)}`,
+      );
+      parsed = [...parsed, ...parseProposals(raw)];
+    }
 
-    const proposals = parseProposals(raw);
-    if (proposals.length === 0) return 0;
+    const proposals = prioritizeLatest(parsed, transcript);
+    const stage: ExtractionTrace = {
+      candidates: proposals.map((p) => p.content),
+      accepted: [],
+      replaced: [],
+      skipped: [],
+      live: [],
+    };
+    if (proposals.length === 0) {
+      recordExtraction(input, stage);
+      return 0;
+    }
 
     const store = getMemoryStore(input.projectPath);
     const savedEntries: Array<{ type: string; name: string }> = [];
     let saved = 0;
-    for (const p of proposals) {
-      if (saved >= MAX_SAVES_PER_RUN) break;
-      // Same rule as the tool (D4): credentials are never written to disk.
-      if (containsSecret(`${p.description}\n${p.content}`)) continue;
+    const saveProposals = (batch: Proposal[]): void => {
+      for (const p of batch) {
+        // Record the refusal instead of `break`ing: nothing past the cap could be
+        // saved anyway, and the dropped candidate is what Phase 0 needs to see.
+        if (saved >= MAX_SAVES_PER_RUN) {
+          stage.skipped.push({ body: p.content, reason: "cap" });
+          continue;
+        }
+        // Same rule as the tool (D4): credentials are never written to disk.
+        if (containsSecret(`${p.description}\n${p.content}`)) {
+          stage.skipped.push({ body: p.content, reason: "secret" });
+          continue;
+        }
 
-      const existing = store.load(p.name, p.type);
-      // Nothing changed — skip rather than churn the file's mtime and force a
-      // pointless re-embed through onMemoryChange.
-      if (
-        existing &&
-        existing.content === p.content &&
-        existing.description === p.description
-      ) {
-        continue;
+        const existing = store.load(p.name, p.type);
+        // Nothing changed — skip rather than churn the file's mtime and force a
+        // pointless re-embed through onMemoryChange.
+        if (
+          existing &&
+          existing.content === p.content &&
+          existing.description === p.description
+        ) {
+          stage.skipped.push({ body: p.content, reason: "unchanged" });
+          continue;
+        }
+
+        // A rewrite carrying fewer facts than the entry already holds, with none
+        // of its own, is a silent loss rather than an update (plan 2026-10-15 §5
+        // Phase 1). The entry keeps what it had; an update, which brings a claim
+        // of its own, is untouched by this.
+        if (existing && isSubtractive(existing.content, p.content)) {
+          stage.skipped.push({ body: p.content, reason: "lossy" });
+          continue;
+        }
+
+        // A reused name is normally an intentional correction or expansion. A
+        // low-overlap rewrite that also drops anchored claims is different: it
+        // is usually the extractor reusing a topic slug for a second fact. Keep
+        // both bodies rather than silently destroying the first fact; later
+        // consolidation can merge them once it has the full candidate set.
+        const existingAnchors = existing
+          ? new Set(anchorClaims(existing.content))
+          : new Set<string>();
+        const incomingAnchors = new Set(anchorClaims(p.content));
+        const independentAnchors =
+          existingAnchors.size > 0 &&
+          incomingAnchors.size > 0 &&
+          ![...existingAnchors].some((claim) => incomingAnchors.has(claim));
+        const correction =
+          /\b(?:correction|corrected|moved|now|instead|replaces?|retired|no longer)\b/i.test(
+            p.content,
+          );
+        const collision =
+          existing &&
+          (lexicalSimilarity(existing.content, p.content) < 0.12 ||
+            (independentAnchors && !correction));
+        const content = collision
+          ? `${existing.content}\n\n${p.content}`
+          : p.content;
+        const description = collision
+          ? `${existing.description}; ${p.description}`
+          : p.description;
+
+        if (existing) {
+          stage.replaced.push({
+            name: p.name,
+            before: existing.content,
+            after: content,
+          });
+        }
+        stage.accepted.push(content);
+
+        const now = Date.now();
+        store.save({
+          name: p.name,
+          description,
+          type: p.type,
+          content,
+          createdAt: existing?.createdAt ?? now,
+          updatedAt: now,
+          // The extractor knows nothing about graph metadata; dropping it here
+          // would sever the entry's HasTag/Supersedes edges on every update.
+          tags: existing?.tags,
+          supersedes: existing?.supersedes,
+          happened_at: existing?.happened_at,
+        });
+        saved++;
+        savedEntries.push({ type: p.type, name: p.name });
       }
+    };
 
-      const now = Date.now();
-      store.save({
-        name: p.name,
-        description: p.description,
-        type: p.type,
-        content: p.content,
-        createdAt: existing?.createdAt ?? now,
-        updatedAt: now,
-        // The extractor knows nothing about graph metadata; dropping it here
-        // would sever the entry's HasTag/Supersedes edges on every update.
-        tags: existing?.tags,
-        supersedes: existing?.supersedes,
-        happened_at: existing?.happened_at,
-      });
-      saved++;
-      savedEntries.push({ type: p.type, name: p.name });
-    }
+    saveProposals(proposals);
+
+    recordExtraction(input, stage);
 
     // Tell the user something was recorded about them. Emitted on the bus, not
     // the turn stream: extraction runs after the turn's `done`, so the stream
@@ -202,4 +390,20 @@ export async function extractMemories(input: ExtractInput): Promise<number> {
     logger.debug("[MemoryExtract] extraction failed", { error });
     return 0;
   }
+}
+
+/**
+ * Seal the extraction stage. "Final live entries" is the whole store, not this
+ * pass's writes — a fact taught in an earlier session is still live, and only a
+ * pass that took it away should look like a loss.
+ *
+ * Skipped entirely unless the caller asked for a trace, so ordinary extraction
+ * does not pay for a directory walk nothing reads.
+ */
+function recordExtraction(input: ExtractInput, stage: ExtractionTrace): void {
+  if (!input.trace) return;
+  stage.live = getMemoryStore(input.projectPath)
+    .list()
+    .map((e) => e.content);
+  input.trace.extraction = stage;
 }

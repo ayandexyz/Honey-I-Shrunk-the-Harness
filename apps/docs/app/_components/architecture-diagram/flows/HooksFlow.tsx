@@ -37,17 +37,6 @@ export function HooksFlow() {
         fill="none"
       />
       <polygon points="625,182 620,191 630,191" fill="#f43f5e" />
-
-      {/* Permission -> Tools */}
-      <path
-        id="flow-permission-to-tools"
-        d="M 675 136 L 685 136"
-        stroke="#f43f5e"
-        strokeWidth="2"
-        className={styles.flowLine}
-        fill="none"
-      />
-      <polygon points="690,136 681,132 681,140" fill="#a855f7" />
     </g>
   );
 }

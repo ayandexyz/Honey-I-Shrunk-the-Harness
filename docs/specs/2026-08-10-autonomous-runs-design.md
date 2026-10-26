@@ -75,8 +75,9 @@ Every long-running task in FreeCode today dies with the terminal. Concretely:
    `timeoutMs` ceiling that lets a human hand off a bounded amount of trust and walk away
    with a guarantee about the blast radius.
 3. **No verification-gated "done."** Nothing currently stops the agent from declaring
-   success without evidence. `permission/profiles.ts` gates *what* a tool can touch, not
-   *whether the claimed outcome is true*.
+   success without evidence. The permission layer (`permission/rules.ts` and the
+   agent envelope — `permission/profiles.ts` until its 2026-10-17 retirement) gates
+   *what* a tool can touch, not *whether the claimed outcome is true*.
 4. **No maintenance ever runs unattended.** The memory graph (`memory/graph/`) has
    `computeClusters` and `deriveGraph` but nothing calls them periodically to merge
    duplicates or prune stale entries — that only happens if a human thinks to run it.
@@ -355,6 +356,11 @@ log) is exactly the culture this spec needs for `RunManifest`/`report.md`, and i
 cheaper to establish once and reuse than to invent twice.
 
 ### 4.8 Permission profile
+
+**Superseded 2026-10-17:** `permission/profiles.ts` is deleted. The unattended
+ceiling would now be an agent-definition `envelope:` block (spec
+`2026-09-27-agent-control-and-definitions.md` §5), which can narrow but not widen
+its parent. The profile sketch below is kept as the design record.
 
 New profile in `permission/profiles.ts`, stricter than every existing one:
 

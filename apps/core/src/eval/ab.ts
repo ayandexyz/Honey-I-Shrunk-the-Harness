@@ -39,6 +39,7 @@ export class AbError extends Error {}
  *   FREECODE_BASH_COMPRESS             `maybeCompressOutput`, every tool call
  *   FREECODE_READ_LINE_NUMBERS         read's `execute`, every call
  *   FREECODE_EPHEMERAL_TAIL            `executeTurn`, every iteration
+ *   FREECODE_APPEND_CONTEXT            `appendContextEnabled`, every iteration
  *   FREECODE_TODO_NUDGE                `shouldNudgeTodo`/`todoNudgeReminder`,
  *                                      every iteration
  *   FREECODE_SYSTEM_FILE               `loadSystemPromptFor`, every turn (the
@@ -68,6 +69,8 @@ export const VARIABLE_ENV_KEYS = [
   "FREECODE_BASH_COMPRESS",
   "FREECODE_READ_LINE_NUMBERS",
   "FREECODE_EPHEMERAL_TAIL",
+  // Read per iteration in appendContextEnabled (agent/context-inject.ts).
+  "FREECODE_APPEND_CONTEXT",
   "FREECODE_TODO_NUDGE",
   "FREECODE_SYSTEM_FILE",
   "FREECODE_APPEND_SYSTEM_FILE",

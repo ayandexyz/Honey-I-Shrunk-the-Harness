@@ -1,9 +1,11 @@
-/* Departure Mono everywhere. Nextra's font tokens are declared inside
-   @layer theme, so these unlayered rules win regardless of import order. */
+/* Shared tokens define --sans (Inter) and --mono. Bind them to Nextra's
+   font tokens — declared unlayered so they win against
+   nextra-theme-docs/style.css regardless of import order. */
+@import "@repo/tokens";
+
 :root {
-  --x-font-sans: var(--font-departure-mono), ui-monospace, SFMono-Regular, Menlo,
-    Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  --x-font-mono: var(--x-font-sans);
+  --x-font-sans: var(--sans);
+  --x-font-mono: var(--mono);
 }
 
 /* Minimal app-level overrides. Nextra theme handles the rest. */
@@ -11,6 +13,38 @@ html,
 body {
   margin: 0;
   padding: 0;
+  background: var(--paper);
+  color: var(--ink);
+  color-scheme: light;
+}
+
+/* Docs are light-only: even if a stray dark class slips in, keep the
+   light tokens. */
+.dark {
+  --nextra-bg: 242 241 236;
+  color-scheme: light;
+}
+
+/* Brand-red focus ring across the docs surface. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Nextra token overrides — declared outside @layer so they win against
+   nextra-theme-docs/style.css regardless of import order. Primary HSL
+   matches web2's data accent (--accent: #a7d46f) — links/sidebar/TOC stay
+   green; brand red is reserved for CTAs and focus. */
+:root {
+  --nextra-primary-hue: 89deg;
+  --nextra-primary-saturation: 60%;
+  --nextra-primary-lightness: 50%;
+  --nextra-bg: 242 241 236; /* --paper #f2f1ec — light */
+  --x-color-primary-600: hsl(
+    var(--nextra-primary-hue) var(--nextra-primary-saturation)
+      var(--nextra-primary-lightness)
+  );
 }
 
 /* Mermaid diagrams: bump text size 15% for legibility */
@@ -22,4 +56,20 @@ body {
 .nextra-content .mermaid .edgeLabel,
 .nextra-content .mermaid .label {
   font-size: inherit !important;
+}
+
+/* Web2 surfaces — round the nextra cards and lift on hover. */
+.nextra-card {
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  transition:
+    box-shadow 180ms var(--ease),
+    transform 180ms var(--ease);
+}
+
+.nextra-card:hover {
+  box-shadow:
+    0 1px 2px rgb(21 32 29 / 6%),
+    0 8px 24px rgb(21 32 29 / 8%);
+  transform: translateY(-1px);
 }

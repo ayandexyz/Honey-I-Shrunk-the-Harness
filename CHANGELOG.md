@@ -1,5 +1,56 @@
 # Changelog
 
+## v0.47.1
+
+ChatGPT-subscription sessions now keep their prompt cache across a whole task instead of re-sending the conversation every step, a permission-approval hook no longer stalls read-only subagents, and two out-of-memory crashes are gone. Per-turn context (recalled memories, the todo list, reminders) is now appended to the conversation once when it changes — the way Claude Code and opencode deliver it — instead of being rebuilt at the end of every request.
+
+### Changed
+
+- **Append-only context delivery, on by default** (`d916d928`, `8597167a`). Memory recall, the todo list and `<system-reminder>`s are appended once, as a persisted `synthetic: "context"` message, only when new; compaction re-delivers them. The old per-request tail froze the ChatGPT backend's cache at the first request of every turn. `eval ab` (tail vs append): memory suite on gpt-5.6-luna cached 84% → 93%, uncached input −62%, model time −18%; coding suites pass unchanged on luna and MiniMax-M3 at ~5% more tokens when there is no memory to deliver. `FREECODE_APPEND_CONTEXT=0` restores the tail.
+
+### Fixed
+
+- **ChatGPT (Codex OAuth) prompt cache** (`e7f8afc4`). The backend routes its cache on a `session-id` header, which is now sent; without it requests landed on arbitrary cache shards.
+- **PermissionRequest hooks run only when a prompt would show** (`a879ed72`). They fired on calls the rules already allowed, so a hook that waits for human approval stalled every read of the read-only finish-time verifier for up to 5 minutes. Matches Claude Code.
+- **`grep` output capped at 20MB, long lines at 500 columns** (`e8e883f6`). An unbounded search over worktrees and minified bundles grew past V8's string limit and crashed the process.
+- **Compaction summarizer no longer sends `temperature: 0`** (`585fdbf8`), which reasoning models reject (an AI SDK warning on every compaction).
+- **Eval runner no longer keeps every trial's agent loop in memory** (`da45edce`). An uncleared trial timer and an undisposed cache warmer pinned each trial's conversation; a long `eval ab` grew to 4GB and crashed.
+- **Read-only bash calls are not treated as file mutations** (`89696ec6`).
+- **Docs site link and button styling** (`01188328`, `f955eccb`).
+
+### Notes
+
+Released as a patch ahead of the release gate, at the maintainer's call; `pnpm eval:gate` on MiniMax-M3 was still running at tag time.
+
+## v0.47.0
+
+Subagents that write files are now actually contained: an agent definition can declare a capability envelope (path, network, shell, subprocess), it narrows rather than replaces the existing permission rules, and a granted shell is jailed to the envelope's write roots with a real bwrap sandbox. Project instructions grow a real hierarchy — global, then repository ancestors, explicit `@import`s, and glob-scoped `.freecode/rules/*.md` — all visible in `/context`. Memory's two long-horizon bugs are fixed: a fact taught in the last session of a run no longer goes missing, and consolidation can no longer merge-and-lose an earlier fact. Also: a cost ledger, a local performance benchmark, and a batch of core/rollout/eval correctness fixes.
+
+### Added
+
+- **Subagent capability envelope** (`466cda5a`, `b3353930`, `c76091e8`, `1d6375b7`, `d3cc696c`, `5be78de1`, `2ae8e340`, `877a3d29`, `de2ee0cc`, `c06f52dc`). An agent definition's `envelope:` block (path roots, `network`/`shell` booleans, `grants`) is parsed and validated at load, carried onto the spawn's role, and enforced as the top permission tier — above even `danger` mode. One pure predicate decides every call; a denial lands in `function.denied` with `source: "envelope"`, never silently. A child's effective envelope is always the intersection of its own and its parent's, at every depth, so a spawn can narrow authority but never widen it. The old parallel, dead `permission/profiles.ts` capability-profile map is deleted outright — operations and targets now come from one place.
+- **Sandboxed shell execution for a granted shell** (`fe3e914d`). A `shell` grant now actually runs inside a bwrap sandbox: the project mounted read-only, only the envelope's write roots bind-mounted read-write, `$HOME`/`/tmp` private, `--unshare-net` when `network: false`. A write root the planner can't represent as a mount boundary fails closed rather than widening to its parent; with no sandbox available, `shell` is denied outright instead of running uncontained.
+- **Instruction hierarchy** (`602e5eff`). Global instructions, then repository ancestors from the repo boundary down to the active project (`CLAUDE.md` still wins over `AGENTS.md` within a directory), explicit `@import path` directives bounded by the policy root with symlink checks and depth/file/byte limits, and `.freecode/rules/*.md` with a small `globs:` frontmatter form, matched against the deterministic project file scope. Everything stays in the static, cacheable prompt prefix; `/context` reports each source's path, kind, scope, and size without ever exposing contents.
+- **Cost ledger and streaming-markdown optimization** (`2a7c7278`).
+- **Local performance benchmark dashboard** (`0efddccf`). `pnpm bench:local` / `bench:local:publish`; results feed a `/performance` page on the docs site.
+- **Agent-bench judge needing no subscription; `--judges` picks the panel** (`a57a5f7b`).
+
+### Fixed
+
+- **Memory: a fact taught in the last session of a run, and consolidation merging-and-losing an earlier one** (`79a3fa98`, `3247002e`, `c599ad3c`, `bfea46f7`, `215bf3ae`, `4ed36870`, `7496a899`, `d547c4eb`, `0e4055c7`, `13b21db3`, `b9179eba`, `37ce4527`). Extraction now coverage-checks the latest concrete user-stated identifiers/values and retries one omission, keeps independent same-topic facts additive under a reused memory name rather than overwriting them, and refuses a consolidation merge whose replacement drops an anchored claim its sources held. Recall's prompt also gives explicit assembly/unit guidance for lists and maps spread across memories. `long-late-correction` improved 0/3 → 3/3 and `long-incremental-assembly` 0/3 → 2/3 in the long-horizon eval; the one remaining failure is a coding error (percent-to-multiplier conversion), not fact loss. `bench:recall`/`bench:inject` unregressed.
+- **Agent tools rooted in the session's own project, not the daemon's cwd** (`deb82eb8`).
+- **Memory work drains on a headless session exit instead of being dropped** (`07b12a62`).
+- **Eval: memory isolated per trial; baselines keyed by judge identity** (`d791a695`, `e1168f6f`). A trial no longer leaks memory state into the next one in the same suite run; a baseline recorded under one judge can no longer silently become the bar a different judge is measured against.
+- **Bench: `--judge-timeout` is now real, and `§4.6` counts four judges; GPT judge pinned to a model this account still serves** (`ba0e6b9b`, `f02724d7`). `gpt-5.5` was retired for this account (every call 400'd "not supported when using Codex with a ChatGPT account"); the panel's GPT slot now points at `gpt-5.6-luna`.
+- **Rollout: compaction boundaries recorded accurately; model terminators paired by request id, auth mode stamped** (`b4572211`, `70671f60`).
+- **IPC: tool completion output bounded** (`1de9cd7b`).
+- **TUI: output fix; completion delay removed** (`48b12742`, `31cb5840`).
+- **Website: web2 theme ported to the docs landing page, navbar/hero/logo updates, dark mode dropped from the docs site** (`26b8ca2d`, `f2d054d4`, `c50a99ef`, `93cb79bd`, `0600f807`, `f4501c45`, `eb240662`, `5500b2ad`, `4408f739`, `3a0f314c`).
+
+### Notes
+
+`pnpm eval:gate` ran before this release: **trajectory 27/27** and **coding 15/15**, both GATE OPEN. The **judged suite closed** (mean 3.17/5, floor 3.5) — this is the first time this suite's judge has actually returned real scores end to end (every earlier attempt failed on judge infra before reaching a grade: `claude-cli`'s headless `claude -p` wrapper re-runs `mise use -g` on every call and hit a version-churn failure each time; `openai`'s Codex/ChatGPT backend rejects most catalogue model ids outright, down to only a couple of allowlisted ones). Scored with `openai/gpt-5.6-sol`, one case (`admit-what-is-not-there`) landed at 1/5 for "no inspection" despite giving a correct, evidence-backed answer from the already-injected file tree — the rubric's own grading notes say only to penalise a claim the tool list *contradicts*, not one it simply doesn't confirm, so this reads as a judge-calibration miss rather than a real regression. Tracked as a known judged-suite gap, not blocking this release.
+
 ## v0.46.1
 
 Permission hooks now stay neutral when they return no explicit decision, every hook receives the documented working directory, and the question flow works cleanly across both the TUI and external approval bridges. The web landing-page heading also gets corrected letter spacing.

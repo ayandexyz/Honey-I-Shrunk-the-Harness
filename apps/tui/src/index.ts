@@ -38,6 +38,7 @@ import {
 } from "./utils/format-tokens.js";
 import { idleNudgeMessage, getCacheTtlMs } from "./utils/idle-nudge.js";
 import { formatDuration } from "./utils/format-duration.js";
+import { finishWorkingState } from "./utils/finish-working-state.js";
 import { createAutocompleteProvider } from "./utils/at-mention-provider.js";
 import { SelectionStore, normalize } from "./state/selection-store.js";
 import { plainText } from "./utils/ansi-select.js";
@@ -118,7 +119,6 @@ import {
   createQueuedUserMessage,
   promoteQueuedToUser,
   removeMessageById,
-  updateInProgressMessage,
   subscribeToMessages,
   onMessagesChange,
   finalizeAssistantText,
@@ -2256,8 +2256,8 @@ function beginCoreTurn(sessionId: string, queuedId?: string): void {
   endCoreTurn();
   if (queuedId) promoteQueuedToUser(queuedId);
   // Not renderedTextThisRun: that flag is submitPrompt's, read after its RPC
-  // returns — and a notification turn can start inside that window (the
-  // previous turn's tail waits 500ms), which re-rendered its reply twice.
+  // returns — and a notification turn can start during its final bookkeeping,
+  // which would re-render the previous reply twice.
   streamedChars = 0;
   resetLiveOutputTokens();
   resetLiveInputTokens();
@@ -2392,32 +2392,13 @@ async function submitPrompt(
       return;
     }
 
-    // Update in-progress message with token counts from result
-    const contextLimit = await getModelContextLimit(
-      `${currentProvider}/${currentModel}`,
-    );
-    updateInProgressMessage(
+    // The backend is done, so end the working state immediately. Final token
+    // totals and duration remain visible in the settled system row below.
+    const elapsed = finishWorkingState(
+      removeMessageById,
       inProgressMsg.id,
-      getRandomInProgressPhrase(),
-      result.usage?.inputTokens ?? 0,
-      result.usage?.outputTokens ?? 0,
-      contextLimit,
       inProgressMsg.timestamp,
-      result.turnCount || 1,
-      result.usage?.cacheReadInputTokens ?? 0,
-      // ↓/↑ are run totals; the meter needs the last turn's context instead.
-      result.usage?.contextTokens ??
-        (result.usage?.inputTokens ?? 0) +
-          (result.usage?.cacheReadInputTokens ?? 0),
     );
-
-    // Brief pause so user can see final token state before it disappears
-    await new Promise((resolve) => setTimeout(resolve, 500));
-
-    // Remove in-progress message now that response has arrived
-    removeMessageById(inProgressMsg.id);
-
-    const elapsed = Date.now() - inProgressMsg.timestamp;
     const timeStr = formatDuration(elapsed);
 
     if (result.success) {
@@ -2594,28 +2575,6 @@ editor.onSubmit = async (value: string) => {
               inputTokens,
               outputTokens,
               contextLimit,
-            ),
-          updateInProgressMessage: (
-            id: number,
-            phrase: string,
-            inputTokens: number,
-            outputTokens: number,
-            contextLimit: number,
-            startTime: number,
-            turns: number,
-            cachedTokens?: number,
-            contextTokens?: number,
-          ) =>
-            updateInProgressMessage(
-              id,
-              phrase,
-              inputTokens,
-              outputTokens,
-              contextLimit,
-              startTime,
-              turns,
-              cachedTokens,
-              contextTokens,
             ),
           insertBeforeEditor: () => {
             /* no-op - messages go through store now */

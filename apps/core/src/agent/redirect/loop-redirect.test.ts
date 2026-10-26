@@ -35,6 +35,7 @@ import type {
   ProviderChunk,
   SystemBlock,
 } from "../../providers/types.js";
+import { newlyDelivered } from "../context-inject.js";
 
 const info = {
   id: "redirect-fake",
@@ -80,7 +81,7 @@ registerProvider("redirect-fake" as ProviderId, {
       opts: ExecuteOptions,
     ): AsyncGenerator<ProviderChunk> {
       systemsSeen.push(
-        [systemText(opts.system), opts.ephemeralTail ?? ""].join("\n"),
+        [systemText(opts.system), newlyDelivered(opts)].join("\n"),
       );
       yield {
         type: "tool_call",

@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { _executeBash } from "./bash.js";
+import { bubblewrapAvailable } from "../sandbox/index.js";
 
 // Common CWD for tests — the tool reads it from ctx.cwd.
 const ctx = { cwd: process.cwd() } as { cwd: string };
@@ -103,4 +106,52 @@ test("bash kills the whole process group on timeout", async () => {
     false,
     "descendant survived the timeout — process group was not killed",
   );
+});
+test("an enveloped shell runs sandboxed, writing its declared roots and no more", async () => {
+  if (!bubblewrapAvailable()) return;
+  const project = mkdtempSync(join(tmpdir(), "bash-envelope-"));
+  mkdirSync(join(project, "writable"), { recursive: true });
+  try {
+    const result = await _executeBash(
+      // `leak` targets the project root, which the envelope's write roots do
+      // not cover: the mount layout has to refuse it, not the command.
+      { command: "printf ok > writable/f.txt && cat writable/f.txt && (printf x > leak.txt 2>/dev/null || printf no-leak)" },
+      {
+        cwd: project,
+        projectPath: project,
+        envelope: { operations: ["shell", "file.write"], write: ["writable/**"] },
+      } as never,
+    );
+    assert.equal(result.success, true, JSON.stringify(result));
+    assert.match(result.result?.output ?? "", /ok/);
+    assert.match(result.result?.output ?? "", /no-leak/);
+    assert.equal(existsSync(join(project, "leak.txt")), false);
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+});
+
+test("an envelope write root the planner cannot mount denies the shell", async () => {
+  if (!bubblewrapAvailable()) return;
+  const project = mkdtempSync(join(tmpdir(), "bash-envelope-"));
+  mkdirSync(join(project, "src"), { recursive: true });
+  try {
+    const result = await _executeBash(
+      { command: "echo hi" },
+      {
+        cwd: project,
+        projectPath: project,
+        envelope: {
+          operations: ["shell", "file.write"],
+          write: ["src/*/tests/**"],
+        },
+      } as never,
+    );
+    assert.equal(result.success, false);
+    if (result.success) throw new Error("unreachable");
+    assert.match(result.error, /shell is denied: write root src\/\*\/tests\/\*\*/);
+    assert.match(result.error, /no single mount boundary/);
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
 });

@@ -1,4 +1,5 @@
 import type { AIProvider } from "../providers/types.js";
+import type { MemoryAuxiliaryObserver } from "../memory/auxiliary.js";
 import type { MemoryMessage } from "./types.js";
 import type { SummarizeInput } from "./summarizer.js";
 
@@ -33,6 +34,7 @@ export function createLlmSummarizer(
   provider: AIProvider,
   model: string | undefined,
   abortSignal?: AbortSignal,
+  onAuxiliaryCall?: MemoryAuxiliaryObserver,
 ): LlmSummarize {
   return async (input) => {
     const parts: string[] = [];
@@ -45,15 +47,39 @@ export function createLlmSummarizer(
       `Session transcript to summarize:\n\n${renderTranscript(input.messages)}`,
     );
 
-    const result = await provider.execute({
-      system: SYSTEM_PROMPT,
-      prompt: parts.join("\n\n---\n\n"),
-      model,
-      temperature: 0,
-      maxTokens: 1_024,
-      abortSignal,
-    });
+    const startedAt = Date.now();
+    let result;
+    try {
+      result = await provider.execute({
+        system: SYSTEM_PROMPT,
+        prompt: parts.join("\n\n---\n\n"),
+        model,
+        // No temperature: reasoning models reject it (the AI SDK drops it with
+        // a warning on every compaction), and opencode leaves it unset too.
+        maxTokens: 1_024,
+        abortSignal,
+      });
+    } catch (error) {
+      onAuxiliaryCall?.({
+        purpose: "compaction",
+        provider: provider.info.id,
+        model,
+        duration_ms: Date.now() - startedAt,
+        outcome: "failed",
+      });
+      throw error;
+    }
 
+    // The provider attempt succeeded even if its content is unusable. Record
+    // that one billed attempt before applying the semantic response check.
+    onAuxiliaryCall?.({
+      purpose: "compaction",
+      provider: result.provider,
+      model: result.model,
+      duration_ms: Date.now() - startedAt,
+      outcome: "succeeded",
+      usage: result.usage,
+    });
     const content = result.content?.trim();
     if (!content) throw new Error("provider returned an empty summary");
     return content;

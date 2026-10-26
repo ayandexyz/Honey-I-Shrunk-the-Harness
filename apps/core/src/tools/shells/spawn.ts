@@ -12,14 +12,11 @@
 // =============================================================================
 
 import { spawn, type ChildProcess } from "child_process";
-import {
-  sandboxEnvironment,
-  sandboxPlan,
-} from "../../autonomous/sandbox.js";
+import { sandboxEnvironment, sandboxPlan } from "../../sandbox/index.js";
+import type { SandboxAxes } from "../../sandbox/index.js";
 
-export interface ShellSandbox {
-  projectPath: string;
-}
+/** What a shell may touch when it runs sandboxed. */
+export type ShellSandbox = SandboxAxes;
 
 export interface SpawnedShell {
   child: ChildProcess;
@@ -34,7 +31,7 @@ export function spawnShell(
 ): SpawnedShell {
   const isWindows = process.platform === "win32";
   const plan = sandbox
-    ? sandboxPlan(command, cwd, sandbox.projectPath)
+    ? sandboxPlan(command, cwd, sandbox)
     : {
         command: isWindows ? "cmd.exe" : "/bin/bash",
         args: isWindows ? ["/c", command] : ["-c", command],

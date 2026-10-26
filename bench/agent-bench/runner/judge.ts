@@ -39,30 +39,68 @@ export interface JudgeSpec {
   id: string;
   /**
    * A freecode provider id (served by core's providers), "codex" (served by
-   * `codex exec`) or "claude" (served by `claude -p`); see core-complete.ts
-   * judgeComplete.
+   * `codex exec`), "claude" (`claude -p`) or "opencode" (`opencode run`); see
+   * core-complete.ts judgeComplete.
    */
   provider: string;
   model: string;
 }
 
 /**
- * Primary first (audit mode scores with it), auditor second.
+ * Every judge `--judges` can name, by short name.
  *
- * Haiku 4.5 is primary since 2026-10-13 (owner decision), through `claude -p`
- * on the owner's Claude subscription (claude-complete.ts). It replaced
- * Gemini 3.5 Flash, whose API key had gone invalid, so the v2 long-task run
- * was scored by the GPT fallback alone. A Sonnet judge through core's
- * Anthropic OAuth provider was refused on 2026-09-29 ("OAuth authentication
- * is currently not allowed for this organization"); Claude Code's own CLI is
- * not. GPT goes through `codex exec` on the owner's Codex subscription
- * (codex-complete.ts). A retired id surfaces as a dead judge, not an error,
- * so both ids are written into every judged report.
+ * `haiku` and `gpt` are the default panel. Haiku 4.5 is primary since
+ * 2026-10-13 (owner decision), through `claude -p` on the owner's Claude
+ * subscription (claude-complete.ts). It replaced Gemini 3.5 Flash, whose API
+ * key had gone invalid, so the v2 long-task run was scored by the GPT fallback
+ * alone. A Sonnet judge through core's Anthropic OAuth provider was refused on
+ * 2026-09-29 ("OAuth authentication is currently not allowed for this
+ * organization"); Claude Code's own CLI is not. GPT goes through `codex exec`
+ * on the owner's Codex subscription (codex-complete.ts). A retired id surfaces
+ * as a dead judge, not an error, so every id is written into every judged
+ * report.
+ *
+ * `gpt-5.5` retired for this account on 2026-10-17: every call came back 400
+ * "not supported when using Codex with a ChatGPT account", which the panel
+ * reports as DEGRADED rather than as a bad score — the guard held, but the run
+ * stops being publishable, so the id is pinned to what `~/.codex/config.toml`
+ * is actually set to.
+ *
+ * `deepseek` and `glm` are the judges that need no subscription: OpenCode Zen's
+ * free tier, reached through OpenCode's own binary (`opencode run`,
+ * opencode-complete.ts) because the free tier refuses every other client. Two
+ * of them make a two-judge panel with no login and no bill — but a free judge
+ * is a weaker and noisier judge than Haiku or GPT, so a run scored by these two
+ * is a second reading, never a replacement for the subscribed pair.
  */
-export const JUDGES: JudgeSpec[] = [
-  { id: "judge-haiku", provider: "claude", model: "claude-haiku-4-5" },
-  { id: "judge-gpt", provider: "codex", model: "gpt-5.5" },
-];
+export const JUDGE_REGISTRY: Record<string, JudgeSpec> = {
+  haiku: { id: "judge-haiku", provider: "claude", model: "claude-haiku-4-5" },
+  gpt: { id: "judge-gpt", provider: "codex", model: "gpt-5.6-luna" },
+  deepseek: { id: "judge-deepseek", provider: "opencode", model: "deepseek-v4.1-flash-free" },
+  glm: { id: "judge-glm", provider: "opencode", model: "glm-5.3-flash-free" },
+};
+
+/** Primary first (audit mode scores with it), auditor second. */
+export const JUDGES: JudgeSpec[] = [JUDGE_REGISTRY.haiku, JUDGE_REGISTRY.gpt];
+
+/**
+ * `--judges haiku,deepseek` → that panel, in the order given; the first is the
+ * primary. An unknown name is refused before any spend, like a family
+ * collision: a typo must not silently fall back to the default pair and be
+ * read as the panel that scored a published run.
+ */
+export function resolveJudges(names?: string): JudgeSpec[] {
+  if (names === undefined) return JUDGES;
+  return names.split(",").map((raw) => {
+    const spec = JUDGE_REGISTRY[raw.trim().toLowerCase()];
+    if (!spec) {
+      throw new Error(
+        `unknown judge "${raw.trim()}": known judges: ${Object.keys(JUDGE_REGISTRY).join(", ")}`,
+      );
+    }
+    return spec;
+  });
+}
 
 /** Theirs: 20 minutes per judge. */
 export const JUDGE_TIMEOUT_MS = 20 * 60 * 1000;
@@ -83,6 +121,8 @@ export type Complete = (
 export function familyOf(model: string): string {
   const m = model.toLowerCase();
   if (/minimax/.test(m)) return "minimax";
+  if (/deepseek/.test(m)) return "deepseek";
+  if (/glm/.test(m)) return "glm";
   if (/^codex\/|openai|(^|\/)(gpt|o\d)/.test(m)) return "openai";
   if (/gemini|google/.test(m)) return "google";
   if (/claude|anthropic/.test(m)) return "anthropic";

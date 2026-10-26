@@ -18,6 +18,7 @@ import { allowsAuxiliaryCalls } from "../providers/index.js";
 import type { ProviderId } from "../providers/index.js";
 import { logger } from "../utils/logger.js";
 import type { MemoryAuxiliaryObserver } from "./auxiliary.js";
+import { isContextText } from "../agent/context-inject.js";
 
 // Matches the loop's own transcript budget: enough to judge durability without
 // paying for a whole session.
@@ -50,6 +51,8 @@ function buildTranscript(messages: TranscriptMessage[]): {
       .join("")
       .trim();
     if (text.length === 0) continue;
+    // Appended context (recalled memories, todos) is not the user talking.
+    if (msg.role === "user" && isContextText(text)) continue;
     lines.push(`${msg.role}: ${text}`);
     if (msg.role === "user") lastUserText = text;
   }

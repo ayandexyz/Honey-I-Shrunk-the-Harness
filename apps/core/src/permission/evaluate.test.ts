@@ -1,10 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { evaluatePermission } from "./evaluate.js";
 import { parseRuleSet } from "./rules.js";
 import { emptyRuleSet } from "./rule-types.js";
 import { setMcpToolReadOnly, clearMcpToolKinds } from "./mode-policy.js";
 import type { AgentMode } from "../agent/types.js";
+import type { AgentEnvelope } from "../agent/definitions/types.js";
+import type { PermissionOperation } from "../tools/tool.types.js";
 
 const ROOT = "/proj";
 
@@ -140,4 +145,120 @@ test("allow rules satisfy build-mode asks", () => {
   const rules = parseRuleSet({ allow: ["Bash(npm run test:*)", "mcp__linear"] });
   assert.equal(evaluate("build", "bash", { command: "npm run test" }, rules).decision, "allow");
   assert.equal(evaluate("build", "mcp__linear__create_issue", {}, rules).decision, "allow");
+});
+
+// =============================================================================
+// The agent envelope is a ceiling above the mode — including above `danger`
+// Spec: docs/specs/2026-09-27-agent-control-and-definitions.md §5.4, §5.7
+// =============================================================================
+
+const WRITE_ENVELOPE: AgentEnvelope = {
+  operations: ["file.write"],
+  write: ["docs/**"],
+};
+
+function evaluateEnveloped(
+  mode: AgentMode,
+  toolName: string,
+  args: Record<string, unknown>,
+  envelope: AgentEnvelope,
+  operations: PermissionOperation[],
+  rules = emptyRuleSet(),
+  projectRoot = ROOT,
+) {
+  return evaluatePermission({
+    toolName,
+    args,
+    mode,
+    rules,
+    projectRoot,
+    envelope,
+    operations,
+  });
+}
+
+test("an envelope denial outranks danger mode", () => {
+  const result = evaluateEnveloped(
+    "danger",
+    "write",
+    { filePath: join(ROOT, "outside.txt") },
+    WRITE_ENVELOPE,
+    ["file.write"],
+  );
+  assert.equal(result.decision, "deny");
+  assert.equal(result.source, "envelope");
+  assert.match(result.reason ?? "", /write/);
+  assert.match(result.reason ?? "", /docs\/\*\*/);
+});
+
+test("inside the envelope, danger mode still allows", () => {
+  const result = evaluateEnveloped(
+    "danger",
+    "write",
+    { filePath: join(ROOT, "docs/a.md") },
+    WRITE_ENVELOPE,
+    ["file.write"],
+  );
+  assert.deepEqual(result, { decision: "allow", source: "danger" });
+});
+
+test("an allow rule cannot widen the envelope", () => {
+  const result = evaluateEnveloped(
+    "build",
+    "write",
+    { filePath: join(ROOT, "outside.txt") },
+    WRITE_ENVELOPE,
+    ["file.write"],
+    parseRuleSet({ allow: ["Write"] }),
+  );
+  assert.equal(result.decision, "deny");
+  assert.equal(result.source, "envelope");
+});
+
+test("an operation the envelope withholds is denied, whatever the mode allows", () => {
+  const result = evaluateEnveloped("danger", "bash", { command: "ls" }, WRITE_ENVELOPE, [
+    "shell",
+  ]);
+  assert.equal(result.decision, "deny");
+  assert.match(result.reason ?? "", /shell/);
+});
+
+test("a tool with no declared operations and no grant is denied", () => {
+  const result = evaluateEnveloped(
+    "build",
+    "mcp__linear__issues",
+    {},
+    { operations: ["file.read"], read: ["docs/**"] },
+    [],
+  );
+  assert.equal(result.decision, "deny");
+  assert.match(result.reason ?? "", /not granted mcp__linear__issues/);
+});
+
+test("no envelope leaves every mode exactly as it was", () => {
+  assert.deepEqual(evaluate("danger", "write", { filePath: join(ROOT, "x") }), {
+    decision: "allow",
+    source: "danger",
+  });
+  assert.equal(evaluate("plan", "write", { filePath: join(ROOT, "x") }).source, "mode-enforced");
+  assert.equal(evaluate("build", "write", { filePath: join(ROOT, "x") }).decision, "ask");
+});
+
+test("the envelope judges the resolved path, so a symlink cannot escape", () => {
+  const project = mkdtempSync(join(tmpdir(), "freecode-evaluate-envelope-"));
+  mkdirSync(join(project, "docs"));
+  mkdirSync(join(project, "outside"));
+  symlinkSync(join(project, "outside"), join(project, "docs", "escape"));
+
+  const result = evaluateEnveloped(
+    "build",
+    "write",
+    { filePath: "docs/escape/evil.txt" },
+    WRITE_ENVELOPE,
+    ["file.write"],
+    emptyRuleSet(),
+    project,
+  );
+  assert.equal(result.decision, "deny");
+  assert.equal(result.source, "envelope");
 });

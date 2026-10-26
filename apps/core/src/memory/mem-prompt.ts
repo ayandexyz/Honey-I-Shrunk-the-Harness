@@ -155,11 +155,12 @@ function promptHeader(): string[] {
     : [
         "# Relevant memories",
         "",
-        "Background recall, surfaced automatically. It may be stale — verify against",
-        "the code before relying on it, and when the code disagrees, the code wins.",
-        "Do NOT narrate, restate, or re-acknowledge these in your visible replies:",
-        "this block repeats on every request, so reacting to it each time floods the",
-        "transcript. Act on it silently; mention a memory only if the user asks.",
+        "Recall may be stale; verify current-code claims. Apply remembered requirements",
+        "unless the current request supersedes them. Stale or incomplete code does not override them.",
+        "For lists, maps, or rules, scan every recalled entry before editing; combine",
+        "facts and preserve every named case and unit. A percentage is not a multiplier;",
+        "convert it exactly once. The current request overrides past turn-local directions",
+        "like 'just acknowledge' or 'do not edit yet'. Act silently; mention memories only if asked.",
       ];
 }
 
