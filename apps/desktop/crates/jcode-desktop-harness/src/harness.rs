@@ -237,6 +237,12 @@ pub enum Command {
         session_id: String,
         model: String,
     },
+    /// freecode: answer a runtime `PermissionRequest`.
+    RespondPermission {
+        session_id: String,
+        request_id: String,
+        decision: jcode_sdk::PermissionDecision,
+    },
     RuntimeCommand {
         session_id: String,
         command: jcode_sdk::api::RuntimeCommand,
@@ -306,6 +312,7 @@ enum SessionCommand {
     },
     Transfer,
     SetModel(String),
+    RespondPermission(String, jcode_sdk::PermissionDecision),
     RuntimeCommand(jcode_sdk::api::RuntimeCommand, Vec<String>),
     Operation(SessionOperation),
     Stop,
@@ -959,6 +966,16 @@ fn run_with_transports(
             }
             Command::SetModel { session_id, model } => {
                 let command = SessionCommand::SetModel(model);
+                send_to_session_worker(&mut workers, session_id, command, |session_id| {
+                    spawn_session_worker(session_id, &updates, &transports)
+                });
+            }
+            Command::RespondPermission {
+                session_id,
+                request_id,
+                decision,
+            } => {
+                let command = SessionCommand::RespondPermission(request_id, decision);
                 send_to_session_worker(&mut workers, session_id, command, |session_id| {
                     spawn_session_worker(session_id, &updates, &transports)
                 });
@@ -2281,6 +2298,16 @@ fn session_worker_with_connector(
                             });
                         }
                     },
+                    SessionCommand::RespondPermission(request_id, decision) => {
+                        if let Err(error) =
+                            client.respond_to_permission(real_id, &request_id, decision)
+                        {
+                            let _ = updates.send(Update::CommandFailed {
+                                session_id: session_id.clone(),
+                                reason: format!("Failed to answer permission request: {error}"),
+                            });
+                        }
+                    }
                     SessionCommand::SetModel(model) => {
                         if let Err(error) = client.set_model(real_id, &model) {
                             let _ = updates.send(Update::CommandFailed {

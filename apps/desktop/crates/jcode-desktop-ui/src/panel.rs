@@ -84,6 +84,9 @@ use scroll_motion::WheelGlide;
 mod cache_miss;
 #[path = "panel_composer.rs"]
 mod composer;
+// freecode: approve/deny card for runtime permission requests.
+#[path = "panel_permission_card.rs"]
+mod permission_card;
 #[path = "panel_diff.rs"]
 mod diff_review;
 #[path = "panel_effort.rs"]
@@ -554,6 +557,7 @@ pub struct Panel {
     /// Retain closing cards until their fade finishes, and allow smooth reversal.
     tool_detail_motion: HashMap<String, crate::transition::AnimatedValue>,
     prompt_queue: queue::PromptQueue,
+    permission_requests: permission_card::PendingPermissions,
     pending_users: VecDeque<usize>,
     accepted_users: HashMap<usize, Instant>,
     /// Newly received tool calls, keyed by call id, while their entrance runs.
@@ -1013,6 +1017,7 @@ impl Panel {
             expanded_tools: HashSet::new(),
             tool_detail_motion: HashMap::new(),
             prompt_queue: queue::PromptQueue::default(),
+            permission_requests: Default::default(),
             pending_users: VecDeque::new(),
             accepted_users: HashMap::new(),
             arriving_tools: HashMap::new(),
@@ -2787,6 +2792,7 @@ impl Panel {
             self.transcript_measurements.dirty = true;
         }
         self.response_stats.observe(event, self.provider.as_deref());
+        self.permission_requests.observe(event);
         self.observe_activity_state(event);
         if let Some(cue) = self.sound_events.observe(event)
             && self.preview_state.is_none()

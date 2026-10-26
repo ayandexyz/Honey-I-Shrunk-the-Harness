@@ -342,6 +342,7 @@ impl Panel {
                             .flex()
                             .flex_col()
                             .gap_2()
+                            .children(self.render_permission_card(cx))
                             .children(self.render_prompt_queue(cx))
                             .children(self.render_voice_pending())
                             .child(self.render_composer(window, cx))

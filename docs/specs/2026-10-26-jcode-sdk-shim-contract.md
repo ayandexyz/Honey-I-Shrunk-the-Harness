@@ -159,8 +159,9 @@ never comes from upstream is this `jcode-sdk` shim.
      session" — `create_session` and the event translation are Phase 4.
      The installed release (0.47.1) predates the EOF fix; until the next
      release, only the repo core shuts down on EOF.
-4. **IN PROGRESS (branch `phase-2-desktop`) — shim side done and verified
-   live; the approve/deny UI is what is left.**
+4. **IN PROGRESS (branch `phase-2-desktop`) — shim + approve card built and
+   verified through the shim; what is left is a human driving one turn in
+   the GPUI window (see "Not yet verified" below).**
    - **Turns** (`freecode_session.rs`): jcode's send is fire-and-forget,
      core's `session.send` answers when the turn ends. The shim leaves the
      request in flight, publishes `MessageAccepted` + `SessionStatus(running)`
@@ -199,8 +200,25 @@ never comes from upstream is this `jcode-sdk` shim.
      auto-allow): `permission_asked` passes through as `PermissionRequest`,
      and `respond_to_permission` maps jcode's `Allow`/`AllowAlways`/`Deny`
      to core's `allow-once`/`allow-always`/`deny` via `permission.answer`.
-     **The UI card is not built yet** — until it is, a turn that needs a
-     permission waits (core times out at 30 min and treats it as deny).
+     **The approve card** (`jcode-desktop-ui/src/panel_permission_card.rs`,
+     a freecode addition — upstream Jcode never asks, so its desktop only
+     played a sound): a per-panel queue of pending requests (deduplicated by
+     id, cleared when the turn ends), rendered in the composer dock above the
+     prompt queue as "Allow `<tool>`?" + the description and three pills,
+     Deny / Always allow / Allow, styled like the applet consent card.
+     Upstream hooks kept minimal: `panel.rs` (module, field, init, one line
+     in `apply_event`), `panel_composer.rs` (one child), `harness.rs`
+     (`Command::RespondPermission` → `SessionCommand::RespondPermission` →
+     `client.respond_to_permission`, failures as `CommandFailed`). Verified
+     live through the shim (`tests/freecode_permission.rs`, MiniMax-M3):
+     `MessageAccepted → SessionStatus → PermissionRequest(bash) → [Allow] →
+     ToolStart → ToolExec → ToolDone("freecode-permission-ok") → TextDelta… →
+     TurnDone`, 6s. **Gotcha found doing it**: a user `PermissionRequest`
+     hook runs *before* core emits `permission_asked` — agent-fold's (305s
+     timeout) held every ask for 5 minutes, so the card only ever saw
+     leftovers. Removed from `~/.freecode/settings.json` on this machine
+     2026-10-26 (backup `settings.json.bak-agent-fold-hooks`); with such a
+     hook installed, the card is the fallback after it.
    - **Unsupported, not panicking**: every other `JcodeClient` method the
      harness can reach (`rename_session`, `set_session_saved`,
      `set_reasoning_effort`, `send_system_reminder`, `rewind`,
@@ -399,7 +417,7 @@ match. Ordered by use.
 | `SidePaneImages` | 2 | — | **gap** | todo — decide: cut |
 | `RuntimeCommandResult` | 2 | — | built by the harness from `runtime_command`'s reply | todo — follows `runtime_command` |
 | `SessionRecovery`, `SessionForked`, `Attached`, `AppletState` | 1 each | — | | todo — decide |
-| `PermissionRequest` | 1 (sound only) | `permission_asked` | **nobody answers it** — see Phase 1 finding 2 | done (shim) — approve UI pending |
+| `PermissionRequest` | 1 (sound only) | `permission_asked` | answered by the freecode approve card (`panel_permission_card.rs`) | done |
 | `Compacted` | 0 | `compaction_complete` | routed, never consumed | cut |
 | `TextReplace` / `TextDone` | 0 | — | never matched | cut |
 
