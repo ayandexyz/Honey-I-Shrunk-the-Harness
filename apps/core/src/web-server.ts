@@ -53,31 +53,15 @@ const MIME_TYPES: Record<string, string> = {
 };
 
 /**
- * Where the built SPA lives.
- *
- * Two layouts, because the binary and the repo are shaped differently:
- *
- *  - Released binary: `bun build --compile` embeds core's JS but not static
- *    assets, so `apps/web-app/dist` is shipped as a loose `web-ui/` directory
- *    beside the executable (same trick as the onnxruntime shared libs).
- *    `__dirname` inside a compiled bun binary points at a virtual path, so it
- *    can't be used here — resolve from process.execPath instead.
- *  - Repo: the usual apps/core/dist → apps/web-app/dist hop.
- *
- * Returns the first candidate that actually contains an index.html, or null.
- * A null return is a packaging bug, and the caller says so loudly: /api keeps
- * working without the SPA, so this failed silently as a 404 on `/` — which
- * looks, from a phone, exactly like a blank screen.
+ * Where the built SPA lives: `web-ui/` beside the executable in a released
+ * binary (same trick as the onnxruntime shared libs). `apps/web-app` (the
+ * old Tauri/Vite frontend that used to provide this bundle) is gone —
+ * nothing currently produces a repo-layout bundle, so this returns null in
+ * dev until a replacement frontend ships one.
  */
 function resolveWebUiDir(): string | null {
-  const candidates = [
-    path.join(path.dirname(process.execPath), "web-ui"),
-    path.join(__dirname, "..", "..", "web-app", "dist"),
-  ];
-  for (const dir of candidates) {
-    if (fs.existsSync(path.join(dir, "index.html"))) return dir;
-  }
-  return null;
+  const dir = path.join(path.dirname(process.execPath), "web-ui");
+  return fs.existsSync(path.join(dir, "index.html")) ? dir : null;
 }
 
 export interface WebServerOptions {
@@ -116,8 +100,8 @@ export function startWebServer(
     console.error(
       "[Server] FATAL: web UI bundle not found. `/` will 404 and any " +
         "browser or phone client will show a blank page. Expected " +
-        "`web-ui/` beside the executable (released binary) or " +
-        "`apps/web-app/dist` (repo — run `pnpm --filter web-app build`).",
+        "`web-ui/` beside the executable (released binary); no repo-layout " +
+        "frontend currently builds this bundle.",
     );
   }
   const distDir = webUiDir ?? "";
