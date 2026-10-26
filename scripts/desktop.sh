@@ -4,13 +4,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-if [ ! -e apps/jcode ]; then
-  echo "apps/jcode is missing. It must be a symlink to a local jcode checkout" >&2
-  echo "(apps/desktop's Cargo.toml path-deps resolve against it, e.g.:" >&2
-  echo "  ln -s /path/to/your/jcode apps/jcode" >&2
-  echo "It's gitignored on purpose — every machine points it at its own checkout." >&2
-  exit 1
-fi
+# apps/jcode = the real jcode crates with jcode-sdk swapped for our shim.
+bash scripts/desktop-overlay.sh
 
 cd apps/desktop
 # ponytail: -j1 + no debug info avoids OOM on low-RAM machines (verified
