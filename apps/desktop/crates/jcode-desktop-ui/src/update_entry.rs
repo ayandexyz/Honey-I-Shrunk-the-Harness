@@ -45,25 +45,25 @@ pub fn run_update_command_if_requested() -> Option<i32> {
         return None;
     }
     let Some(running) = release_version() else {
-        eprintln!("Jcode Desktop {RELEASE_VERSION} is not a published release version");
+        eprintln!("Honey Desktop {RELEASE_VERSION} is not a published release version");
         return Some(2);
     };
-    println!("Jcode Desktop {running}: checking for updates");
+    println!("Honey Desktop {running}: checking for updates");
     let result = jcode_desktop_updater::update(&running, &mut |progress| match progress {
         jcode_desktop_updater::Progress::Downloading { version } => {
-            println!("Downloading Jcode Desktop {version}");
+            println!("Downloading Honey Desktop {version}");
         }
     });
     report(RELEASE_VERSION, &result);
     jcode_base::telemetry::flush_pending(std::time::Duration::from_secs(5));
     Some(match result {
         Ok(jcode_desktop_updater::Outcome::UpToDate { version }) => {
-            println!("Jcode Desktop {version} is up to date");
+            println!("Honey Desktop {version} is up to date");
             0
         }
         Ok(jcode_desktop_updater::Outcome::Installed { version, relaunch, kind, .. }) => {
             println!(
-                "Installed Jcode Desktop {version} ({}) at {}",
+                "Installed Honey Desktop {version} ({}) at {}",
                 kind.as_str(),
                 relaunch.display()
             );
@@ -90,7 +90,7 @@ pub fn redirect_to_newer_install_if_present() {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if let Err(error) = exec(&target, &args) {
         eprintln!(
-            "could not start the newer Jcode Desktop at {}: {error}",
+            "could not start the newer Honey Desktop at {}: {error}",
             target.display()
         );
     }

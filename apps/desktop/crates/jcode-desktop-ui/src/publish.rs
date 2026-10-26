@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 pub(crate) const DRAFT_PREFIX: &str = "startup://draft/publish/";
 
 /// Display title used for the tracker session.
-pub(crate) const SESSION_TITLE: &str = "Publish Jcode Desktop";
+pub(crate) const SESSION_TITLE: &str = "Publish Honey Desktop";
 
 /// Ordered pipeline stages. The agent is told to use these exact todo labels,
 /// so the tracker can map live todo updates onto fixed stage rows.

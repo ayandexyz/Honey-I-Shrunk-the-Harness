@@ -128,12 +128,12 @@ fn credentials() -> Result<(String, String), String> {
 }
 
 /// Marker for a rejected key. The menu turns it into a "Sign in again" action.
-const SIGN_IN_EXPIRED: &str = "Your Jcode sign-in has expired.";
+const SIGN_IN_EXPIRED: &str = "Your Honey sign-in has expired.";
 
 fn describe(error: AccountApiError) -> String {
     match error {
         AccountApiError::Unauthorized => SIGN_IN_EXPIRED.into(),
-        AccountApiError::Offline(_) => "Could not reach Jcode. Check your connection.".into(),
+        AccountApiError::Offline(_) => "Could not reach Honey. Check your connection.".into(),
         AccountApiError::Http {
             code: Some(code), ..
         } if code == "no_billing_account" => {
@@ -604,7 +604,7 @@ impl Workspace {
                                 "Signed out on this computer. The key could not be revoked online."
                                     .into()
                             }
-                            _ => "Signed out of Jcode".into(),
+                            _ => "Signed out of Honey".into(),
                         };
                         sidebar_account::JcodeAccount::invalidate();
                         accounts::request_refresh();
@@ -627,13 +627,13 @@ impl Workspace {
             .map(|s| s.email.clone())
             .or(account.email.clone())
             .filter(|_| show_email)
-            .unwrap_or_else(|| "Jcode account".into());
+            .unwrap_or_else(|| "Honey account".into());
         let plan = match snapshot {
             Some(snapshot) => snapshot.plan_label(),
             None => account
                 .plan
                 .map(|plan| format!("{plan} plan"))
-                .unwrap_or_else(|| "Jcode account".into()),
+                .unwrap_or_else(|| "Honey account".into()),
         };
         let status = snapshot
             .map(|s| s.status.as_str())

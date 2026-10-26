@@ -705,7 +705,7 @@ impl Panel {
                         ..Default::default()
                     })
                     .map_err(|_| {
-                        "Could not connect to Jcode. Try again when the connection is restored."
+                        "Could not connect to Honey. Try again when the connection is restored."
                             .to_string()
                     })?;
                     client

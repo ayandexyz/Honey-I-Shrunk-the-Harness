@@ -450,7 +450,7 @@ impl Panel {
                     div()
                         .text_color(theme.TEXT_DIM)
                         .child(
-                            "Your key is saved in Jcode's private credential store, never in chat.",
+                            "Your key is saved in Honey's private credential store, never in chat.",
                         )
                         .into_any_element(),
                 );

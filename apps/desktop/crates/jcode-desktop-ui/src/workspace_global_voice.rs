@@ -412,7 +412,7 @@ impl Workspace {
             if !active {
                 // Never record invisibly: no OS pill exists on this backend.
                 eprintln!(
-                    "global voice: no non-focusing overlay on the {:?} backend; focus Jcode to dictate",
+                    "global voice: no non-focusing overlay on the {:?} backend; focus Honey to dictate",
                     cx.compositor_name()
                 );
                 return;

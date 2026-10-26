@@ -957,7 +957,7 @@ impl Workspace {
             .flex_col()
             .gap_2()
             .py_3()
-            .child(div().text_size(px(12.0)).child("Jcode account"))
+            .child(div().text_size(px(12.0)).child("Honey account"))
             .child(
                 div()
                     .text_color(Theme::global().TEXT_DIM)
@@ -1171,7 +1171,7 @@ impl Workspace {
         let title = match &self.account_sign_in.stage {
             Stage::Code { .. } | Stage::Verifying { .. } => "Check your email",
             Stage::Complete { .. } => "You're signed in",
-            _ => "Welcome to Jcode",
+            _ => "Welcome to Honey",
         };
         div()
             .flex()
@@ -1186,7 +1186,7 @@ impl Workspace {
                     .mb_2()
                     .child(
                         gpui::svg()
-                            .data(accounts::logo("jcode").expect("vendored Jcode logo"))
+                            .data(accounts::logo("jcode").expect("vendored Honey logo"))
                             .size(px(28.0))
                             .text_color(theme.TEXT),
                     )
@@ -1194,7 +1194,7 @@ impl Workspace {
                         div()
                             .text_size(px(13.0))
                             .font_weight(gpui::FontWeight::MEDIUM)
-                            .child("Jcode Desktop"),
+                            .child("Honey Desktop"),
                     ),
             )
             .child(
@@ -1216,11 +1216,11 @@ impl Workspace {
         let theme = Theme::global();
         let signed_in = match &state.stage {
             Stage::Complete { email } => Some(format!("Signed in as {email}")),
-            _ if state.connected => Some("Signed in to Jcode".to_string()),
+            _ if state.connected => Some("Signed in to Honey".to_string()),
             _ => None,
         };
         let mut section =
-            section("Jcode account").debug_selector(|| "account-sign-in-email".into());
+            section("Honey account").debug_selector(|| "account-sign-in-email".into());
         if let Some(status) = signed_in {
             return section.child(
                 div()
@@ -1498,7 +1498,7 @@ impl Workspace {
         let importable = state.importable();
         let mut section = section("AI provider logins");
 
-        section = section.child(subheading("In Jcode"));
+        section = section.child(subheading("In Honey"));
         if in_jcode.is_empty() {
             section = section.child(empty_note("account-logins-in-jcode-empty", "None yet"));
         } else {
@@ -1532,7 +1532,7 @@ impl Workspace {
             } else if state.candidates.is_empty() {
                 "Nothing found in other tools"
             } else {
-                "Nothing new. Jcode already has these."
+                "Nothing new. Honey already has these."
             };
             return section.child(empty_note("account-logins-import-empty", note));
         }

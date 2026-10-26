@@ -26,11 +26,11 @@ fn known_summary(message: &str) -> Option<&'static str> {
     let has = |terms: &[&str]| terms.iter().any(|term| lower.contains(term));
     let runtime = has(&["harness", "jcode-api", "jcode.sock", ".sock", "runtime", "bridge"]);
     if has(&["refuses connections", "connection refused", "refused the connection"]) && runtime {
-        Some("Can't reach the Jcode runtime.")
+        Some("Can't reach the Honey runtime.")
     } else if has(&["no harness api socket", "harness is not running", "harness not running"]) {
-        Some("The Jcode runtime isn't running.")
+        Some("The Honey runtime isn't running.")
     } else if runtime && has(&["permission denied"]) {
-        Some("Can't access the Jcode runtime. It may belong to another user.")
+        Some("Can't access the Honey runtime. It may belong to another user.")
     } else if has(&[
         "socket closed",
         "connection closed",
@@ -38,7 +38,7 @@ fn known_summary(message: &str) -> Option<&'static str> {
         "broken pipe",
         "unexpected eof",
     ]) {
-        Some("Lost connection to the Jcode runtime.")
+        Some("Lost connection to the Honey runtime.")
     } else if has(&["timed out", "timeout"]) {
         Some("The request timed out.")
     } else {
@@ -95,7 +95,7 @@ mod tests {
 
     #[test]
     fn stale_socket_becomes_one_short_line() {
-        assert_eq!(summarize(STALE), "Can't reach the Jcode runtime.");
+        assert_eq!(summarize(STALE), "Can't reach the Honey runtime.");
         assert!(summary_hides_details(STALE));
     }
 
@@ -103,16 +103,16 @@ mod tests {
     fn missing_socket_and_closed_connections_are_named_plainly() {
         assert_eq!(
             summarize("connect_failed: no harness API socket at /x.sock: the jcode harness is not running."),
-            "The Jcode runtime isn't running."
+            "The Honey runtime isn't running."
         );
-        assert_eq!(summarize("Socket closed"), "Lost connection to the Jcode runtime.");
+        assert_eq!(summarize("Socket closed"), "Lost connection to the Honey runtime.");
         assert_eq!(
             summarize("connect_failed: harness refused the connection at /run/user/1000/jcode-api.sock. It may be restarting or stopped."),
-            "Can't reach the Jcode runtime."
+            "Can't reach the Honey runtime."
         );
         assert_eq!(
             summarize("connect_failed: harness not running (no socket at /x.sock)."),
-            "The Jcode runtime isn't running."
+            "The Honey runtime isn't running."
         );
     }
 

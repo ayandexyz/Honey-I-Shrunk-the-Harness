@@ -274,24 +274,61 @@ never comes from upstream is this `jcode-sdk` shim.
 - **Pulling an unmerged upstream PR** (done once already for PR #12): add
   the contributor's fork as a remote, `git subtree pull
   --prefix=apps/desktop <remote> <branch>`.
-- **Branding — the desktop is "Honey" (user decision 2026-10-26), identity
-  only.** Renamed: window title (`src/main.rs` `titlebar_options`), the
-  Wayland/X11 app id (`jcode-desktop-ui/src/lib.rs` `APP_ID` = `honey`, so
-  launchers and window rules see `honey`), the Linux launcher entry
-  (`packaging/linux/jcode.desktop`: `Name`, `Comment`, `StartupWMClass`),
-  and the macOS `CFBundleName`/`CFBundleDisplayName`. Deliberately **not**
-  renamed: the ~200 other "Jcode" string literals in 43 upstream files
-  (a find-and-replace would conflict with most `subtree pull`s that touch
-  UI text; about a quarter are Jcode-account/runtime wording Phase 5 will
-  replace anyway), the binary/package name `jcode-desktop`, internal paths
-  and state dirs, the icon (no Honey asset yet), and the macOS bundle
-  identifier `dev.solosystems.jcode.desktop` (upstream's domain — a real
-  Honey build should use one the owner controls). If full rebranding is
-  wanted later, prefer a build-time rewrite (like the `apps/jcode`
-  overlay) over editing the subtree. Upstream's own acceptance scripts
-  (`scripts/accept-*.py`) find the window by class `^jcode-desktop$` and
-  no longer match. Keep upstream's LICENSE/copyright notice regardless
-  (MIT requires it).
+- **Branding — the desktop is "Honey" (user decisions 2026-10-26).**
+  - **Identity** (hand-edited, 4 small spots): window title is now owned by
+    the rebrand script (below); `APP_ID` = `honey`
+    (`jcode-desktop-ui/src/lib.rs`) so launchers and window rules see
+    `honey`; `packaging/linux/jcode.desktop` (`Name`, `Comment`,
+    `StartupWMClass`); macOS `CFBundleName`/`CFBundleDisplayName`.
+  - **On-screen text — `scripts/desktop-rebrand.py apply|revert`.** Hand
+    renaming ~200 UI strings would make most `subtree pull`s conflict, so the
+    rename is mechanical and invertible: `revert` (back to upstream
+    wording, commit) → `git subtree pull` → `apply` (commit). It rewrites
+    only Rust string literals (real tokenizer: comments, chars, lifetimes,
+    raw strings) plus the applets' `"Ask Jcode"` button, whole-word,
+    capitalised only, so lowercase ids (`jcode` provider, binary, env) never
+    change. It **skips** literals where "Jcode" is data, not a label: paths
+    (`…/Application Support/Jcode`, `Jcode.app/…`), file names, release
+    assets and ids (`Jcode-…`), changelog headings the parser matches
+    (`###`), JSON fixtures (server data), and Jcode's own products matched
+    by name — `Jcode subscription`, `Jcode Cloud`, and the remote progress
+    phrases (`Creating Jcode session`, `Installing Jcode on`) the cloud
+    checklist matches — and any literal passed straight to `.join(` /
+    `PathBuf::from(` / `Path::new(` (a folder name such as the Windows/macOS
+    state dir `Jcode Desktop`). 122 replacements in 35 files; apply→revert restores
+    every file byte-for-byte. Each skip rule was added because a test broke
+    without it. `revert` relies on upstream never saying "Honey" in a string
+    (true 2026-10-26), so freecode-owned Honey strings must not live under
+    `apps/desktop`. Docs, comments and the bundled changelog notes still
+    say Jcode.
+  - **Tests**: the three affected suites (`jcode-desktop-ui --lib`,
+    `-harness`, `-accounts-ui`) were run with and without the rebrand; the
+    failure sets match except where the auth fix below *repaired* 25 (plus
+    `jcode-desktop-model`, 151/151). The 18 harness + 23 UI failures that remain are pre-existing shim fallout
+    (Jcode wire-protocol tests, finding 6; deferred Phase 5 login/cloud).
+    `applet_runtime::bundled_github_applet_renders_valid_documents` is flaky
+    under parallel load (passes alone 4/4).
+  - **Idle mark**: upstream's dotted donut (`activity_donut.rs`, untouched so
+    its tests and pulls stay clean) is replaced at its one call site in
+    `panel_activity.rs` by `activity_honey.rs`, a 5×7 dotted "H" in the same
+    `Frame`/`Dot` vocabulary, so it still morphs to the thinking orbs.
+  - **Icon**: `assets/app-icon/icon-1024.png` is the Honey logo
+    (`apps/web2/public/logo2.png` fitted onto a transparent 1024×1024 square
+    with `magick … -gravity center -resize 1024x1024 -extent 1024x1024`);
+    upstream's `test_brand_assets.py` render-from-SVG check fails by design.
+    `assets/icons/jcode.svg` (only the Jcode *account provider* logo) is
+    unchanged. `scripts/desktop-install-launcher.sh` installs a per-user
+    `honey.desktop` + `honey` icon (a dev run installs none);
+    `--uninstall` removes both.
+  - **Not renamed**: binary/package `jcode-desktop`, internal paths and
+    state dirs, the macOS bundle identifier `dev.solosystems.jcode.desktop`
+    (upstream's domain). Upstream's `scripts/accept-*.py` find the window by
+    class `^jcode-desktop$` and no longer match. Keep upstream's
+    LICENSE/copyright notice (MIT).
+- **Auth stubs no longer crash the app**: `AuthClient::new` has its real
+  body back (it only stores options); `providers()` is empty and every
+  sign-in step returns the shim's "not supported" error. Before, opening the
+  login panel panicked on the main thread (`jcode-sdk shim: new`).
 - **Build + run**: `pnpm desktop` from the repo root (`scripts/desktop.sh`)
   — regenerates the `apps/jcode` overlay (`scripts/desktop-overlay.sh`; needs
   `apps/jcode-upstream` → your jcode checkout, gitignored and

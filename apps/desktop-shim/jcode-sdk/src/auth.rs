@@ -68,24 +68,27 @@ pub struct AuthClient {
 
 impl AuthClient {
     pub fn new(options: AuthOptions) -> Self {
-        todo!("jcode-sdk shim: new")
+        Self { options }
     }
 
     /// Only methods implemented by the scriptable CLI or harness key API.
     /// Jcode subscription is API-key-only here, not its interactive device flow.
     pub fn providers(&self) -> Vec<LoginProvider> {
-        todo!("jcode-sdk shim: providers")
+        // freecode: Jcode's login providers do not exist here; sign-in is
+        // `freecode auth login` until Phase 5 replaces this panel.
+        Vec::new()
     }
 
     /// Resolve canonical IDs, shared aliases, or display names, then capability-filter.
     pub fn resolve_provider(&self, input: &str) -> Option<LoginProvider> {
-        todo!("jcode-sdk shim: resolve_provider")
+        let _ = input;
+        None
     }
 
     /// Allocate a unique, cancellable login. Call `start` off the UI thread.
     /// For API-key entries use `JcodeClient::set_api_key`, not this method.
     pub fn begin(&self, provider: &str, account: Option<&str>) -> Result<AuthFlow> {
-        todo!("jcode-sdk shim: begin")
+        Err(crate::freecode_session::unsupported("Jcode sign-in"))
     }
 }
 
@@ -180,23 +183,23 @@ fn callback_provider_error(input: &str) -> Option<Error> {
 
 impl AuthFlow {
     pub fn start(&self) -> Result<AuthPrompt> {
-        todo!("jcode-sdk shim: start")
+        Err(crate::freecode_session::unsupported("Jcode sign-in"))
     }
 
     pub fn submit_callback(&self, input: &str) -> Result<AuthResult> {
-        todo!("jcode-sdk shim: submit_callback")
+        Err(crate::freecode_session::unsupported("Jcode sign-in"))
     }
     pub fn submit_code(&self, input: &str) -> Result<AuthResult> {
-        todo!("jcode-sdk shim: submit_code")
+        Err(crate::freecode_session::unsupported("Jcode sign-in"))
     }
     pub fn complete_device(&self) -> Result<AuthResult> {
-        todo!("jcode-sdk shim: complete_device")
+        Err(crate::freecode_session::unsupported("Jcode sign-in"))
     }
 
     /// Whether `start` bound the OAuth redirect's loopback port. If false, use
     /// the prompt's manual input method. No listener is used for hosted redirects.
     pub fn has_callback_listener(&self) -> bool {
-        todo!("jcode-sdk shim: has_callback_listener")
+        false
     }
 
     /// Wait off the UI thread for a browser redirect and complete via the same
@@ -204,14 +207,14 @@ impl AuthFlow {
     /// Cancellation or manual completion interrupts the wait. Callback state is
     /// checked here before forwarding and validated again by the CLI.
     pub fn wait_for_callback(&self) -> Result<AuthResult> {
-        todo!("jcode-sdk shim: wait_for_callback")
+        Err(crate::freecode_session::unsupported("Jcode sign-in"))
     }
 
     /// Like `wait_for_callback`, but reports when a validated browser callback
     /// arrives, before the blocking token exchange. The callback runs on the
     /// calling worker thread and must not expose the private callback URL.
     pub fn wait_for_callback_with_progress(&self, received: impl FnOnce()) -> Result<AuthResult> {
-        todo!("jcode-sdk shim: wait_for_callback_with_progress")
+        Err(crate::freecode_session::unsupported("Jcode sign-in"))
     }
 
     fn complete(&self, operation: Operation, input: Option<&str>) -> Result<AuthResult> {
@@ -222,7 +225,7 @@ impl AuthFlow {
     /// only this flow's pending state. Safe to call concurrently through a clone.
     /// Cancellation is not logout and cannot roll back an already completed exchange.
     pub fn cancel(&self) -> Result<()> {
-        todo!("jcode-sdk shim: cancel")
+        Err(crate::freecode_session::unsupported("Jcode sign-in"))
     }
 }
 

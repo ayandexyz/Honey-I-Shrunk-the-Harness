@@ -373,7 +373,7 @@ impl Workspace {
                                     .id("pending-cloud-account")
                                     .debug_selector(|| "pending-cloud-account".into())
                                     .px_3().py_1().rounded_full().bg(theme.ACCENT_DIM)
-                                    .cursor_pointer().child("Jcode account")
+                                    .cursor_pointer().child("Honey account")
                                     .on_click(|_, _, cx| {
                                         cx.stop_propagation();
                                         cx.open_url("https://jcode.sh/account");
@@ -1032,7 +1032,7 @@ impl Workspace {
             );
         }
         picker.child(div().text_color(theme.TEXT_DIM)
-                .child("Uses your SSH config and keys. First connect in a terminal to trust the host and set up key access. Jcode must be installed on the remote machine."))
+                .child("Uses your SSH config and keys. First connect in a terminal to trust the host and set up key access. Honey must be installed on the remote machine."))
             .child(div().text_color(theme.TEXT_DIM)
                 .child("Remote panels start in the remote home. Folder browsing and terminal panels stay local."))
             .children(self.remotes.notice.as_ref().map(|notice| div()
@@ -1057,7 +1057,7 @@ impl Workspace {
         let cloud_status = host
             .as_deref()
             .is_some_and(managed_destination)
-            .then(|| "Your own machine, run by Jcode. Sleeps when idle.".to_owned());
+            .then(|| "Your own machine, run by Honey. Sleeps when idle.".to_owned());
         div()
             .px_2()
             .py_2()

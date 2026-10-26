@@ -162,7 +162,7 @@ impl Panel {
             SpecialCommand::Subscribe => {
                 // Composer dispatches OpenAccounts before pending-session handling.
                 // Direct callers still get useful subscription information, never a charge.
-                self.items.push(Item::Assistant("Subscribe through the native Accounts dialog: choose Jcode, review the plan, then explicitly confirm checkout. `/account` opens that dialog. No checkout or payment was started.".into()));
+                self.items.push(Item::Assistant("Subscribe through the native Accounts dialog: choose Honey, review the plan, then explicitly confirm checkout. `/account` opens that dialog. No checkout or payment was started.".into()));
             }
             SpecialCommand::SwarmPrompt => {
                 if crate::harness::remote_host(&self.session_id).is_some() {

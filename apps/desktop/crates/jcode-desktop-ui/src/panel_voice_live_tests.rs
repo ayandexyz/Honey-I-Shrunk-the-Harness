@@ -10,10 +10,10 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 #[gpui::test]
-#[ignore = "live Jev API: requires Jcode or Typesafe credentials and sends synthetic inference requests"]
+#[ignore = "live Jev API: requires Honey or Typesafe credentials and sends synthetic inference requests"]
 fn live_voice_transcript_to_jev_to_panel(cx: &mut gpui::TestAppContext) {
     let client = jcode_base::jev::JevClient::for_voice()
-        .expect("configure real Jcode or Typesafe credentials before opting into this test");
+        .expect("configure real Honey or Typesafe credentials before opting into this test");
     let provider = client.provider_name();
     let model = client.model_id();
     match provider {
@@ -74,11 +74,11 @@ fn live_voice_transcript_to_jev_to_panel(cx: &mut gpui::TestAppContext) {
 
     for (transcript, expected) in [
         (
-            "Open my existing Jcode conversation about orchid greenhouse irrigation planning",
+            "Open my existing Honey conversation about orchid greenhouse irrigation planning",
             VoiceIntent::OpenSession(sessions[0].session_id.clone()),
         ),
         (
-            "Start a new Jcode conversation",
+            "Start a new Honey conversation",
             VoiceIntent::QuickAction(voice_intent::QuickAction::NewSession),
         ),
         (

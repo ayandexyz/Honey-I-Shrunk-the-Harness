@@ -164,7 +164,7 @@ fn summarize(entries: &[Entry], seen: Seen) -> Summary {
         ),
         Seen::FirstVisit => (
             "Latest updates".into(),
-            "A quick look at what’s changed in Jcode Desktop.",
+            "A quick look at what’s changed in Honey Desktop.",
             entries.len(),
         ),
         Seen::OutsideHistory => (
@@ -219,7 +219,7 @@ fn release_version(raw: &str) -> Option<semver::Version> {
 
 fn overview(raw: &str, current: &str) -> Option<ReleaseOverview> {
     let mut result = ReleaseOverview {
-        title: format!("Jcode Desktop {}", current.trim().trim_start_matches('v')),
+        title: format!("Honey Desktop {}", current.trim().trim_start_matches('v')),
         release: current.trim().trim_start_matches('v').to_owned(),
         headline: None,
         notes_version: String::new(),
@@ -232,7 +232,7 @@ fn overview(raw: &str, current: &str) -> Option<ReleaseOverview> {
     if development {
         target.pre = semver::Prerelease::EMPTY;
         result.notes_version = target.to_string();
-        result.title = format!("Jcode Desktop {target} · Development preview");
+        result.title = format!("Honey Desktop {target} · Development preview");
         result.release = format!("{target} · Development preview");
     }
 
@@ -390,7 +390,7 @@ mod tests {
     fn overview_matches_only_the_requested_desktop_release() {
         let raw = "## What's new\n### Jcode Desktop 2.0.0\n- Future\n## Previous releases\n### Jcode Desktop 1.0.0\n- Current\nDownloads elsewhere.\n## Previous update\n- Unversioned";
         let notes = overview(raw, "v1.0.0+build.9").unwrap();
-        assert_eq!(notes.title, "Jcode Desktop 1.0.0+build.9");
+        assert_eq!(notes.title, "Honey Desktop 1.0.0+build.9");
         assert_eq!(
             notes.sections,
             vec![ReleaseSection {
@@ -413,17 +413,17 @@ mod tests {
         let raw = "### Jcode Desktop 1.0.0\n\nClearer navigation and richer feedback\n\n#### Highlights\n- Native panels\n\nDownloads elsewhere.";
         assert_eq!(
             overview(raw, "1.0.0").unwrap().title,
-            "Jcode Desktop 1.0.0 · Clearer navigation and richer feedback"
+            "Honey Desktop 1.0.0 · Clearer navigation and richer feedback"
         );
         assert_eq!(
             overview(raw, "1.0.0-dev.1").unwrap().title,
-            "Jcode Desktop 1.0.0 · Development preview · Clearer navigation and richer feedback"
+            "Honey Desktop 1.0.0 · Development preview · Clearer navigation and richer feedback"
         );
         assert_eq!(
             overview("### Jcode Desktop 1.0.0\n- Notes\nDownloads", "1.0.0")
                 .unwrap()
                 .title,
-            "Jcode Desktop 1.0.0"
+            "Honey Desktop 1.0.0"
         );
     }
 
@@ -431,7 +431,7 @@ mod tests {
     fn development_preview_matches_base_but_other_prereleases_are_exact() {
         let raw = "### Jcode Desktop 1.0.0\n- Stable\n### Jcode Desktop 1.0.0-beta.2\n- Beta";
         let preview = overview(raw, "1.0.0-dev.12+local").unwrap();
-        assert_eq!(preview.title, "Jcode Desktop 1.0.0 · Development preview");
+        assert_eq!(preview.title, "Honey Desktop 1.0.0 · Development preview");
         assert_eq!(preview.sections[0].entries, ["Stable"]);
         let beta = overview(raw, "1.0.0-beta.2").unwrap();
         assert_eq!(beta.sections[0].entries, ["Beta"]);

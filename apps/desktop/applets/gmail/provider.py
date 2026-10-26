@@ -425,7 +425,7 @@ class App:
 
         actions = [
             button("Open in Gmail", "host.open_url", "primary", "link", url=gmail_url(d["thread"])),
-            button("Ask Jcode", "host.start_chat", "secondary", "sparkles", prompt=self.agent_prompt(d)),
+            button("Ask Honey", "host.start_chat", "secondary", "sparkles", prompt=self.agent_prompt(d)),
         ]
         if can_modify():
             actions += [

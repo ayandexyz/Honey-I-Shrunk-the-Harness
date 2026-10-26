@@ -79,8 +79,8 @@ impl JcodeAccount {
     fn title(&self, show_email: bool) -> String {
         match (&self.email, self.signed_in) {
             (Some(email), true) if show_email => email.clone(),
-            (_, true) => "Jcode account".into(),
-            _ => "Sign in to Jcode".into(),
+            (_, true) => "Honey account".into(),
+            _ => "Sign in to Honey".into(),
         }
     }
 
@@ -285,7 +285,7 @@ mod tests {
             email: Some("ada@example.com".into()),
             plan: Some("Pro"),
         };
-        assert_eq!(account.title(false), "Jcode account");
+        assert_eq!(account.title(false), "Honey account");
         assert_eq!(account.initial(false), "J");
         assert!(
             !crate::config::DesktopConfig::default()
@@ -301,7 +301,7 @@ mod tests {
             email: Some("stale@example.com".into()),
             plan: None,
         };
-        assert_eq!(account.title(true), "Sign in to Jcode");
+        assert_eq!(account.title(true), "Sign in to Honey");
         assert_eq!(account.detail(), "Not signed in");
         assert_eq!(account.initial(true), "J");
     }

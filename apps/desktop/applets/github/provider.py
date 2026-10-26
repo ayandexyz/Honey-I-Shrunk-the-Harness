@@ -405,7 +405,7 @@ class App:
             close = []
         actions = hstack(
             button("Open on GitHub", "host.open_url", "primary", "link", url=url),
-            button("Ask Jcode", "host.start_chat", "secondary", "sparkles", prompt=self.agent_prompt(d, pr)),
+            button("Ask Honey", "host.start_chat", "secondary", "sparkles", prompt=self.agent_prompt(d, pr)),
             button("Copy link", "host.copy", "compact", text=url),
             *( [button("Approve", "approve", "compact", "check", url=url)] if pr and state == "open" and not mine else [] ),
             *close,

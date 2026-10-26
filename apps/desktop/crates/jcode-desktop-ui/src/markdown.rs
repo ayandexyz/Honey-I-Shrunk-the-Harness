@@ -898,7 +898,7 @@ const AVATAR_PREFIX: &str = "    ";
 fn assistant_avatar() -> impl IntoElement {
     gpui::svg()
         .debug_selector(|| "assistant-avatar".into())
-        .data(crate::accounts::logo("jcode").expect("vendored Jcode logo"))
+        .data(crate::accounts::logo("jcode").expect("vendored Honey logo"))
         .size(px(20.0))
         .text_color(Theme::global().TEXT)
 }

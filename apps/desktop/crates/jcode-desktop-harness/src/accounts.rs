@@ -119,7 +119,7 @@ impl BankedReset {
     }
 }
 
-pub const USAGE_ESTIMATE_NOTE: &str = "Recorded by Jcode. API-equivalent estimates, not your ChatGPT bill. Today starts at local midnight. Lifetime covers recorded history only.";
+pub const USAGE_ESTIMATE_NOTE: &str = "Recorded by Honey. API-equivalent estimates, not your ChatGPT bill. Today starts at local midnight. Lifetime covers recorded history only.";
 
 /// `extra_info` key carrying the CLI's quota fetch error for a login.
 pub const USAGE_ERROR_KEY: &str = "Usage error";
@@ -165,7 +165,7 @@ impl UsageReport {
             .find(|(key, _)| key == USAGE_ERROR_KEY)?;
         let lower = error.to_ascii_lowercase();
         Some(if lower.contains("429") || lower.contains("rate limit") {
-            "the provider's usage endpoint is rate limiting requests. Jcode will retry automatically".into()
+            "the provider's usage endpoint is rate limiting requests. Honey will retry automatically".into()
         } else if lower.contains("expired") || lower.contains("401") {
             "the login needs to be refreshed. Sign in again from Accounts".into()
         } else {
@@ -342,7 +342,7 @@ pub fn spawn() -> Feed {
         let accounts = [
             ("openai", "OpenAI", "available", "OAuth"),
             ("claude", "Claude", "available", "OAuth"),
-            ("jcode", "Jcode", "available", "API key"),
+            ("jcode", "Honey", "available", "API key"),
             ("gemini", "Gemini", "not_configured", "OAuth"),
             ("openrouter", "OpenRouter", "not_configured", "API key"),
             ("copilot", "Copilot", "expired", "device code"),
@@ -671,7 +671,7 @@ pub fn pretty_provider_name(provider: &str) -> String {
         "cursor" => "Cursor".into(),
         "bedrock" | "aws bedrock" | "aws-bedrock" => "Bedrock".into(),
         "xai" | "grok" => "xAI".into(),
-        "jcode" => "Jcode".into(),
+        "jcode" => "Honey".into(),
         _ => {
             // Keep unknown names readable, but drop the credential suffix.
             let len = base.len().min(provider.len());

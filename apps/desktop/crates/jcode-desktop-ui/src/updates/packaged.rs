@@ -97,7 +97,7 @@ fn run(requested: bool) {
         Ok(jcode_desktop_updater::Outcome::UpToDate { version }) => {
             if requested {
                 UpdateState::Finished {
-                    message: format!("Jcode Desktop {version} is up to date."),
+                    message: format!("Honey Desktop {version} is up to date."),
                 }
             } else {
                 UpdateState::Idle
@@ -114,7 +114,7 @@ fn run(requested: bool) {
         // Background failures stay quiet and retry later. A requested update
         // explains what went wrong.
         Err(failure) if requested => UpdateState::Failed {
-            message: format!("Jcode Desktop update failed: {failure}. Run /update to retry."),
+            message: format!("Honey Desktop update failed: {failure}. Run /update to retry."),
         },
         Err(failure) => {
             eprintln!("background desktop update failed at {}: {failure}", failure.stage);
@@ -139,7 +139,7 @@ pub(super) fn install_now() -> bool {
         Err(error) => {
             set(UpdateState::Failed {
                 message: format!(
-                    "Could not restart into the update ({error}). Quit and reopen Jcode Desktop to use it."
+                    "Could not restart into the update ({error}). Quit and reopen Honey Desktop to use it."
                 ),
             });
             false

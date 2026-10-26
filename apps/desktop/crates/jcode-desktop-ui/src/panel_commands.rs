@@ -75,7 +75,7 @@ impl Panel {
         }
         match command {
             "/version" if args.is_empty() => self.items.push(Item::Assistant(format!(
-                "Jcode Desktop {}\n\nRevision: `{}`\n\n{}\n\nPlatform: `{}/{}`",
+                "Honey Desktop {}\n\nRevision: `{}`\n\n{}\n\nPlatform: `{}/{}`",
                 crate::build_info::version(), crate::build_info::revision(), crate::build_info::age(),
                 std::env::consts::OS, std::env::consts::ARCH
             ))),
@@ -105,12 +105,12 @@ impl Panel {
             }
             "/transcript" if args.is_empty() => {
                 if crate::harness::remote_host(&self.session_id).is_some() {
-                    self.items.push(Item::Error("The session transcript lives on the remote host, not this Desktop. Use the remote terminal to access its Jcode sessions directory.".into()));
+                    self.items.push(Item::Error("The session transcript lives on the remote host, not this Desktop. Use the remote terminal to access its Honey sessions directory.".into()));
                 } else if valid_session_filename(&self.session_id) {
                     if let Some(home) = crate::harness::jcode_home() {
                         self.open_command_file(home.join("sessions").join(format!("{}.json", self.session_id)), "Session transcript", cx);
                     } else {
-                        self.items.push(Item::Error("Could not locate the Jcode sessions directory.".into()));
+                        self.items.push(Item::Error("Could not locate the Honey sessions directory.".into()));
                     }
                 } else {
                     self.items.push(Item::Error("The session has not received a persisted session ID yet.".into()));

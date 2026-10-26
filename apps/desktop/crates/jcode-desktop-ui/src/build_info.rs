@@ -114,7 +114,7 @@ impl Render for BuildTooltip {
             .text_size(px(11.))
             .text_color(theme.TEXT_DIM)
             .child(format!(
-                "Jcode Desktop · {}",
+                "Honey Desktop · {}",
                 if development() {
                     "Development build"
                 } else {

@@ -142,7 +142,7 @@ fn generate_changelog(
     }
     let curated = fs::read_to_string(root.join("CHANGELOG.md"))
         .expect("root CHANGELOG.md must be available for offline release notes");
-    let mut notes = format!("# Jcode Desktop v{version}\n\nBuild `{build_id}`\n\n{curated}");
+    let mut notes = format!("# Honey Desktop v{version}\n\nBuild `{build_id}`\n\n{curated}");
     notes.push_str("\n## Recent commits\n\nBuild-time history, not a complete list of changes since your last update.\n\n");
     match snapshot
         .map(|s| s.subjects.clone())

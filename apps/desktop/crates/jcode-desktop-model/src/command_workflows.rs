@@ -22,7 +22,7 @@ pub fn workflow_prompt(input: &str) -> Option<String> {
             "Triage this repository's new GitHub issues. Read the issue and repository context, identify duplicates, risks, and reproducible problems. Autonomously fix only safely scoped issues with evidence-backed regression tests. Preserve unrelated work. Ask before destructive actions or externally posting messages, closing issues, or changing labels. Report issues examined, changes made, validation, and deferred risks."
         }
         "/feedback" => {
-            "Help the user send feedback about Jcode using maintainer_feedback. If a description is supplied, prepare a concise self-contained report with reproducible details. Obtain approval before sharing user-originated feedback, and exclude secrets or private data. If no description is supplied, ask what feedback the user wants to share. Do not claim delivery without the tool's success."
+            "Help the user send feedback about Honey using maintainer_feedback. If a description is supplied, prepare a concise self-contained report with reproducible details. Obtain approval before sharing user-originated feedback, and exclude secrets or private data. If no description is supplied, ask what feedback the user wants to share. Do not claim delivery without the tool's success."
         }
         _ => return None,
     };

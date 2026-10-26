@@ -1,5 +1,10 @@
 # Jcode app icon
 
+> **freecode:** `icon-1024.png` is the Honey logo
+> (`apps/web2/public/logo2.png`, centred on a transparent 1024×1024 square),
+> not the Jcode donut below. `tests/test_brand_assets.py`'s render-from-SVG
+> check therefore fails by design (it only runs when `rsvg-convert` exists).
+
 The canonical desktop logo is `../icons/jcode.svg`: the website's 76-cell
 halftone donut, with 3,344 circle elements. The old traced-path SVG and
 50-cell app image have been replaced, not retained as alternate logos.

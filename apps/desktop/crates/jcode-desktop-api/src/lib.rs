@@ -287,7 +287,7 @@ impl PluginApi {
             Some("plugin GPUI revision differs from host")
         } else if self.shared_globals != shared_globals_fingerprint() {
             Some(
-                "plugin shared-global identity differs from host (jcode-desktop-api changed); restart Jcode Desktop",
+                "plugin shared-global identity differs from host (jcode-desktop-api changed); restart Honey Desktop",
             )
         } else if self.minimum_state_schema > self.state_schema {
             Some("plugin state schema range is invalid")

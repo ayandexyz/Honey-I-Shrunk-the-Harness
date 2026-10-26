@@ -373,7 +373,7 @@ impl Runtime {
         // Unit tests and offline fixtures never touch ~/.jcode or spawn
         // providers. They only queue, so a registering fake can satisfy it.
         if !cfg!(test) && !crate::harness::screenshot_mode() {
-            let dir = applets_dir().ok_or("no Jcode home directory")?;
+            let dir = applets_dir().ok_or("no Honey home directory")?;
             crate::bundled_applets::ensure(&dir, applet)
                 .map_err(|error| format!("could not install applet {applet}: {error}"))?;
             let local = discover(&dir)
@@ -818,7 +818,7 @@ else:
         for expected in [
             "pills → main",
             "lgtm",
-            "Ask Jcode",
+            "Ask Honey",
             "host.start_chat",
             "review required",
             "\"Approve\"",
@@ -966,7 +966,7 @@ import json, sys
 args = [a for a in sys.argv[1:] if not a.startswith("--json") and a != "--no-input"]
 cmd = args[1]
 if cmd == "metadata":
-    print(json.dumps({"title": "Jcode CRM", "sheets": [
+    print(json.dumps({"title": "Honey CRM", "sheets": [
         {"properties": {"title": "Contacts", "sheetId": 0}},
         {"properties": {"title": "Accounts", "sheetId": 7}}]}))
 elif cmd == "get":
@@ -1034,7 +1034,7 @@ else:
         wait("table card", &|r| doc(r).contains("Rhys Oxenham"));
         let card = doc(&runtime);
         for expected in [
-            "Jcode CRM · Contacts",
+            "Honey CRM · Contacts",
             "\"table\"",
             "Open in Sheets",
             "Accounts",

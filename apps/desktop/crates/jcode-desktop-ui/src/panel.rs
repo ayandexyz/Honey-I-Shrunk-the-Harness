@@ -167,7 +167,7 @@ fn command_unavailable_message(input: &str) -> String {
     let name = input.split_whitespace().next().unwrap_or(input);
     match registered_command(name) {
         Some(command) => format!(
-            "`{name}` is a Jcode command, but its {} behavior is not available in Desktop yet.",
+            "`{name}` is a Honey command, but its {} behavior is not available in Desktop yet.",
             command.help.to_ascii_lowercase()
         ),
         None => format!("Unknown command: `{name}`. Type `/help` for available commands."),
@@ -2171,15 +2171,15 @@ impl Panel {
                     let request = crate::updates::request_now();
                     let message = match request {
                         crate::updates::UpdateRequest::Checking =>
-                            "Checking for Jcode Desktop updates…",
+                            "Checking for Honey Desktop updates…",
                         crate::updates::UpdateRequest::AlreadyChecking =>
-                            "Jcode Desktop is already checking for updates.",
+                            "Honey Desktop is already checking for updates.",
                         crate::updates::UpdateRequest::Downloading =>
-                            "A Jcode Desktop update is downloading in the background.",
+                            "A Honey Desktop update is downloading in the background.",
                         crate::updates::UpdateRequest::Restarting =>
-                            "Installing the update and restarting Jcode Desktop…",
+                            "Installing the update and restarting Honey Desktop…",
                         crate::updates::UpdateRequest::Unavailable =>
-                            "Automatic updates are unavailable in this build of Jcode Desktop.",
+                            "Automatic updates are unavailable in this build of Honey Desktop.",
                     };
                     self.items.push(Item::Assistant(message.into()));
                     #[cfg(not(target_os = "macos"))]
@@ -2192,7 +2192,7 @@ impl Panel {
                                     crate::updates::UpdateState::Finished { message } => Some(Ok(message)),
                                     crate::updates::UpdateState::Failed { message } => Some(Err(message)),
                                     crate::updates::UpdateState::ReadyToRestart { version } => Some(Ok(format!(
-                                        "Jcode Desktop {version} is installed. Run `/update` again or click the update chip to restart into it now, or it starts the next time you open Jcode Desktop."
+                                        "Honey Desktop {version} is installed. Run `/update` again or click the update chip to restart into it now, or it starts the next time you open Honey Desktop."
                                     ))),
                                     crate::updates::UpdateState::Idle => break,
                                     _ => None,
@@ -2244,7 +2244,7 @@ impl Panel {
                             "Opened the publish tracker. Commit, push, release, and publish progress appears in its panel.".into(),
                         ),
                         None => Item::Error(
-                            "`/publish` is only available in Jcode Desktop self-development sessions.".into(),
+                            "`/publish` is only available in Honey Desktop self-development sessions.".into(),
                         ),
                     };
                     self.items.push(item);
@@ -2253,7 +2253,7 @@ impl Panel {
                     let restart_server = trimmed == "/restart-all";
                     self.items.push(match crate::restart_spawn::spawn_worker(restart_server) {
                         Ok(()) => Item::Assistant(if restart_server {
-                            "Restarting the Jcode server and every Desktop window. Windows, sessions, drafts, and layout come back in a few seconds.".into()
+                            "Restarting the Honey server and every Desktop window. Windows, sessions, drafts, and layout come back in a few seconds.".into()
                         } else {
                             "Restarting every Desktop window. Windows, sessions, drafts, and layout come back in a few seconds.".into()
                         }),
@@ -6157,7 +6157,7 @@ fn render_todo_card_with_style(
                 .py_1()
                 .text_size(px(12.0))
                 .text_color(Theme::global().TEXT_DIM)
-                .child("No tasks yet. Jcode will populate them as work is planned."),
+                .child("No tasks yet. Honey will populate them as work is planned."),
         );
     } else {
         for (group_index, (group, todos)) in groups.into_iter().enumerate() {
@@ -9180,7 +9180,7 @@ mod tests {
             assert!(matches!(
                 panel.items.last(),
                 Some(Item::Assistant(message))
-                    if message == "Automatic updates are unavailable in this build of Jcode Desktop."
+                    if message == "Automatic updates are unavailable in this build of Honey Desktop."
             ));
         });
         let bounds = vcx
@@ -9194,7 +9194,7 @@ mod tests {
             // path, with a deterministic platform callback rather than network IO.
             extern "C" fn current() {
                 crate::updates::set(crate::updates::UpdateState::Finished {
-                    message: "Jcode Desktop is already current.".into(),
+                    message: "Honey Desktop is already current.".into(),
                 });
             }
             extern "C" fn failed() {
@@ -9208,7 +9208,7 @@ mod tests {
             vcx.run_until_parked();
             panel.read_with(vcx, |panel, _| {
                 assert!(matches!(panel.items.last(), Some(Item::Assistant(message))
-                    if message == "Jcode Desktop is already current."));
+                    if message == "Honey Desktop is already current."));
             });
             unsafe { crate::updates::jcode_update_register_actions(failed, failed) };
             vcx.simulate_input("/update");

@@ -40,7 +40,7 @@ impl Panel {
             "pending",
         ];
         *self.items = vec![
-            Item::User("Commit, push, release, and publish Jcode Desktop.".into()),
+            Item::User("Commit, push, release, and publish Honey Desktop.".into()),
             Item::Todos(TodoCardPayload {
                 todos: STAGES
                     .iter()
@@ -77,9 +77,9 @@ impl Panel {
         let armed = self.publish_armed();
         let label = if armed { "Confirm publish" } else { "Publish" };
         let tooltip = if armed {
-            "Click again to commit, push, release, and publish Jcode Desktop"
+            "Click again to commit, push, release, and publish Honey Desktop"
         } else {
-            "Commit, push, release, and publish Jcode Desktop, tracked in a new panel"
+            "Commit, push, release, and publish Honey Desktop, tracked in a new panel"
         };
         let icon_color = if armed { theme.BG } else { theme.TEXT_DIM };
         Some(

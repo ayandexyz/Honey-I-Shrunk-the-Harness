@@ -148,7 +148,7 @@ impl Workspace {
             .and_then(|key| NariRecording::start_cancellable(attempt, &key))
         {
             Ok(recording) => {
-                eprintln!("global voice: recording for a focused Jcode CLI");
+                eprintln!("global voice: recording for a focused Honey CLI");
                 capture.recording = Some(recording);
             }
             Err(error) => {
@@ -213,7 +213,7 @@ impl Workspace {
                 let attempt = capture.attempt.clone();
                 // Length only. Never log transcript content.
                 eprintln!(
-                    "global voice: sending {} transcript chars to a Jcode CLI",
+                    "global voice: sending {} transcript chars to a Honey CLI",
                     text.chars().count()
                 );
                 let send = cx.background_executor().spawn(async move {

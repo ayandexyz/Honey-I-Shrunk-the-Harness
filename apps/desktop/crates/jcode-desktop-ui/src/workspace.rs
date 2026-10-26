@@ -295,7 +295,7 @@ const CORNER_RADIUS: f32 = 6.0;
 const PRESET_WIDTHS: [f32; 3] = [0.25, 0.5, 0.75];
 /// niri `default-column-width { proportion 0.5; }`.
 const DEFAULT_WIDTH: f32 = 0.5;
-const HELP_SESSION_PROMPT: &str = r#"Act as the in-app Jcode guide. Use the bundled Jcode documentation before answering questions about Jcode features or behavior.
+const HELP_SESSION_PROMPT: &str = r#"Act as the in-app Honey guide. Use the bundled Honey documentation before answering questions about Honey features or behavior.
 
 The jcode-desktop shortcuts are:
 - Super+H/J/K/L: navigate panels
@@ -320,7 +320,7 @@ Composer shortcuts ported from the TUI:
 - Ctrl/Cmd+Z and Ctrl+Shift+Z: undo and redo
 - Escape: clear the draft
 
-Start with a concise orientation, then invite me to ask how to use Jcode."#;
+Start with a concise orientation, then invite me to ask how to use Honey."#;
 
 /// [`HELP_SESSION_PROMPT`] plus a line naming Omarchy specifically when it is
 /// confirmed running, rather than the generic hedge the base prompt carries
@@ -5328,7 +5328,7 @@ impl Workspace {
             .is_some_and(|slot| slot.panel.read(cx).session_id.starts_with("ssh://"))
         {
             return div().debug_selector(|| "remote-file-browser-notice".into()).p_3().text_size(px(11.0)).text_color(Theme::global().TEXT_DIM)
-                .child("This panel runs on a remote machine. Ask Jcode to inspect its files in chat. The local file browser is available on local panels.")
+                .child("This panel runs on a remote machine. Ask Honey to inspect its files in chat. The local file browser is available on local panels.")
                 .into_any_element();
         }
         let root = self.file_browser_root(cx);
@@ -7107,7 +7107,7 @@ impl Workspace {
                                 .tooltip(|_, cx| {
                                     cx.new(|_| {
                                         remotes::HeaderTooltip(
-                                            "Opens Jcode pricing in your browser. Nothing is purchased here."
+                                            "Opens Honey pricing in your browser. Nothing is purchased here."
                                                 .into(),
                                         )
                                     })
@@ -7959,7 +7959,7 @@ impl Workspace {
                         this.new_help_session(&NewHelpSession, window, cx);
                     }),
                 )
-                .child("Ask Jcode about the app")
+                .child("Ask Honey about the app")
                 .child(
                     div()
                         .mt_1()
@@ -11943,7 +11943,7 @@ mod tests {
                 },
                 accounts::Account {
                     id: "jcode".into(),
-                    display_name: "Jcode".into(),
+                    display_name: "Honey".into(),
                     status: "expired".into(),
                     auth_kind: "API key".into(),
                     method: "API key (`JCODE_API_KEY`)".into(),
@@ -11982,14 +11982,14 @@ mod tests {
         );
         assert!(
             accounts::logo("jcode").is_some(),
-            "Jcode Subscription must use the donut logo, not a lettermark"
+            "Honey Subscription must use the donut logo, not a lettermark"
         );
         let openai_row = vcx
             .debug_bounds("account-openai")
             .expect("the OpenAI account row should have painted");
         let jcode_row = vcx
             .debug_bounds("account-jcode")
-            .expect("the Jcode account row and donut should have painted");
+            .expect("the Honey account row and donut should have painted");
         let first_limit = vcx
             .debug_bounds("account-openai-limit-0")
             .expect("the first usage limit should paint");
@@ -12053,7 +12053,7 @@ mod tests {
         );
         assert!(
             vcx.debug_bounds("folder-picker-overlay").is_some(),
-            "the picker should paint inside the Jcode window"
+            "the picker should paint inside the Honey window"
         );
 
         let root = std::env::temp_dir().join(format!(
@@ -13098,7 +13098,7 @@ mod tests {
 
     #[test]
     fn help_session_prompt_carries_docs_instruction_and_visible_hints() {
-        assert!(HELP_SESSION_PROMPT.contains("bundled Jcode documentation"));
+        assert!(HELP_SESSION_PROMPT.contains("bundled Honey documentation"));
         assert!(HELP_SESSION_PROMPT.contains("Super+H/J/K/L"));
         assert!(HELP_SESSION_PROMPT.contains("Super+/ or F1"));
         assert!(HELP_SESSION_PROMPT.contains("Super+Shift+/"));

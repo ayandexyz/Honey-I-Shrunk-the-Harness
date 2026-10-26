@@ -11,6 +11,9 @@ use crate::theme::Theme;
 
 #[path = "activity_donut.rs"]
 mod donut;
+// freecode: Honey's idle mark replaces the donut.
+#[path = "activity_honey.rs"]
+mod honey;
 
 const MORPH_DURATION: Duration = Duration::from_millis(350);
 const TICK: Duration = Duration::from_nanos(33_333_334);
@@ -134,7 +137,7 @@ impl Spinner {
     fn prepare(&mut self, reduce_motion: bool) {
         if self.geometry_dirty || self.reduced_motion != Some(reduce_motion) {
             if self.activity == Activity::Idle {
-                donut::draw_donut_into(SIZE, 0.6, &mut self.target_frame);
+                honey::draw_honey_into(SIZE, &mut self.target_frame);
             } else {
                 draw_mode_into(
                     self.resolved.mode,

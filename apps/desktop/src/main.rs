@@ -202,7 +202,7 @@ impl Render for HostFallback {
             .justify_center()
             .bg(gpui::rgb(0x111318))
             .text_color(gpui::rgb(0xe5e7eb))
-            .child("Starting Jcode Desktop…")
+            .child("Starting Honey Desktop…")
     }
 }
 
@@ -566,7 +566,7 @@ fn main() {
     // `--version` and `--update` too, so they describe what actually runs.
     jcode_desktop_ui::update_entry::redirect_to_newer_install_if_present();
     if env::args_os().any(|argument| argument == "--version" || argument == "-V") {
-        println!("Jcode Desktop {}", jcode_desktop_ui::build_version());
+        println!("Honey Desktop {}", jcode_desktop_ui::build_version());
         return;
     }
     // `--update` runs the same updater the app uses, without a window, so CI
@@ -588,7 +588,7 @@ fn main() {
     if let Some(command) = env::args_os().find_map(|argument| voice_cli_command(&argument)) {
         if let Err(error) = instance::notify_named(instance_name.as_deref(), command.clone()) {
             eprintln!(
-                "could not send desktop voice command {command:?}: {error}. Start an updated Jcode Desktop host first."
+                "could not send desktop voice command {command:?}: {error}. Start an updated Honey Desktop host first."
             );
             std::process::exit(1);
         }
@@ -613,7 +613,7 @@ fn main() {
     };
     let (commands, instance_socket) =
         match instance::acquire_named(instance_name.as_deref(), requested_command)
-            .expect("initialize Jcode Desktop instance socket")
+            .expect("initialize Honey Desktop instance socket")
         {
             Instance::Primary { commands, _socket } => (commands, _socket),
             Instance::Secondary => return,
@@ -670,7 +670,7 @@ fn main() {
                 },
                 |_, cx| cx.new(|_| HostFallback),
             )
-            .expect("failed to open native Jcode Desktop window");
+            .expect("failed to open native Honey Desktop window");
 
         let host = Rc::new(HostState::default());
         let manager = Rc::new(RefCell::new(
@@ -838,10 +838,10 @@ fn main() {
         manager
             .borrow_mut()
             .activate_initial(cx)
-            .expect("activate linked Jcode Desktop UI");
+            .expect("activate linked Honey Desktop UI");
         if let Some(path) = plugin_path.as_ref() {
             eprintln!(
-                "Jcode Desktop hot reload enabled: Ctrl+R rebuilds and reloads the latest UI from {}; Ctrl+Shift+R does the same; F6 rolls back",
+                "Honey Desktop hot reload enabled: Ctrl+R rebuilds and reloads the latest UI from {}; Ctrl+Shift+R does the same; F6 rolls back",
                 path.display()
             );
             // Make the linked generation interactive immediately. The current

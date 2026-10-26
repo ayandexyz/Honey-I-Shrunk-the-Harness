@@ -298,7 +298,7 @@ fn stale_socket_notice_is_short_and_copies_the_raw_error(cx: &mut gpui::TestAppC
         let notice = notices(panel);
         assert_eq!(
             notice[0].detail,
-            "Can't reach the Jcode runtime. The response may still be running."
+            "Can't reach the Honey runtime. The response may still be running."
         );
     });
     vcx.run_until_parked();

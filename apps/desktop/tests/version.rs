@@ -2,7 +2,7 @@
 #[test]
 fn version_flags_work_without_a_display_or_runtime() {
     let scratch = tempfile::tempdir().unwrap();
-    let expected = format!("Jcode Desktop {}\n", jcode_desktop_ui::build_version());
+    let expected = format!("Honey Desktop {}\n", jcode_desktop_ui::build_version());
     for flag in ["--version", "-V"] {
         let output = std::process::Command::new(env!("CARGO_BIN_EXE_jcode-desktop"))
             .env_clear()

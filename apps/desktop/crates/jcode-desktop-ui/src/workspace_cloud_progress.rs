@@ -7,11 +7,11 @@ use std::time::{Duration, Instant};
 use crate::theme::Theme;
 
 const LABELS: [&str; 5] = [
-    "Jcode account",
+    "Honey account",
     "Cloud machine",
-    "Jcode installed",
+    "Honey installed",
     "Secure connection",
-    "Jcode session",
+    "Honey session",
 ];
 
 #[derive(Clone, Default, Debug)]

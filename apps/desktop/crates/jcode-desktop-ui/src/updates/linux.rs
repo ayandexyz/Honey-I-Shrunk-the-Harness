@@ -34,7 +34,7 @@ pub(super) fn start() {
                 Ok(message) => UpdateState::Finished { message },
                 Err(error) => UpdateState::Failed {
                     message: format!(
-                        "Jcode Desktop update failed: {error:#}. Run /update to retry."
+                        "Honey Desktop update failed: {error:#}. Run /update to retry."
                     ),
                 },
             });
@@ -63,7 +63,7 @@ fn update() -> Result<String> {
             );
         }
         request_reload(&socket_path(&args))?;
-        return Ok("Requested Jcode Desktop's Ctrl+R rebuild-and-reload of the current checkout. This does not fetch Git changes or update the CLI. The current window stays open. Build and activation results are recorded in the desktop log.".into());
+        return Ok("Requested Honey Desktop's Ctrl+R rebuild-and-reload of the current checkout. This does not fetch Git changes or update the CLI. The current window stays open. Build and activation results are recorded in the desktop log.".into());
     }
     bail!("not a source checkout")
 }

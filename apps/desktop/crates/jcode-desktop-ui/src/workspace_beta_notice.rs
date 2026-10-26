@@ -114,7 +114,7 @@ impl Workspace {
                             .text_size(px(13.0))
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .text_color(theme.TEXT)
-                            .child("Jcode Desktop is in beta testing"),
+                            .child("Honey Desktop is in beta testing"),
                     )
                     .child(
                         div()

@@ -55,7 +55,7 @@ impl Portable {
         }
         ensure!(
             writable(&dir),
-            "Jcode Desktop's folder {} is not writable. Move the Jcode folder somewhere you own, then update again",
+            "Honey Desktop's folder {} is not writable. Move the Honey folder somewhere you own, then update again",
             dir.display()
         );
         Ok(Self { dir })
