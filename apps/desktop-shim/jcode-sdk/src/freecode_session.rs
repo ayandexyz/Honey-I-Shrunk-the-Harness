@@ -208,6 +208,37 @@ pub(crate) fn compact(inner: &Inner, session_id: &str) -> Result<String> {
     Ok(result.as_str().map(str::to_string).unwrap_or_default())
 }
 
+/// `None` clears back to core's generated "Session <id>" placeholder.
+/// core's `session.rename` always resolves to a concrete display string (it
+/// never leaves a session titleless), so there is no "generated, no explicit
+/// title" case to represent — `title` on the synthesized event always
+/// mirrors `display_title`. `session.rename` is a plain request/reply, not a
+/// stream event, so the shim publishes `SessionRenamed` itself once core
+/// confirms the write; that's what lets the sidebar and panel header update
+/// live without a full session-list refresh.
+pub(crate) fn rename_session(inner: &Inner, session_id: &str, title: Option<String>) -> Result<()> {
+    let mut params = json!({ "sessionId": session_id });
+    if let Some(title) = &title {
+        params["title"] = json!(title);
+    }
+    let result = call(inner, "session.rename", params)?;
+    let display_title = result
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or(session_id)
+        .to_string();
+    publish(
+        inner,
+        ApiEvent::SessionRenamed {
+            session_id: session_id.to_string(),
+            title: Some(display_title.clone()),
+            display_title,
+        },
+        Some(session_id),
+    );
+    Ok(())
+}
+
 /// `provider:model` (the desktop's explicit-route form) or a bare model id on
 /// the current provider. Core's model is per process, not per session.
 pub(crate) fn set_model(inner: &Inner, model: &str) -> Result<()> {

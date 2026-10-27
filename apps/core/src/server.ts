@@ -1877,6 +1877,16 @@ export const methodHandlers: Record<
     await endSessionOnce(sessionId, "archive");
   },
 
+  "session.rename": async (
+    params: Record<string, unknown>,
+  ): Promise<{ title: string }> => {
+    const { sessionId, title } = params as { sessionId: string; title?: string };
+    const manager = await getSessionManager();
+    const display = await manager.rename(sessionId, title);
+    BusEvents.stream(sessionId, { type: "session_renamed", title: display });
+    return { title: display };
+  },
+
   "session.delete": async (params: Record<string, unknown>): Promise<void> => {
     const { sessionId, purge } = params as {
       sessionId: string;

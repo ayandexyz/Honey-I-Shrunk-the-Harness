@@ -165,6 +165,9 @@ export type StreamEvent =
   // A steer reached the model: it is now a persisted user message with this
   // id. The UI promotes the queued row to a normal user message.
   | { type: "message_steered"; sessionId?: string; id: string; content: string }
+  // session.rename committed a new title — always a resolved display string,
+  // never empty (clearing falls back to the "Session <id>" placeholder).
+  | { type: "session_renamed"; sessionId?: string; title: string }
   // Core started a turn that no session.send is waiting on: a queued
   // follow-up drained after the previous turn, or a task notification on an
   // idle session. Without it the frontend never knew a turn was running — no
@@ -797,6 +800,10 @@ export const METHODS = {
     params: { sessionId: "" },
     result: undefined as void,
   },
+  "session.rename": {
+    params: {} as { sessionId: string; title?: string },
+    result: {} as { title: string },
+  },
   // `purge` also removes the session's on-disk artifacts; without it the
   // record is marked deleted and the files stay.
   "session.delete": {
@@ -931,6 +938,7 @@ export const REQUIRED_PARAMS: Record<
   "session.rewindPreview": { sessionId: "string", entryId: "string" },
   "session.rewind": { sessionId: "string", entryId: "string" },
   "session.archive": { sessionId: "string" },
+  "session.rename": { sessionId: "string" },
   "session.delete": { sessionId: "string" },
   "session.getInterrupted": {},
   "session.export": { sessionId: "string" },

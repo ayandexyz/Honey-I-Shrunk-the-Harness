@@ -171,6 +171,14 @@ export class SessionManager {
     await this.sessionStore.updateStatus(sessionId, "archived");
   }
 
+  // Rename a session. `title` undefined clears back to the default
+  // "Session <id>" placeholder session.start gives every new session.
+  async rename(sessionId: string, title?: string): Promise<string> {
+    const display = title?.trim() || `Session ${sessionId}`;
+    await this.sessionStore.updateMeta(sessionId, { title: display });
+    return display;
+  }
+
   // Delete a session. `purge` also removes the transcript files from disk
   // (default: mark deleted, keep files — recoverable, but a transcript can
   // hold file contents and command output someone wants gone for good).

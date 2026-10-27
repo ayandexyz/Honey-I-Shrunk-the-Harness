@@ -808,7 +808,7 @@ impl JcodeClient {
 
     /// Set a session's title. `None` restores the generated one.
     pub fn rename_session(&self, session_id: &str, title: Option<String>) -> Result<()> {
-        Err(crate::freecode_session::unsupported("rename_session"))
+        crate::freecode_session::rename_session(&self.inner, session_id, title)
     }
 
     /// Bookmark or unbookmark a session. A label also becomes its title.
