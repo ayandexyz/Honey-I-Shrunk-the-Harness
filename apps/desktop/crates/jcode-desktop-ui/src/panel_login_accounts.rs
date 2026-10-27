@@ -13,6 +13,17 @@ const MULTI_ACCOUNT: [&str; 2] = ["openai", "claude"];
 /// Asking for an unknown label makes the CLI allocate the next free one.
 const NEW_ACCOUNT_LABEL: &str = "new";
 
+/// Which half of the Accounts panel is showing: logins already connected,
+/// or providers not connected yet. Shown as two pills side by side, so a
+/// long provider catalog does not bury a short connected list (or vice
+/// versa) under one long scroll.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum AccountsTab {
+    #[default]
+    Connected,
+    NotConnected,
+}
+
 #[derive(Default)]
 pub(super) struct AccountsData {
     pub accounts: Option<Vec<Account>>,
@@ -1181,78 +1192,204 @@ impl Panel {
                 .map(|row| row.key.clone())
                 .collect::<Vec<_>>(),
         );
+        // "Addable" providers already have at least one connected login, so
+        // they live on the Connected tab (as "add another account") rather
+        // than beside providers with zero connections.
+        let connected_count = groups.pooled.len() + groups.manual.len();
+        let not_connected_count = groups.available.len();
+        let active = state.accounts_tab;
+
         let mut out = Vec::new();
-        if !groups.pooled.is_empty() || !groups.manual.is_empty() {
-            out.push(self.render_account_group(
-                "login-group-auto",
-                "Auto-switch",
-                "The first account is the default for new sessions. The rest take over in order when one runs out or fails. Drag the ≡ handle or use ↑ ↓ to reorder.",
-                &groups.pooled,
-                true,
-                &visible,
-                cx,
-            ));
-            out.push(self.render_account_group(
-                "login-group-manual",
-                "Manual",
-                "Never switched to automatically. Used only when you pick it.",
-                &groups.manual,
-                false,
-                &visible,
-                cx,
-            ));
-        }
-        if !groups.available.is_empty() || !groups.addable.is_empty() {
-            let mut section = div()
-                .debug_selector(|| "login-group-available".into())
-                .flex()
-                .flex_col()
-                .gap_2()
-                .p_2()
-                .child(
-                    div()
-                        .px_2()
-                        .text_size(px(12.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child("Connect an account"),
-                );
-            if !groups.addable.is_empty() {
-                let mut adds = div().flex().flex_wrap().gap_2().px_1();
-                for provider in groups.addable {
-                    let id = format!("login-add-{}", provider.id);
-                    adds = adds.child(
+        out.push(self.render_accounts_tabs(active, connected_count, not_connected_count, cx));
+
+        match active {
+            AccountsTab::Connected => {
+                if connected_count == 0 && groups.addable.is_empty() {
+                    out.push(
                         div()
-                            .id(SharedString::from(id.clone()))
-                            .debug_selector(move || id.clone())
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .px_3()
-                            .py_1p5()
-                            .rounded_full()
-                            .bg(theme.ACCENT.opacity(0.16))
-                            .text_color(theme.ACCENT)
+                            .debug_selector(|| "login-connected-empty".into())
+                            .p_2()
                             .text_size(px(12.))
-                            .cursor_pointer()
-                            .hover(|el| el.bg(theme.ACCENT.opacity(0.26)))
-                            .child(format!("+ Another {} account", provider.display_name))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.select_login_provider_for(
-                                    provider,
-                                    Some(NEW_ACCOUNT_LABEL.into()),
-                                    cx,
-                                )
-                            })),
+                            .text_color(theme.TEXT_DIM)
+                            .child("No connected accounts yet. Switch to Not connected to add one.")
+                            .into_any_element(),
                     );
+                } else {
+                    out.push(self.render_account_group(
+                        "login-group-auto",
+                        "Auto-switch",
+                        "The first account is the default for new sessions. The rest take over in order when one runs out or fails. Drag the ≡ handle or use ↑ ↓ to reorder.",
+                        &groups.pooled,
+                        true,
+                        &visible,
+                        cx,
+                    ));
+                    out.push(self.render_account_group(
+                        "login-group-manual",
+                        "Manual",
+                        "Never switched to automatically. Used only when you pick it.",
+                        &groups.manual,
+                        false,
+                        &visible,
+                        cx,
+                    ));
+                    if !groups.addable.is_empty() {
+                        let mut adds = div()
+                            .debug_selector(|| "login-group-addable".into())
+                            .flex()
+                            .flex_wrap()
+                            .gap_2()
+                            .p_2();
+                        for provider in groups.addable {
+                            let id = format!("login-add-{}", provider.id);
+                            adds = adds.child(
+                                div()
+                                    .id(SharedString::from(id.clone()))
+                                    .debug_selector(move || id.clone())
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .px_3()
+                                    .py_1p5()
+                                    .rounded_full()
+                                    .bg(theme.ACCENT.opacity(0.16))
+                                    .text_color(theme.ACCENT)
+                                    .text_size(px(12.))
+                                    .cursor_pointer()
+                                    .hover(|el| el.bg(theme.ACCENT.opacity(0.26)))
+                                    .child(format!("+ Another {} account", provider.display_name))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.select_login_provider_for(
+                                            provider,
+                                            Some(NEW_ACCOUNT_LABEL.into()),
+                                            cx,
+                                        )
+                                    })),
+                            );
+                        }
+                        out.push(adds.into_any_element());
+                    }
                 }
-                section = section.child(adds);
             }
-            for row in &groups.available {
-                section = section.child(self.render_account_row(row, None, &visible, None, cx));
+            AccountsTab::NotConnected => {
+                if not_connected_count == 0 {
+                    out.push(
+                        div()
+                            .debug_selector(|| "login-not-connected-empty".into())
+                            .p_2()
+                            .text_size(px(12.))
+                            .text_color(theme.TEXT_DIM)
+                            .child("Every provider is connected.")
+                            .into_any_element(),
+                    );
+                } else {
+                    let mut section = div()
+                        .debug_selector(|| "login-group-available".into())
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .p_2()
+                        .child(
+                            div()
+                                .px_2()
+                                .text_size(px(12.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child("Connect an account"),
+                        );
+                    for row in &groups.available {
+                        section =
+                            section.child(self.render_account_row(row, None, &visible, None, cx));
+                    }
+                    out.push(section.into_any_element());
+                }
             }
-            out.push(section.into_any_element());
         }
         out
+    }
+
+    fn render_accounts_tabs(
+        &self,
+        active: AccountsTab,
+        connected_count: usize,
+        not_connected_count: usize,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let theme = Theme::global();
+        let connected_selected = active == AccountsTab::Connected;
+        let connected_tab = div()
+            .id("login-tab-connected")
+            .debug_selector(|| "login-tab-connected".into())
+            .flex_1()
+            .flex()
+            .items_center()
+            .justify_center()
+            .px_3()
+            .py_1p5()
+            .rounded_full()
+            .cursor_pointer()
+            .text_size(px(12.))
+            .font_weight(if connected_selected {
+                FontWeight::SEMIBOLD
+            } else {
+                FontWeight::NORMAL
+            })
+            .when(connected_selected, |el| {
+                el.bg(theme.ACCENT.opacity(0.16)).text_color(theme.ACCENT)
+            })
+            .when(!connected_selected, |el| {
+                el.text_color(theme.TEXT_DIM)
+                    .hover(|el| el.bg(theme.PANEL_BORDER))
+            })
+            .child(format!("Connected ({connected_count})"))
+            .on_click(cx.listener(|this, _, _, cx| {
+                if let Some(state) = this.login.as_mut() {
+                    state.accounts_tab = AccountsTab::Connected;
+                }
+                cx.notify();
+            }));
+        let not_connected_selected = !connected_selected;
+        let not_connected_tab = div()
+            .id("login-tab-not-connected")
+            .debug_selector(|| "login-tab-not-connected".into())
+            .flex_1()
+            .flex()
+            .items_center()
+            .justify_center()
+            .px_3()
+            .py_1p5()
+            .rounded_full()
+            .cursor_pointer()
+            .text_size(px(12.))
+            .font_weight(if not_connected_selected {
+                FontWeight::SEMIBOLD
+            } else {
+                FontWeight::NORMAL
+            })
+            .when(not_connected_selected, |el| {
+                el.bg(theme.ACCENT.opacity(0.16)).text_color(theme.ACCENT)
+            })
+            .when(!not_connected_selected, |el| {
+                el.text_color(theme.TEXT_DIM)
+                    .hover(|el| el.bg(theme.PANEL_BORDER))
+            })
+            .child(format!("Not connected ({not_connected_count})"))
+            .on_click(cx.listener(|this, _, _, cx| {
+                if let Some(state) = this.login.as_mut() {
+                    state.accounts_tab = AccountsTab::NotConnected;
+                }
+                cx.notify();
+            }));
+        div()
+            .debug_selector(|| "login-accounts-tabs".into())
+            .flex_none()
+            .flex()
+            .gap_1()
+            .p_1()
+            .rounded_full()
+            .bg(theme.PANEL_BORDER.opacity(0.4))
+            .child(connected_tab)
+            .child(not_connected_tab)
+            .into_any_element()
     }
 }
 

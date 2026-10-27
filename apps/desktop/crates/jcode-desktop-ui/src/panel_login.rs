@@ -49,6 +49,7 @@ pub(super) struct LoginState {
     usage: Option<catalog::MethodUsage>,
     accounts: accounts::AccountsData,
     accounts_task: Option<Task<()>>,
+    accounts_tab: accounts::AccountsTab,
     /// Provider ids with a live smoke test in flight.
     live_testing: std::collections::HashSet<String>,
     /// A "Test all" run is in flight.
@@ -182,6 +183,7 @@ impl Panel {
             usage: None,
             accounts: accounts::AccountsData::default(),
             accounts_task: None,
+            accounts_tab: accounts::AccountsTab::default(),
             live_testing: Default::default(),
             live_test_all: false,
             live_errors: HashMap::new(),
