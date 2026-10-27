@@ -13,6 +13,10 @@ pub(crate) struct SessionState {
     reasoning_open: bool,
     pub(crate) cancel_requested: bool,
     pub(crate) turn_open: bool,
+    /// `BackgroundProgress.label` for a running background shell/subagent,
+    /// keyed by `shellId`/`agentId` — `shell_output`/`agent_output` carry no
+    /// label of their own, so the start event's is remembered here.
+    background_labels: HashMap<String, String>,
 }
 
 pub(crate) type States = HashMap<String, SessionState>;
@@ -170,6 +174,36 @@ pub(crate) fn translate(states: &mut States, line: &Value) -> Vec<(ApiEvent, Str
                 });
             }
         }
+        "shell_start" => {
+            let label = format!("$ {}", text("command"));
+            state.background_labels.insert(text("shellId"), label.clone());
+            out.push(background_progress(&session_id, text("shellId"), label, "Running".into(), false));
+        }
+        "shell_output" => {
+            let task_id = text("shellId");
+            let label = state.background_labels.get(&task_id).cloned().unwrap_or_default();
+            out.push(background_progress(&session_id, task_id, label, last_line(&text("chunk")), false));
+        }
+        "shell_exit" => {
+            let task_id = text("shellId");
+            let label = state.background_labels.remove(&task_id).unwrap_or_default();
+            out.push(background_progress(&session_id, task_id, label, exit_summary(&text("status")), true));
+        }
+        "agent_start" => {
+            let label = format!("{}: {}", text("agentType"), text("task"));
+            state.background_labels.insert(text("agentId"), label.clone());
+            out.push(background_progress(&session_id, text("agentId"), label, "Running".into(), false));
+        }
+        "agent_output" => {
+            let task_id = text("agentId");
+            let label = state.background_labels.get(&task_id).cloned().unwrap_or_default();
+            out.push(background_progress(&session_id, task_id, label, last_line(&text("chunk")), false));
+        }
+        "agent_exit" => {
+            let task_id = text("agentId");
+            let label = state.background_labels.remove(&task_id).unwrap_or_default();
+            out.push(background_progress(&session_id, task_id, label, exit_summary(&text("status")), true));
+        }
         "compaction_start" => out.push(status(&session_id, "compacting")),
         "compaction_complete" => {
             let now = if state.turn_open { "running" } else { "idle" };
@@ -195,6 +229,46 @@ pub(crate) fn failure(session_id: &str, message: String) -> Vec<ApiEvent> {
         },
         status(session_id, "idle"),
     ]
+}
+
+fn background_progress(
+    session_id: &str,
+    task_id: String,
+    label: String,
+    summary: String,
+    done: bool,
+) -> ApiEvent {
+    ApiEvent::BackgroundProgress {
+        session_id: session_id.to_string(),
+        task_id,
+        label,
+        percent: None,
+        summary,
+        done,
+    }
+}
+
+/// jcode's `summary` is a one-line status; core's shell/agent output chunks
+/// can carry several lines and trailing whitespace. Last non-empty line,
+/// trimmed, stands in for a live tail — same compromise the TUI's shells
+/// panel makes with `shell_output`.
+fn last_line(chunk: &str) -> String {
+    chunk
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("Running")
+        .to_string()
+}
+
+fn exit_summary(status: &str) -> String {
+    match status {
+        "completed" => "Done".into(),
+        "failed" => "Failed".into(),
+        "killed" => "Killed".into(),
+        other => other.into(),
+    }
 }
 
 pub(crate) fn status(session_id: &str, status: &str) -> ApiEvent {
@@ -292,6 +366,30 @@ mod tests {
                 if reason == "harness: prefix rewritten"
         ));
         assert_eq!(events.len(), 1);
+    }
+
+    #[test]
+    fn background_shell_progress_keeps_label_across_output_and_exit() {
+        let events = run(&[
+            json!({"type":"shell_start","sessionId":"s","shellId":"sh1","command":"pnpm test","cwd":"/repo"}),
+            json!({"type":"shell_output","sessionId":"s","shellId":"sh1","chunk":"ok 1 passed\n"}),
+            json!({"type":"shell_exit","sessionId":"s","shellId":"sh1","status":"completed","exitCode":0}),
+        ]);
+        assert!(matches!(
+            &events[0],
+            ApiEvent::BackgroundProgress { task_id, label, done: false, .. }
+                if task_id == "sh1" && label == "$ pnpm test"
+        ));
+        assert!(matches!(
+            &events[1],
+            ApiEvent::BackgroundProgress { label, summary, done: false, .. }
+                if label == "$ pnpm test" && summary == "ok 1 passed"
+        ));
+        assert!(matches!(
+            &events[2],
+            ApiEvent::BackgroundProgress { label, summary, done: true, .. }
+                if label == "$ pnpm test" && summary == "Done"
+        ));
     }
 
     #[test]
