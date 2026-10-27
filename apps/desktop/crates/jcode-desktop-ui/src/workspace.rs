@@ -852,6 +852,7 @@ pub struct Workspace {
     accounts_scroll_remainder: f32,
     accounts_layout_pending: bool,
     accounts_tab: AccountsSidebarTab,
+    accounts_search: Entity<PromptInput>,
     /// Review and redemption of one login's banked usage reset.
     usage_reset: Option<usage_reset::Dialog>,
     status: String,
@@ -1083,6 +1084,7 @@ impl Workspace {
         });
 
         let _ = window;
+        let accounts_search = Self::new_accounts_search(cx);
         let mut workspace = Self {
             window_background: None,
             global_voice: Default::default(),
@@ -1170,6 +1172,7 @@ impl Workspace {
             accounts_scroll_remainder: 0.0,
             accounts_layout_pending: true,
             accounts_tab: AccountsSidebarTab::default(),
+            accounts_search,
             usage_reset: None,
             status: "starting...".into(),
             connected: false,
@@ -1477,6 +1480,7 @@ impl Workspace {
     #[cfg(test)]
     pub fn for_test(coach: learning::Coach, cx: &mut Context<Self>) -> Self {
         crate::input::bind_keys(cx);
+        let accounts_search = Self::new_accounts_search(cx);
         Self {
             window_background: None,
             global_voice: Default::default(),
@@ -1556,6 +1560,7 @@ impl Workspace {
             accounts_scroll_remainder: 0.0,
             accounts_layout_pending: true,
             accounts_tab: AccountsSidebarTab::default(),
+            accounts_search,
             usage_reset: None,
             status: "test".into(),
             connected: true,
@@ -1968,6 +1973,21 @@ impl Workspace {
             self.folder_search = Some(search);
         }
         self.restore_workspace_live_views(cx);
+    }
+
+    /// A no-`self` constructor: the sidebar Accounts search box is created
+    /// once, before the struct literal that becomes `self` exists.
+    fn new_accounts_search(cx: &mut Context<Self>) -> Entity<PromptInput> {
+        let weak = cx.weak_entity();
+        cx.new(|cx| {
+            let mut input = PromptInput::new(cx, "Search accounts…", |_, _, _, _| {})
+                .without_command_completion()
+                .with_on_change(move |_, app| {
+                    let _ = weak.update(app, |_, cx| cx.notify());
+                });
+            input.set_submission_enabled(false, cx);
+            input
+        })
     }
 
     fn create_folder_search(&self, cx: &mut Context<Self>) -> Entity<PromptInput> {
@@ -6840,8 +6860,19 @@ impl Workspace {
             return None;
         }
 
-        let connected_count = self.accounts.iter().filter(|a| a.available()).count();
-        let not_connected_count = self.accounts.len() - connected_count;
+        let query = self.accounts_search.read(cx).content.trim().to_lowercase();
+        let matches_query =
+            |account: &accounts::Account| query.is_empty() || account.display_name.to_lowercase().contains(&query);
+        let connected_count = self
+            .accounts
+            .iter()
+            .filter(|a| a.available() && matches_query(a))
+            .count();
+        let not_connected_count = self
+            .accounts
+            .iter()
+            .filter(|a| !a.available() && matches_query(a))
+            .count();
         let tab = self.accounts_tab;
 
         let section = div()
@@ -6859,6 +6890,14 @@ impl Workspace {
                     .text_size(px(10.0))
                     .text_color(Theme::global().TEXT_DIM)
                     .child("accounts"),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "accounts-search".into())
+                    .flex_none()
+                    .mx_4()
+                    .mb_1()
+                    .child(self.accounts_search.clone()),
             )
             .child(self.render_accounts_tabs(tab, connected_count, not_connected_count, cx));
 
@@ -6901,7 +6940,7 @@ impl Workspace {
                 .enumerate()
         {
             let available = account.available();
-            if available != (tab == AccountsSidebarTab::Connected) {
+            if available != (tab == AccountsSidebarTab::Connected) || !matches_query(&account) {
                 continue;
             }
             let ink = if available {
