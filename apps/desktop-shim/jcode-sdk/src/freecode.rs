@@ -15,7 +15,7 @@ use crate::client::{Inner, Subscriber, event_session};
 use crate::errors::{Error, ErrorKind, Result};
 use jcode_harness_api::{ApiEvent, SessionInfo};
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -327,18 +327,43 @@ pub(crate) fn list_sessions(inner: &Inner, limit: Option<u32>) -> Result<Vec<Ses
     if let Some(limit) = limit {
         sessions.truncate(limit as usize);
     }
-    sessions.into_iter().map(session_info).collect()
+    // Best-effort: a failed/old-core call just means no session shows as
+    // "running" this refresh, not a broken list.
+    let running = active_ids(inner).unwrap_or_default();
+    sessions
+        .into_iter()
+        .map(|session| session_info_with_activity(session, &running))
+        .collect()
+}
+
+/// Session ids with a turn in flight right now (`session.activeIds`,
+/// 2026-10-27). Older cores lack the method; callers treat that the same as
+/// "nothing running" rather than failing the whole list.
+fn active_ids(inner: &Inner) -> Result<HashSet<String>> {
+    let result = call(inner, "session.activeIds", json!({}))?;
+    Ok(result
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect())
 }
 
 pub(crate) fn session_info(session: &Value) -> Result<SessionInfo> {
+    session_info_with_activity(session, &HashSet::new())
+}
+
+fn session_info_with_activity(session: &Value, running: &HashSet<String>) -> Result<SessionInfo> {
     let status = session.get("status").and_then(Value::as_str).unwrap_or("active");
-    // jcode's status is runtime activity; freecode's is lifecycle. A listed
-    // freecode session is never mid-turn from this client's view.
+    let id = session.get("id").and_then(Value::as_str).unwrap_or_default();
+    // jcode's status is runtime activity; freecode's is lifecycle, so a
+    // mid-turn session is surfaced from `session.activeIds`, not this field.
     let info = json!({
         "session_id": session.get("id"),
         "title": session.get("title"),
         "working_dir": session.get("projectPath"),
-        "status": "idle",
+        "status": if running.contains(id) { "running" } else { "idle" },
         "archived": status == "archived",
         "updated_at_ms": session.get("updatedAt"),
         "last_active_at_ms": session.get("lastTurnAt"),
@@ -392,6 +417,14 @@ mod tests {
         assert_eq!(info.status, "idle");
         assert!(info.archived);
         assert_eq!(info.updated_at_ms, Some(2000));
+    }
+
+    #[test]
+    fn session_info_reports_running_only_for_an_active_id() {
+        let session = json!({"id": "s1", "status": "active"});
+        let running = HashSet::from(["s1".to_string()]);
+        assert_eq!(session_info_with_activity(&session, &running).unwrap().status, "running");
+        assert_eq!(session_info_with_activity(&session, &HashSet::new()).unwrap().status, "idle");
     }
 
     #[test]

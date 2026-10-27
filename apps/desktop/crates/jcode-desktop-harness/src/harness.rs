@@ -140,6 +140,13 @@ pub enum Update {
         session_id: String,
         state: Option<jcode_sdk::todo::TodoSnapshot>,
     },
+    /// Reply to `Command::PeekHistory`. `Err` covers both a transport
+    /// failure and an unknown session id — the UI shows the same notice
+    /// either way.
+    PeekHistory {
+        session_id: String,
+        result: Result<(Vec<jcode_sdk::HistoryMessage>, Vec<jcode_sdk::RenderedImage>), String>,
+    },
     /// A per-session connection died.
     SessionLost {
         session_id: String,
@@ -234,6 +241,13 @@ pub enum Command {
     /// Read the session's todo state for the auto-poke/quality-gate policy.
     /// Answered with `Update::TodoState`.
     TodoState {
+        session_id: String,
+    },
+    /// Read-only transcript fetch for the resume picker's preview. Never
+    /// attaches or watches the session — a one-shot call on a detached
+    /// thread, so browsing many sessions never spins up a running worker
+    /// per row.
+    PeekHistory {
         session_id: String,
     },
     /// Apply the persistent effects of a follow-up decision.
@@ -1067,6 +1081,14 @@ fn run_with_transports(
                     SessionCommand::TodoState,
                     |session_id| spawn_session_worker(session_id, &updates, &transports),
                 );
+            }
+            Command::PeekHistory { session_id } => {
+                let updates = updates.clone();
+                let transports = transports.clone();
+                std::thread::Builder::new()
+                    .name("jcode-bridge-peek".into())
+                    .spawn(move || peek_history_detached(session_id, updates, transports))
+                    .expect("spawn peek worker");
             }
             Command::AckTodoFollowUp {
                 session_id,
@@ -1946,6 +1968,29 @@ fn set_saved_detached(
             let _ = updates.send(Update::Status(format!("Could not {verb} session: {error}")));
         }
     }
+}
+
+/// Fetch a session's transcript for the resume picker preview without
+/// attaching or watching it — a bare `get_history_with_images` call on a
+/// throwaway client handle (the shim shares one core process, so this is
+/// cheap even for a remote host's fresh connection).
+fn peek_history_detached(
+    session_id: String,
+    updates: UpdateSender,
+    transports: transport::RemoteTransports,
+) {
+    let result = (|| -> Result<(Vec<jcode_sdk::HistoryMessage>, Vec<jcode_sdk::RenderedImage>), String> {
+        let address = remote::SessionAddress::parse(&session_id).map_err(|e| e.to_string())?;
+        let client = match &address.host {
+            Some(host) => transports.connect(host),
+            None => connect("peek"),
+        }
+        .map_err(|error| error.to_string())?;
+        client
+            .get_history_with_images(address.session_id.as_str())
+            .map_err(|error| error.to_string())
+    })();
+    let _ = updates.send(Update::PeekHistory { session_id, result });
 }
 
 /// One session's dedicated API connection, including an adopted client's reconnect.

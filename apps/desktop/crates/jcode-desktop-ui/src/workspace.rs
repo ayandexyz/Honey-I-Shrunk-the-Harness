@@ -2485,6 +2485,9 @@ impl Workspace {
                     }
                 }
             }
+            Update::PeekHistory { session_id, result } => {
+                self.apply_resume_preview(session_id, result, cx);
+            }
             Update::EffortSettled {
                 session_id,
                 effort,

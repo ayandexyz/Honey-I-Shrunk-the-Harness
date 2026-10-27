@@ -381,6 +381,14 @@ export const METHODS = {
     },
     result: [] as import("../types.js").SessionMeta[],
   },
+  // Session ids with a turn in flight right now, across every project —
+  // core's own `activeLoops`/`startingTurns`, no disk read. `session.list`'s
+  // `status` is lifecycle (active/archived/deleted), not runtime activity,
+  // so a frontend wanting a "working now" badge needs this alongside it.
+  "session.activeIds": {
+    params: {} as Record<string, never>,
+    result: [] as string[],
+  },
   "session.resume": {
     // agentMode seeds the resumed session's mode (else "build"); a mode sent
     // with a later session.send still overrides it per turn.

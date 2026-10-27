@@ -272,6 +272,46 @@ never comes from upstream is this `jcode-sdk` shim.
      opt-out, `JCODE_NO_TELEMETRY=1`. Found because the isolated home grew
      `telemetry_*` files; one test run before the flag did send a version
      ping (`telemetry_version_sent` = 0.99.1).
+   - **✅ DONE 2026-10-27 — resume-picker preview** (`workspace_resume.rs`):
+     `load_preview_history` read `jcode_base::session` off disk directly
+     (always empty against the redirected `JCODE_HOME`). Replaced with a
+     real round trip: new `Command::PeekHistory`/`Update::PeekHistory` in
+     the harness bridge (`harness.rs`), backed by a one-shot detached
+     thread calling the shim's `get_history_with_images` (no `attach`, so
+     browsing rows never spins up a running worker per session — matches
+     the file's own "never attach/watch a runtime just to browse" rule).
+   - **✅ DONE 2026-10-27 — "Working" badge was permanently dead**:
+     `session_info` in the shim hardcoded `"status": "idle"` ("a listed
+     freecode session is never mid-turn from this client's view") because
+     core's `session.list` only ever reported lifecycle status, never
+     runtime activity, so the picker's and sidebar's "Working" liveness
+     depended entirely on jcode's on-disk streaming-presence markers —
+     which freecode never wrote, before or after the `JCODE_HOME`
+     redirect. Fixed at the source: new core method **`session.activeIds`**
+     (`server.ts`, reads the existing `activeLoops`/`startingTurns` maps,
+     no disk) and the shim's `list_sessions` now cross-references it,
+     reporting `"running"` for a session with a turn in flight. An
+     older/unresponsive core degrades to "nothing running," never a
+     failed list. `workspace_resume.rs`'s `streaming_sessions()` and
+     `workspace.rs`'s `daemon_running_sessions()` (jcode's old presence-file
+     polls) are now provably redundant with this and were already
+     returning nothing against freecode either way — left in place as
+     inert, not touched, since removing them is cleanup, not a fix.
+   - **Still open, deliberately not touched this pass** — both are
+     perf/UX niceties, not correctness bugs (the authoritative data still
+     loads via `session.resume`/`attach_session`); fixing them means
+     parsing freecode's own `~/.freecode/sessions/<proj>/<id>/messages.jsonl`
+     format, which is new code, not a client-call swap:
+     - `panel.rs::prefetch_persisted_history` — the "paint the transcript
+       instantly while the runtime attaches" quick-paint. Its on-disk
+       existence check always misses for a freecode session, so it just
+       skips the fast path and waits for the real attach — slower first
+       paint, not wrong data.
+     - `resume_content_search.rs` — transcript keyword search in the
+       resume picker. Reads jcode's journal format; against freecode
+       sessions it always scans nothing, so search silently degrades to
+       title/folder/ID matching only (metadata search, from `filtered_sessions`
+       in `workspace_resume.rs`, still works).
 7. **✅ COMPLETE 2026-10-27** — smoke test: real session, real streaming
    reply, through the GPU UI. See step 4's "Verified live in the GPUI
    window" note.
@@ -466,8 +506,8 @@ needs its signature to compile; it never needs a real body.
 | `create_session_with_options` | 0 | `session.start` | no `system_prompt` override in freecode | stub — signature only |
 | `attach_session` | 3 | `session.resume` | close | ✅ done |
 | `detach_session` | 2 | — | freecode has no attach state; no-op | ✅ done |
-| `list_sessions_limited` | 1 | `session.list` | no `limit` param on freecode — truncate in shim | ✅ done |
-| `list_sessions` | 0 | `session.list` | — | ✅ done |
+| `list_sessions_limited` | 1 | `session.list` + `session.activeIds` (new, 2026-10-27) | no `limit` param on freecode — truncate in shim; `status` is `"running"` for any id `session.activeIds` reports mid-turn, else `"idle"` (freecode's own status is lifecycle-only) | ✅ done |
+| `list_sessions` | 0 | `session.list` + `session.activeIds` | same running-status cross-reference | ✅ done |
 | `archive_session` | 0 | `session.archive` | — | stub — signature only |
 | `fork_session` | 2 | `session.fork` | close | ✅ done |
 | `transfer_session` | 1 | `session.fork` + `session.resume` + `session.compact` | **not** "move a session between daemons" as earlier noted — upstream's own doc comment is "create a fresh session containing a runtime-compacted handoff, parent unchanged," i.e. fork + compact the clone. freecode has no single op for that, so the shim does fork → resume (registers the clone in memory, since `compact` needs `getSession` to find it) → compact; replies `SessionForked` like a plain fork. **Found and fixed in the same pass**: `fork_session`'s existing "done" row was silently broken — `session.fork`'s reply is a bare id string, not an object, so `session_info()` on it failed to deserialize (`session_id` is a required field); both now go through a shared `fork()` helper that extracts the string first | ✅ done |
@@ -483,7 +523,7 @@ needs its signature to compile; it never needs a real body.
 | `set_reasoning_effort` | 2 (+1 `managed_cloud_parity.rs`) | `session.setReasoningEffort` (new, 2026-10-27) | sticky per-session override, same precedence as `session.send`'s own `effort` field (`server.ts`'s `session.effort = effort`) but settable without sending a turn | ✅ done |
 | `list_models` | 0 | `models.list` | models reach desktop through `RuntimeInfo.routes`, not this | stub — signature only |
 | `get_runtime_info` | 2 | `config.get` + `models.list` | must assemble `RuntimeInfo { provider, model, reasoning_effort, auth_method, routes: Vec<ModelRouteInfo> }` | ✅ done |
-| `get_history_with_images` | 1 | `session.tree` (previews only) | needs full messages as `HistoryMessage` + `RenderedImage` — likely a new IPC method | ✅ done |
+| `get_history_with_images` | 1 | `session.resume` | row text was stale (said "needs a new IPC method"); the real implementation is `freecode_session::history`, a bare `session.resume` call, reused by `attach_session`'s cache and (2026-10-27) by `harness.rs`'s `Command::PeekHistory` for the resume picker's read-only preview — no attach needed, see Phase 6 | ✅ done |
 | `get_history` | 0 | — | — | ✅ done |
 | `rewind` | 1 | `session.rewind` | `message_index` treated as a plain index into `session.tree`'s array (its `id` at that position becomes `entryId`); the pre-rewind active leaf is remembered for `rewind_undo` | ✅ done |
 | `rewind_undo` | 1 | `session.rewind` (same method, forward) | "undo" is just `session.rewind` back to the leaf recorded before the last `rewind` on this client — one level, matching jcode's own doc ("restore the history **the last** rewind removed", not a stack). Errors cleanly if nothing was rewound since the last undo | ✅ done |

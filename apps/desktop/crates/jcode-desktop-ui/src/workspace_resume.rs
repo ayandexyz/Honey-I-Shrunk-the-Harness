@@ -922,30 +922,50 @@ impl Workspace {
         state.preview_id = Some(id.to_owned());
         state.preview = None;
         let id = id.to_owned();
-        let requested_id = id.clone();
-        let request = cx
-            .background_executor()
-            .spawn(async move { load_preview_history(&id) });
-        // Replacing this task cancels the previous selection's UI delivery.
-        state.preview_task = Some(cx.spawn(async move |this, cx| {
-            let result = request.await;
-            let _ = this.update(cx, |this, cx| {
-                let current = this
-                    .resume
-                    .as_ref()
-                    .is_some_and(|state| state.preview_id.as_ref() == Some(&requested_id));
-                if !current {
-                    return;
-                }
-                let preview = result.map(|(messages, images)| {
-                    preview_panel(requested_id.clone(), messages, images, cx)
-                });
-                if let Some(state) = this.resume.as_mut() {
-                    state.preview = Some(preview);
-                }
-                cx.notify();
-            });
-        }));
+        if harness::screenshot_mode()
+            && std::env::var_os("JCODE_DESKTOP_SCREENSHOT_RESUME_FIXTURE").is_some()
+            && id.starts_with("resume-fixture-")
+        {
+            let (messages, images) = fixture_history(&id);
+            if let Some(state) = self.resume.as_mut() {
+                state.preview = Some(Ok(preview_panel(id, messages, images, cx)));
+            }
+            return;
+        }
+        if !crate::persisted_history::is_local_session_id(&id) {
+            // Reject path components and remote IDs rather than asking the
+            // bridge to resolve something outside a plain session id.
+            if let Some(state) = self.resume.as_mut() {
+                state.preview = Some(Err(
+                    "Preview unavailable for this session. Resume to load its conversation."
+                        .into(),
+                ));
+            }
+            return;
+        }
+        self.bridge.send(Command::PeekHistory { session_id: id });
+        cx.notify();
+    }
+
+    /// Fill in a preview once `Command::PeekHistory`'s reply arrives.
+    /// Dropped (not applied) if the selection moved on in the meantime.
+    pub(super) fn apply_resume_preview(
+        &mut self,
+        session_id: String,
+        result: Result<PreviewHistory, String>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(state) = self.resume.as_mut() else {
+            return;
+        };
+        if state.preview_id.as_deref() != Some(session_id.as_str()) {
+            return;
+        }
+        let preview = result.map(|(messages, images)| preview_panel(session_id, messages, images, cx));
+        if let Some(state) = self.resume.as_mut() {
+            state.preview = Some(preview);
+        }
+        cx.notify();
     }
 
     pub(super) fn init_resume_fixture(&mut self, cx: &App) {
@@ -1051,42 +1071,26 @@ fn preview_panel(
     })
 }
 
-/// Read only: never attach/watch a runtime just to browse its conversation.
-fn load_preview_history(id: &str) -> Result<PreviewHistory, String> {
-    if harness::screenshot_mode()
-        && std::env::var_os("JCODE_DESKTOP_SCREENSHOT_RESUME_FIXTURE").is_some()
-        && id.starts_with("resume-fixture-")
-    {
-        let message = |role: &str, content: String| jcode_sdk::HistoryMessage {
-            response_stats: None,
-            role: role.into(),
-            content,
-        };
-        let name = if id.ends_with("alpha") {
-            "Alpha"
-        } else {
-            "Beta"
-        };
-        return Ok((
-            vec![
-                message("user", "Please recover the standalone conversation.".into()),
-                message(
-                    "assistant",
-                    format!(
-                        "**{name}** conversation preview\n\n- rendered with the chat panel\n- `markdown` included"
-                    ),
+/// Offline fixture rows for `--screenshot`'s resume-picker demo sessions.
+fn fixture_history(id: &str) -> PreviewHistory {
+    let message = |role: &str, content: String| jcode_sdk::HistoryMessage {
+        response_stats: None,
+        role: role.into(),
+        content,
+    };
+    let name = if id.ends_with("alpha") { "Alpha" } else { "Beta" };
+    (
+        vec![
+            message("user", "Please recover the standalone conversation.".into()),
+            message(
+                "assistant",
+                format!(
+                    "**{name}** conversation preview\n\n- rendered with the chat panel\n- `markdown` included"
                 ),
-            ],
-            Vec::new(),
-        ));
-    }
-    // Reject path components and remote IDs rather than reading outside local storage.
-    if id.is_empty() || id.contains(['/', '\\']) || id == "." || id == ".." {
-        return Err(
-            "Preview unavailable for this session. Resume to load its conversation.".into(),
-        );
-    }
-    crate::persisted_history::load(id)
+            ),
+        ],
+        Vec::new(),
+    )
 }
 
 #[cfg(test)]
@@ -1224,7 +1228,7 @@ mod tests {
             "..",
             "foo\\bar",
         ] {
-            assert!(load_preview_history(id).is_err(), "{id}");
+            assert!(!crate::persisted_history::is_local_session_id(id), "{id}");
         }
     }
 
@@ -1481,10 +1485,14 @@ mod tests {
             );
             w.apply(harness::Update::Connected, cx);
             assert_eq!(w.resume_snapshot(cx), expected);
-            assert!(
-                commands.try_recv().is_err(),
-                "reload must not create or attach a session"
-            );
+            // A preview fetch for the restored selection is fine; creating or
+            // attaching a session is not.
+            while let Ok(command) = commands.try_recv() {
+                assert!(
+                    matches!(command, Command::PeekHistory { .. }),
+                    "reload must not create or attach a session"
+                );
+            }
         });
         vcx.run_until_parked();
         workspace.read_with(vcx, |w, _| {
@@ -1493,7 +1501,12 @@ mod tests {
                 Some("selected-session")
             );
         });
-        assert!(commands.try_recv().is_err());
+        while let Ok(command) = commands.try_recv() {
+            assert!(
+                matches!(command, Command::PeekHistory { .. }),
+                "reload must not create or attach a session"
+            );
+        }
     }
 
     #[gpui::test]

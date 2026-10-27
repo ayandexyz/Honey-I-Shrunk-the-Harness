@@ -1679,6 +1679,10 @@ export const methodHandlers: Record<
     return manager.list({ projectPath, status });
   },
 
+  "session.activeIds": async (): Promise<string[]> => {
+    return [...new Set([...activeLoops.keys(), ...startingTurns])];
+  },
+
   "session.resume": async (
     params: Record<string, unknown>,
   ): Promise<unknown> => {
