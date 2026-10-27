@@ -84,6 +84,7 @@ impl ResetProvider {
 }
 
 impl BankedReset {
+    #[cfg(any(test, feature = "test-support"))]
     fn parse(value: &serde_json::Value) -> Option<Self> {
         let provider = match value.get("provider")?.as_str()? {
             "openai" => ResetProvider::OpenAi,
@@ -453,8 +454,10 @@ fn shared_poller() -> &'static Poller {
 }
 
 pub fn fetch() -> Option<Vec<Account>> {
+    // ponytail: freecode has no `usage --json` yet (see MIGRATION_JCODE_CLI.md),
+    // so accounts show auth status only, no quota/limits, until it exists.
     let output = crate::platform::no_console_window(&mut std::process::Command::new(
-        crate::platform::companion_executable("jcode"),
+        crate::platform::companion_executable("freecode"),
     ))
     .args(["auth", "status", "--json"])
     .output()
@@ -462,17 +465,7 @@ pub fn fetch() -> Option<Vec<Account>> {
     if !output.status.success() {
         return None;
     }
-    let mut accounts = parse(&String::from_utf8_lossy(&output.stdout))?;
-    if let Ok(output) = crate::platform::no_console_window(&mut std::process::Command::new(
-        crate::platform::companion_executable("jcode"),
-    ))
-    .args(["usage", "--json"])
-    .output()
-        && output.status.success()
-    {
-        merge_usage(&mut accounts, &String::from_utf8_lossy(&output.stdout));
-    }
-    Some(accounts)
+    parse(&String::from_utf8_lossy(&output.stdout))
 }
 
 /// Parse the complete CLI catalog, with connected providers first.
@@ -512,6 +505,9 @@ pub fn merge_usage_for_tests(accounts: &mut [Account], json: &str) {
 
 /// Merge the usage command's provider reports into the canonical auth rows.
 /// The usage schema predates stable provider ids, so names are normalized here.
+/// No production caller since `fetch()` dropped `usage --json` (freecode has
+/// no equivalent yet, see MIGRATION_JCODE_CLI.md) — kept test-only.
+#[cfg(any(test, feature = "test-support"))]
 fn merge_usage(accounts: &mut [Account], json: &str) {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
         return;
@@ -586,6 +582,7 @@ fn merge_usage(accounts: &mut [Account], json: &str) {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn usage_provider_matches(account: &Account, provider_name: &str) -> bool {
     let name = provider_name.to_ascii_lowercase();
     match account.id.as_str() {

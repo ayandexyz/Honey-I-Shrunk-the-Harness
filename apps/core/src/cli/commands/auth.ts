@@ -13,10 +13,13 @@ import * as readline from "readline";
 import { spawn } from "child_process";
 import {
   anthropicAuthMode,
+  authModeFor,
+  hasApiKey,
   openaiAuthMode,
   setApiKey,
   setProviderAuthMode,
 } from "../../providers/config.js";
+import { resolveCatalogue } from "../../providers/catalogue.js";
 import {
   deleteAnthropicOAuth,
   deleteOpenAIOAuth,
@@ -251,10 +254,49 @@ async function loginOpenAI(browser: boolean): Promise<void> {
   }
 }
 
-const statusCommand: CommandModule = {
+/**
+ * The full catalogue as `{ id, display_name, status, auth_kind, method }`
+ * rows, connected providers first — the shape the desktop app's account
+ * panel expects from `jcode auth status --json` (accounts.rs `parse()`).
+ */
+function statusReport(): { providers: Array<Record<string, string>> } {
+  const providers = resolveCatalogue().map((entry) => {
+    const mode = authModeFor(entry.id);
+    const configured = hasApiKey(entry.id);
+    const authKind = mode === "oauth" ? "OAuth" : "API key";
+    const method = !configured
+      ? ""
+      : mode === "oauth"
+        ? "OAuth (subscription)"
+        : entry.envKeys.find((key) => Boolean(process.env[key]))
+          ? `API key (\`${entry.envKeys[0]}\`)`
+          : "API key";
+    return {
+      id: entry.id,
+      display_name: entry.name,
+      status: configured ? "available" : "not_configured",
+      auth_kind: authKind,
+      method,
+    };
+  });
+  providers.sort((a, b) => Number(a.status !== "available") - Number(b.status !== "available"));
+  return { providers };
+}
+
+const statusCommand: CommandModule<object, { json: boolean }> = {
   command: "status",
   describe: "show how each provider authenticates",
-  handler: () => {
+  builder: (yargs) =>
+    yargs.option("json", {
+      type: "boolean",
+      default: false,
+      describe: "print the full provider catalogue as JSON",
+    }) as never,
+  handler: (argv) => {
+    if (argv.json) {
+      console.log(JSON.stringify(statusReport()));
+      return;
+    }
     const mode = anthropicAuthMode();
     const stored = readAnthropicOAuth();
     console.log(`anthropic  auth mode: ${mode}`);
