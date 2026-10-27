@@ -335,7 +335,7 @@ interface TurnInput {
   model?: string;
   effort?: EffortLevel;
   agentMode?: "plan" | "build" | "review" | "explore" | "danger";
-  synthetic?: "task_notification";
+  synthetic?: "task_notification" | "context";
   /** Set when core starts the turn itself — see the `turn_started` event. */
   origin?: "queued" | "notification";
   queuedId?: string;
@@ -916,6 +916,46 @@ export const methodHandlers: Record<
       model: currentModel,
       effort: currentEffort,
       agentMode,
+    });
+  },
+
+  // Hidden continuation: the harness talking, not the user — persisted as
+  // `synthetic: "context"` (same kind memory/todo/reminder injection uses),
+  // so it never shows in history, is never mined for memories, and never
+  // sources a title. Unlike session.send, there is no accept-wait or queue:
+  // a reminder sent while a turn is active is simply refused, since the
+  // only production callers (jcode's turn-retry/crash-recovery) send one
+  // only once they've confirmed the session is idle.
+  "session.sendSystemReminder": async (
+    params: Record<string, unknown>,
+  ): Promise<unknown> => {
+    const { sessionId, reminder } = params as {
+      sessionId: string;
+      reminder: string;
+    };
+    const session = getSession(sessionId);
+    if (!session) {
+      throw new Error(`Session not found: ${sessionId}`);
+    }
+    if (activeLoops.has(sessionId) || startingTurns.has(sessionId)) {
+      throw new Error(
+        `Session ${sessionId} is busy; cannot send a hidden reminder mid-turn.`,
+      );
+    }
+    const { provider: currentProvider, model: currentModel } =
+      resolveProviderModel(session, undefined);
+    if (!currentProvider) {
+      throw new Error(
+        "No provider configured. Pick one with /model, or set current.provider " +
+          "in ~/.freecode/config.json.",
+      );
+    }
+    return runSessionTurn(session, {
+      prompt: reminder,
+      provider: currentProvider,
+      model: currentModel,
+      effort: session.effort,
+      synthetic: "context",
     });
   },
 

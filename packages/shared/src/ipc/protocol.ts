@@ -818,6 +818,14 @@ export const METHODS = {
     params: {} as { sessionId: string; saved: boolean; label?: string },
     result: {} as { title?: string },
   },
+  // Hidden continuation: runs a full turn but is persisted as
+  // `synthetic: "context"`, so it never appears in history, is never mined
+  // for memories, and never sources a title. Refused outright while the
+  // session is already mid-turn — unlike session.send, there is no queue.
+  "session.sendSystemReminder": {
+    params: {} as { sessionId: string; reminder: string },
+    result: {} as unknown,
+  },
   // `purge` also removes the session's on-disk artifacts; without it the
   // record is marked deleted and the files stay.
   "session.delete": {
@@ -955,6 +963,7 @@ export const REQUIRED_PARAMS: Record<
   "session.rename": { sessionId: "string" },
   "session.setReasoningEffort": { sessionId: "string", effort: "string" },
   "session.setSaved": { sessionId: "string", saved: "boolean" },
+  "session.sendSystemReminder": { sessionId: "string", reminder: "string" },
   "session.delete": { sessionId: "string" },
   "session.getInterrupted": {},
   "session.export": { sessionId: "string" },

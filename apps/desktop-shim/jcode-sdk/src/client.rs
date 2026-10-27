@@ -617,7 +617,7 @@ impl JcodeClient {
     /// Submit a hidden continuation without a user transcript row or accept wait.
     /// The caller, not the bridge, decides when recovery is appropriate.
     pub fn send_system_reminder(&self, session_id: &str, reminder: &str) -> Result<()> {
-        Err(crate::freecode_session::unsupported("send_system_reminder"))
+        crate::freecode_session::send_system_reminder(&self.inner, session_id, reminder)
     }
 
     /// Send a user message.

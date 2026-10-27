@@ -243,7 +243,7 @@ never comes from upstream is this `jcode-sdk` shim.
    remotes and managed cloud (nothing in freecode backs them); replace the
    "Sign in to Jcode" footer and login picker with freecode's own provider
    and auth state (`freecode auth login`). The remaining "decide" rows
-   (rewind undo, system reminder, transfer) are the same kind of extra.
+   (rewind undo, transfer) are the same kind of extra.
 6. **IN PROGRESS** — fix UI fallout file by file.
    - **Jcode's on-disk state (Phase 1 finding 4), fixed without upstream
      edits**: every reader honours `JCODE_HOME` — the harness's
@@ -460,7 +460,7 @@ needs its signature to compile; it never needs a real body.
 | `transfer_session` | 1 | — | **gap** (move a session between daemons) | unsupported error — decide: error or cut |
 | `send_message_with_reminder` | 1 | `session.send` | jcode fires, then the harness waits for `MessageAccepted` on the event stream; freecode's `session.send` streams and resolves with the turn. Shim emits a synthetic `MessageAccepted` first | ✅ done |
 | `send_message` | 0 (tests only) | `session.send` | — | ✅ done |
-| `send_system_reminder` | 2 | — | **gap**; closest is a `synthetic: "context"` message, not exposed over IPC | unsupported error — decide |
+| `send_system_reminder` | 2 | `session.sendSystemReminder` (new, 2026-10-27) | `{sessionId, reminder}`; runs a real turn persisted as `synthetic: "context"` (hidden from history/title/memory, same kind the harness's own memory/todo/reminder injection uses), refused outright if the session is already mid-turn — no accept-wait or queue, matching the two production callers (turn-retry, crash-recovery), which only call this once they've confirmed the session is idle | ✅ done |
 | `soft_interrupt_with_images` | 1 | `session.send` `streamingBehavior: "steer"` | images not supported in freecode's steer | ✅ done |
 | `cancel` | 14* | `session.stop` | close | ✅ done |
 | `compact` | 1 | `session.compact` | close | ✅ done |
@@ -511,7 +511,7 @@ match. Ordered by use.
 | `RuntimeCommandResult` | 2 | — | built by the harness from `runtime_command`'s reply | cut — follows `runtime_command`, which is itself cut (stub returns error), so this event can never fire against freecode |
 | `SessionForked` | 1 | `session.fork` | ✅ done — `fork_session` publishes it right after the reply, carrying the same `SessionInfo` it returns |
 | `Attached` | 1 | `session.resume` / `session.start` | ✅ done — `attach_session`/`create_session` publish it after their reply, so the sound-state machine resets (`live_turn`/`cancelled`/`error_reported`) on (re)attach |
-| `SessionRecovery` | 1 | — | **gap**: jcode's server-owned crash-continuation directive, consumed via `client.send_system_reminder` — which freecode has no IPC for (see `send_system_reminder` row). No freecode concept of a daemon-detected interrupted-turn continuation to source this from | cut — would need `send_system_reminder` built first |
+| `SessionRecovery` | 1 | — | **gap**: jcode's server-owned crash-continuation directive. `send_system_reminder` (its consumer) is now built, but freecode's daemon has no equivalent of jcode's crash-detection — no event to source a `SessionRecovery` from in the first place | cut — the consumer is ready; there's still nothing on the freecode side to produce this event |
 | `AppletState` | 1 | — | jcode's agent-applet UI primitive | cut — applets are cut |
 | `PermissionRequest` | 1 (sound only) | `permission_asked` | answered by the freecode approve card (`panel_permission_card.rs`) | ✅ done |
 | `Compacted` | 0 | `compaction_complete` | routed, never consumed | cut |

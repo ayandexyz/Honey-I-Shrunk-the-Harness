@@ -150,6 +150,50 @@ pub(crate) fn send_message(
     Ok(())
 }
 
+/// Hidden continuation: unlike `send_message`, no `MessageAccepted`/
+/// `SessionStatus(running)` — the only production callers (jcode's
+/// turn-retry and crash-recovery) already know the session is idle and
+/// drive their own retry/attention UI off `TurnDone`/`Error`, not accept.
+/// Core refuses outright if a turn is somehow already active, surfaced the
+/// same way any other failed reply is: `failure()` if nothing closed the
+/// turn first.
+pub(crate) fn send_system_reminder(
+    inner: &Arc<Inner>,
+    session_id: &str,
+    reminder: &str,
+) -> Result<()> {
+    let reply = send_request(
+        inner,
+        "session.sendSystemReminder",
+        json!({ "sessionId": session_id, "reminder": reminder }),
+    )?;
+    if let Ok(mut states) = inner.sessions.lock() {
+        states.entry(session_id.to_string()).or_default().turn_open = true;
+    }
+    let inner = Arc::clone(inner);
+    let session_id = session_id.to_string();
+    std::thread::Builder::new()
+        .name("freecode-reminder".into())
+        .spawn(move || {
+            let Ok(Err(error)) = reply.recv() else {
+                return;
+            };
+            let still_open = inner
+                .sessions
+                .lock()
+                .ok()
+                .and_then(|mut s| s.get_mut(&session_id).map(|s| std::mem::take(&mut s.turn_open)))
+                .unwrap_or(false);
+            if still_open {
+                for event in failure(&session_id, error.to_string()) {
+                    publish(&inner, event, Some(&session_id));
+                }
+            }
+        })
+        .map_err(|e| Error::new(ErrorKind::Transport, e.to_string()))?;
+    Ok(())
+}
+
 /// Steering: core delivers it into the running turn and answers at once.
 pub(crate) fn steer(
     inner: &Inner,
