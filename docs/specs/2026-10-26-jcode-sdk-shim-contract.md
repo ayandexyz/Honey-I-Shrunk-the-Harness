@@ -504,7 +504,7 @@ match. Ordered by use.
 | `SidePanelState` | 4 | — | **gap** (jcode side panel pages) | todo — decide: cut |
 | `ReasoningDone` | 4 | `thinking` | close | ✅ done |
 | `SessionRenamed` | 3 | — | synthesized by the shim right after `session.rename`'s reply confirms the write (not a stream event on freecode's side) | ✅ done |
-| `KvCacheMiss` | 3 | `cache_status` (miss attribution) | real translation | todo |
+| `KvCacheMiss` | 3 | `cache_status` (miss attribution) | real translation | ✅ done — `freecode_events::translate` emits it on `cache_status` `state: "miss"`, `reason`/`harness_caused` from the latest `stats.misses` entry, `read_tokens`/`missed_tokens` from `cacheReadTokens`/`cacheWriteTokens`; `documented_cause` left unset (freecode doesn't carry that split on the wire, so an undocumented-rewrite alarm is driven by `harness_caused` alone, which is already correct for the two `harness:` reasons); `state: "warm"`/`"cold"` stay untranslated (no desktop match site) |
 | `BackgroundProgress` | 3 | `shell_start`/`shell_output`/`shell_exit`, `agent_*` | different model (per task bar) | todo — decide |
 | `ToolExec` | 2 | `tool_output` | close | ✅ done |
 | `SidePaneImages` | 2 | — | **gap** | todo — decide: cut |

@@ -139,6 +139,37 @@ pub(crate) fn translate(states: &mut States, line: &Value) -> Vec<(ApiEvent, Str
             tool_name: text("toolName"),
             description: text("description"),
         }),
+        "cache_status" => {
+            if text("state") == "miss" {
+                let n = |key: &str| line.get(key).and_then(Value::as_u64);
+                let read = n("cacheReadTokens").unwrap_or(0);
+                let write = n("cacheWriteTokens").unwrap_or(0);
+                let (reason, harness_caused) = line
+                    .pointer("/stats/misses")
+                    .and_then(Value::as_array)
+                    .and_then(|misses| misses.last())
+                    .map(|miss| {
+                        (
+                            miss.get("reason")
+                                .and_then(Value::as_str)
+                                .unwrap_or("unknown")
+                                .to_string(),
+                            miss.get("harnessBug").and_then(Value::as_bool).unwrap_or(false),
+                        )
+                    })
+                    .unwrap_or(("unknown".into(), false));
+                out.push(ApiEvent::KvCacheMiss {
+                    session_id: session_id.clone(),
+                    reason,
+                    harness_caused,
+                    missed_tokens: write,
+                    expected_tokens: read + write,
+                    read_tokens: read,
+                    documented_cause: None,
+                    message: text("message"),
+                });
+            }
+        }
         "compaction_start" => out.push(status(&session_id, "compacting")),
         "compaction_complete" => {
             let now = if state.turn_open { "running" } else { "idle" };
@@ -240,6 +271,27 @@ mod tests {
         assert!(matches!(&events[1], ApiEvent::ToolInputDelta { call_id, delta, .. }
             if call_id == "c1" && delta == r#"{"command":"ls -la"}"#));
         assert!(matches!(&events[2], ApiEvent::ToolExec { call_id, .. } if call_id == "c1"));
+    }
+
+    #[test]
+    fn cache_miss_carries_reason_from_stats_and_warm_status_is_dropped() {
+        let events = run(&[
+            json!({
+                "type":"cache_status","sessionId":"s","state":"miss",
+                "cacheReadTokens":4000,"cacheWriteTokens":46000,
+                "message":"KV cache miss: ~46K tokens resent",
+                "stats":{"sessionPct":10,"misses":[
+                    {"missedTokens":46000,"reason":"harness: prefix rewritten","harnessBug":true}
+                ]}
+            }),
+            json!({"type":"cache_status","sessionId":"s","state":"warm","cacheReadTokens":100,"cacheWriteTokens":0}),
+        ]);
+        assert!(matches!(
+            &events[0],
+            ApiEvent::KvCacheMiss { reason, harness_caused: true, missed_tokens: 46000, read_tokens: 4000, expected_tokens: 50000, .. }
+                if reason == "harness: prefix rewritten"
+        ));
+        assert_eq!(events.len(), 1);
     }
 
     #[test]
