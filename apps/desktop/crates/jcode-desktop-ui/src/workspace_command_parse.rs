@@ -5,8 +5,6 @@ pub(crate) enum WorkspaceCommand {
     Mirror(String),
     Fork(Option<String>),
     Machines(Option<String>),
-    Remote(String),
-    ServerReload,
     Resume { active: bool, query: String },
     Catchup(bool),
     Back,
@@ -38,11 +36,8 @@ pub(crate) fn parse(content: &str) -> Option<WorkspaceCommand> {
         },
         "/catchup" if matches!(tail, "" | "list" | "next") => Catchup(tail == "next"),
         "/catchup" => Invalid("Usage: /catchup [list|next]"),
-        "/remote" => Remote(tail.into()),
         "/transfer" if tail.is_empty() => Transfer,
         "/transfer" => Invalid("Usage: /transfer"),
-        "/server-reload" if tail.is_empty() => ServerReload,
-        "/server-reload" => Invalid("Usage: /server-reload"),
         "/selfdev" => Selfdev(tail.into()),
         "/back" if tail.is_empty() => Back,
         "/workspace" if tail.is_empty() => Workspace,
@@ -116,7 +111,6 @@ mod tests {
             "split-view",
             "btw",
             "ssh",
-            "remote",
             "resume",
             "active",
             "catchup",
@@ -131,7 +125,6 @@ mod tests {
             "rebuild",
             "selfdev",
             "client-reload",
-            "server-reload",
             "fast-release",
             "fast-macos-release",
             "remote-release",
@@ -139,6 +132,15 @@ mod tests {
             "commit-push-release",
         ] {
             assert!(parse(&format!("/{name}")).is_some(), "{name}");
+        }
+    }
+
+    /// `/remote` opened jcode's own cloud account page and `/server-reload`
+    /// had no freecode backend to reload; both are gone, not stubbed.
+    #[test]
+    fn remote_and_server_reload_are_gone() {
+        for name in ["remote", "server-reload"] {
+            assert_eq!(parse(&format!("/{name}")), None, "{name}");
         }
     }
 }

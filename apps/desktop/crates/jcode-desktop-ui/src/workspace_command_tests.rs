@@ -113,59 +113,6 @@ fn workspace_mirror_is_read_only_live_and_has_independent_scroll(cx: &mut gpui::
 }
 
 #[gpui::test]
-fn workspace_gateway_commands_use_the_source_runtime_transport(cx: &mut gpui::TestAppContext) {
-    let (bridge, commands) = harness::spawn_recording();
-    let (workspace, vcx) = cx.add_window_view(|window, cx| {
-        let mut workspace = Workspace::for_test(learning::Coach::new(), cx);
-        workspace.bridge = bridge;
-        workspace.push_test_panel("ssh://host/source", cx);
-        workspace.restore_focus(window, cx);
-        workspace
-    });
-    while commands.try_recv().is_ok() {}
-    for (content, command, args) in [
-        (
-            "/remote status",
-            jcode_sdk::RuntimeCommand::Remote,
-            vec!["status".to_owned()],
-        ),
-        (
-            "/server-reload",
-            jcode_sdk::RuntimeCommand::ServerReload,
-            Vec::new(),
-        ),
-    ] {
-        vcx.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                let source = workspace.slots[0].panel.entity_id();
-                workspace.workspace_slash_command(
-                    &WorkspaceSlashCommand {
-                        source,
-                        content: content.into(),
-                    },
-                    window,
-                    cx,
-                );
-            })
-        });
-        match commands.try_recv().expect("server-owned command") {
-            Command::RuntimeCommand {
-                session_id,
-                command: actual,
-                args: actual_args,
-            } => {
-                assert_eq!(session_id, "ssh://host/source");
-                assert_eq!(actual, command);
-                assert_eq!(actual_args, args);
-            }
-            _ => panic!(
-                "gateway control must use the source server, not local Desktop process state"
-            ),
-        }
-    }
-}
-
-#[gpui::test]
 fn workspace_resume_preserves_search_and_active_filter(cx: &mut gpui::TestAppContext) {
     let (workspace, vcx) = cx.add_window_view(|window, cx| {
         let mut workspace = Workspace::for_test(learning::Coach::new(), cx);

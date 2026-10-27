@@ -341,6 +341,228 @@ pub(crate) fn set_api_key(inner: &Inner, provider: &str, api_key: &str) -> Resul
     .map(|_| ())
 }
 
+/// `/skills` — every loaded skill (repo + global + plugin), from `skills.list`.
+pub(crate) fn skills_summary(inner: &Inner) -> Result<(Value, String)> {
+    let result = call(inner, "skills.list", json!({}))?;
+    let skills = result.as_array().cloned().unwrap_or_default();
+    let message = if skills.is_empty() {
+        "No skills found.".to_string()
+    } else {
+        let mut lines = vec![format!("**Skills** ({})", skills.len())];
+        for skill in &skills {
+            let name = skill.get("name").and_then(Value::as_str).unwrap_or("?");
+            let scope = skill.get("scope").and_then(Value::as_str).unwrap_or("");
+            lines.push(match skill.get("description").and_then(Value::as_str) {
+                Some(description) => format!("- **{name}** ({scope}) — {description}"),
+                None => format!("- **{name}** ({scope})"),
+            });
+        }
+        lines.join("\n")
+    };
+    Ok((Value::Array(skills), message))
+}
+
+/// `/context` — this session's context-window occupancy, from `context.stats`.
+pub(crate) fn context_summary(inner: &Inner, session_id: &str) -> Result<(Value, String)> {
+    let stats = call(inner, "context.stats", json!({ "sessionId": session_id }))?;
+    let used = stats.get("usedTokens").and_then(Value::as_u64).unwrap_or(0);
+    let limit = stats.get("contextLimit").and_then(Value::as_u64);
+    let messages = stats.get("messageCount").and_then(Value::as_u64).unwrap_or(0);
+    let tools = stats.get("toolCount").and_then(Value::as_u64).unwrap_or(0);
+    let model = stats.get("model").and_then(Value::as_str).unwrap_or("unknown");
+    let message = match limit {
+        Some(limit) if limit > 0 => format!(
+            "**Context** — `{model}`: {used}/{limit} tokens used ({messages} messages, {tools} tools)."
+        ),
+        _ => format!(
+            "**Context** — `{model}`: {used} tokens used ({messages} messages, {tools} tools)."
+        ),
+    };
+    Ok((stats, message))
+}
+
+/// `/agents` — subagents spawned under this session, from `agents.list`.
+pub(crate) fn agents_summary(inner: &Inner, session_id: &str) -> Result<(Value, String)> {
+    let result = call(inner, "agents.list", json!({ "sessionId": session_id }))?;
+    let agents = result.as_array().cloned().unwrap_or_default();
+    let message = if agents.is_empty() {
+        "No subagents have run in this session.".to_string()
+    } else {
+        let mut lines = vec![format!("**Subagents** ({})", agents.len())];
+        for agent in &agents {
+            let task = agent.get("task").and_then(Value::as_str).unwrap_or("?");
+            let status = agent.get("status").and_then(Value::as_str).unwrap_or("?");
+            let agent_type = agent
+                .get("agentType")
+                .and_then(Value::as_str)
+                .unwrap_or("general");
+            lines.push(format!("- `{status}` ({agent_type}) — {task}"));
+        }
+        lines.join("\n")
+    };
+    Ok((result, message))
+}
+
+/// `/info` — current provider/model/auth for this session, from `config.get`.
+pub(crate) fn info_summary(inner: &Inner, session_id: &str) -> Result<(Value, String)> {
+    let (provider, model, auth_method) = current(inner)?;
+    let message = format!(
+        "**Session info**\n- Session: `{session_id}`\n- Provider: `{}`\n- Model: `{}`\n- Auth: `{}`",
+        provider.as_deref().unwrap_or("none"),
+        model.as_deref().unwrap_or("none"),
+        auth_method.as_deref().unwrap_or("none"),
+    );
+    Ok((
+        json!({ "provider": provider, "model": model, "authMethod": auth_method }),
+        message,
+    ))
+}
+
+/// `/memory` — memory-related settings (`settings.list`, filtered to the
+/// `memory.*` keys); `/memory on` or `/memory off` flips recall through
+/// `settings.set` first. `cwd` is left blank (core falls back to its own
+/// process cwd for a global-only read) since this command has no
+/// project path of its own to scope to.
+pub(crate) fn memory_summary(inner: &Inner, args: &[String]) -> Result<(Value, String)> {
+    if let Some(toggle) = args.first() {
+        let toggle = toggle.to_ascii_lowercase();
+        if toggle != "on" && toggle != "off" {
+            return Err(Error::new(
+                ErrorKind::Harness(jcode_harness_api::ErrorCode::UnknownRequest),
+                "Usage: `/memory`, `/memory on`, or `/memory off`.",
+            ));
+        }
+        call(
+            inner,
+            "settings.set",
+            json!({ "key": "memory.autoRecall", "value": toggle }),
+        )?;
+    }
+    let result = call(inner, "settings.list", json!({ "cwd": "" }))?;
+    let settings: Vec<Value> = result
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|setting| {
+            setting
+                .get("key")
+                .and_then(Value::as_str)
+                .is_some_and(|key| key.starts_with("memory."))
+        })
+        .collect();
+    let mut lines = vec!["**Memory settings**".to_string()];
+    for setting in &settings {
+        let label = setting.get("label").and_then(Value::as_str).unwrap_or("?");
+        let value = setting.get("value").and_then(Value::as_str).unwrap_or("?");
+        lines.push(match setting.get("locked").and_then(Value::as_str) {
+            Some(reason) => format!("- {label}: `{value}` (locked: {reason})"),
+            None => format!("- {label}: `{value}`"),
+        });
+    }
+    lines.push("\nUse `/memory on` or `/memory off` to toggle recall.".to_string());
+    Ok((Value::Array(settings), lines.join("\n")))
+}
+
+/// `/night` (tagged `RuntimeCommand::Overnight` on the wire — the enum lives
+/// in the external `jcode_harness_api` crate, which this repo does not own,
+/// so the variant keeps its upstream name while the slash command does not).
+/// Lists runs, or with `report [run-id]` / `stop <run-id>` reads a morning
+/// report or requests a stop, via `night.list` / `night.report` / `night.stop`.
+pub(crate) fn night_summary(inner: &Inner, args: &[String]) -> Result<(Value, String)> {
+    match args.first().map(String::as_str) {
+        Some("stop") => {
+            let run_id = args.get(1).ok_or_else(|| {
+                Error::new(
+                    ErrorKind::Harness(jcode_harness_api::ErrorCode::UnknownRequest),
+                    "Usage: `/night stop <run-id>`",
+                )
+            })?;
+            let result = call(inner, "night.stop", json!({ "runId": run_id }))?;
+            let stopped = result.get("stopped").and_then(Value::as_bool).unwrap_or(false);
+            let message = if stopped {
+                format!("Stop requested for run `{run_id}`.")
+            } else {
+                format!("Could not stop run `{run_id}` — it may not be running.")
+            };
+            Ok((result, message))
+        }
+        Some("report") => {
+            let run_id = args.get(1).cloned();
+            let result = call(inner, "night.report", json!({ "runId": run_id }))?;
+            let markdown = result
+                .get("markdown")
+                .and_then(Value::as_str)
+                .unwrap_or("No report available.")
+                .to_string();
+            Ok((result, markdown))
+        }
+        _ => {
+            let result = call(inner, "night.list", json!({}))?;
+            let runs = result.as_array().cloned().unwrap_or_default();
+            let message = if runs.is_empty() {
+                "No overnight runs recorded yet. Start one with `freecode night \"<objective>\"`.".to_string()
+            } else {
+                let mut lines = vec![format!("**Overnight runs** ({})", runs.len())];
+                for run in &runs {
+                    let run_id = run.get("runId").and_then(Value::as_str).unwrap_or("?");
+                    let status = run.get("status").and_then(Value::as_str).unwrap_or("?");
+                    let objective = run.get("objective").and_then(Value::as_str).unwrap_or("?");
+                    let commits = run.get("commits").and_then(Value::as_u64).unwrap_or(0);
+                    lines.push(format!("- `{run_id}` [{status}] {objective} ({commits} commits)"));
+                }
+                lines.push("\nUse `/night report [run-id]` or `/night stop <run-id>`.".to_string());
+                lines.join("\n")
+            };
+            Ok((Value::Array(runs), message))
+        }
+    }
+}
+
+/// `/auth` — connected-provider status. No JSON-RPC equivalent exists yet
+/// (see MIGRATION_JCODE_CLI.md), so this shells out to the same one-off
+/// `freecode auth status --json` the account sidebar panel uses.
+pub(crate) fn auth_status() -> Result<(Value, String)> {
+    let stdout = crate::freecode::run_cli(&["auth", "status", "--json"])?;
+    let value: Value = serde_json::from_str(&stdout).map_err(|e| {
+        Error::new(ErrorKind::UnexpectedReply, format!("auth status --json: {e}"))
+    })?;
+    let providers = value
+        .get("providers")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut lines = vec!["**Auth status**".to_string()];
+    for provider in &providers {
+        let status = provider.get("status").and_then(Value::as_str).unwrap_or("?");
+        if status == "not_configured" {
+            continue;
+        }
+        let name = provider
+            .get("display_name")
+            .and_then(Value::as_str)
+            .unwrap_or("?");
+        lines.push(format!("- **{name}**: {status}"));
+    }
+    if lines.len() == 1 {
+        lines.push("- No providers configured yet.".to_string());
+    }
+    Ok((value, lines.join("\n")))
+}
+
+/// `/logout <provider>` — `freecode auth logout <provider>`, same reasoning
+/// as `auth_status`: no JSON-RPC equivalent exists yet.
+pub(crate) fn auth_logout(provider: &str) -> Result<(Value, String)> {
+    let stdout = crate::freecode::run_cli(&["auth", "logout", provider])?;
+    let trimmed = stdout.trim();
+    let message = if trimmed.is_empty() {
+        format!("Logged out of `{provider}`.")
+    } else {
+        format!("Logged out of `{provider}`.\n\n{trimmed}")
+    };
+    Ok((json!({ "provider": provider, "output": trimmed }), message))
+}
+
 /// (provider, model, auth method) from `config.get`.
 fn current(inner: &Inner) -> Result<(Option<String>, Option<String>, Option<String>)> {
     let config = call(inner, "config.get", json!({}))?;

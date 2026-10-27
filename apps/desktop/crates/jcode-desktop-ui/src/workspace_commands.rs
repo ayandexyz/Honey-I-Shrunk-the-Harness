@@ -44,35 +44,6 @@ impl Workspace {
                     self.open_machines(window, cx);
                 }
             }
-            WorkspaceCommand::Remote(argument) => {
-                let args: Vec<String> = argument.split_whitespace().map(str::to_owned).collect();
-                if args.is_empty()
-                    || (args.len() == 1
-                        && matches!(args[0].to_ascii_lowercase().as_str(), "cloud" | "setup"))
-                {
-                    cx.open_url("https://jcode.sh/account");
-                    source.update(cx, |panel, cx| panel.workspace_command_notice("Opened Jcode Cloud account management in your browser. Existing sessions were preserved. `/ssh` opens native machine selection; `/remote status` shows this session server's gateway state.", cx));
-                } else if source.read(cx).is_pending_session() {
-                    source.update(cx, |panel, cx| panel.workspace_command_notice("Gateway controls require a connected session so they run on the correct server. Start or resume a session first.", cx));
-                } else {
-                    self.bridge.send(Command::RuntimeCommand {
-                        session_id: source.read(cx).session_id.clone(),
-                        command: jcode_sdk::RuntimeCommand::Remote,
-                        args,
-                    });
-                }
-            }
-            WorkspaceCommand::ServerReload => {
-                if source.read(cx).is_pending_session() {
-                    source.update(cx, |panel, cx| panel.workspace_command_notice("Server reload requires a connected session. No server or Desktop host was restarted.", cx));
-                } else {
-                    self.bridge.send(Command::RuntimeCommand {
-                        session_id: source.read(cx).session_id.clone(),
-                        command: jcode_sdk::RuntimeCommand::ServerReload,
-                        args: Vec::new(),
-                    });
-                }
-            }
             WorkspaceCommand::Resume { active, query } => {
                 self.open_resume(&OpenResume, window, cx);
                 if let resume::Snapshot::Open {

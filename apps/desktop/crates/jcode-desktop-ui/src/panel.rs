@@ -2838,20 +2838,8 @@ impl Panel {
             crate::sounds::play(cue, cx);
         }
         match event {
-            ApiEvent::RuntimeCommandResult {
-                session_id,
-                command,
-                data,
-                message,
-            } => {
-                let output = jcode_sdk::api::RuntimeCommandOutput {
-                    session_id: session_id.clone(),
-                    command: *command,
-                    data: data.clone(),
-                    message: message.clone(),
-                };
-                self.items.push(Item::Assistant(output.message.clone()));
-                self.apply_special_command_artifacts(&output, cx);
+            ApiEvent::RuntimeCommandResult { message, .. } => {
+                self.items.push(Item::Assistant(message.clone()));
                 self.stick_to_bottom = true;
             }
             ApiEvent::MessageAccepted { .. } => {

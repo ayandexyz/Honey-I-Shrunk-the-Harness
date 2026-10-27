@@ -2,32 +2,23 @@
 use super::*;
 use jcode_sdk::api::RuntimeCommand;
 
+/// Only the variants `jcode-sdk`'s `runtime_command()` actually dispatches
+/// to a freecode IPC call. Everything else jcode's own TUI had here (swarm,
+/// review/judge-as-separate-sessions, subagent-model, autoreview/autojudge,
+/// transport, fast, telemetry, subscription, provider-test-coverage,
+/// refresh-model-list, continue, resumeall, …) has no freecode backend to
+/// reach and is not parsed — see `commands.rs`'s
+/// `commands_with_no_freecode_equivalent_are_not_registered` test.
 fn parse_runtime_command(content: &str) -> Option<(RuntimeCommand, Vec<String>)> {
     let mut words = content.split_whitespace();
     let command = match words.next()? {
         "/auth" => RuntimeCommand::Auth,
         "/logout" => RuntimeCommand::Logout,
-        "/review" => RuntimeCommand::Review,
-        "/judge" => RuntimeCommand::Judge,
-        "/subagent" => RuntimeCommand::Subagent,
         "/skills" => RuntimeCommand::Skills,
         "/context" => RuntimeCommand::Context,
         "/info" => RuntimeCommand::Info,
-        "/cache" => RuntimeCommand::Cache,
         "/memory" => RuntimeCommand::Memory,
-        "/swarm" => RuntimeCommand::Swarm,
         "/agents" => RuntimeCommand::Agents,
-        "/subagent-model" => RuntimeCommand::SubagentModel,
-        "/autoreview" => RuntimeCommand::Autoreview,
-        "/autojudge" => RuntimeCommand::Autojudge,
-        "/transport" => RuntimeCommand::Transport,
-        "/fast" => RuntimeCommand::Fast,
-        "/telemetry" => RuntimeCommand::Telemetry,
-        "/subscription" => RuntimeCommand::Subscription,
-        "/provider-test-coverage" | "/model-status" => RuntimeCommand::ProviderTestCoverage,
-        "/refresh" | "/refresh-model-list" => RuntimeCommand::RefreshModelList,
-        "/continue" => RuntimeCommand::Continue,
-        "/resumeall" | "/resume-all" => RuntimeCommand::ResumeAll,
         _ => return None,
     };
     Some((command, words.map(str::to_owned).collect()))
@@ -60,34 +51,7 @@ mod tests {
 
     #[test]
     fn recognizes_all_runtime_commands_exactly() {
-        for name in [
-            "auth",
-            "logout",
-            "review",
-            "judge",
-            "subagent",
-            "skills",
-            "context",
-            "info",
-            "cache",
-            "memory",
-            "swarm",
-            "agents",
-            "subagent-model",
-            "autoreview",
-            "autojudge",
-            "transport",
-            "fast",
-            "telemetry",
-            "subscription",
-            "provider-test-coverage",
-            "model-status",
-            "refresh-model-list",
-            "refresh",
-            "continue",
-            "resumeall",
-            "resume-all",
-        ] {
+        for name in ["auth", "logout", "skills", "context", "info", "memory", "agents"] {
             assert!(
                 parse_runtime_command(&format!("/{name}")).is_some(),
                 "{name}"
@@ -97,64 +61,44 @@ mod tests {
                 "{name}"
             );
         }
-        for content in ["skills", "/Skills", "/skill", "/help", "", "/memoryish"] {
+        for content in [
+            "skills",
+            "/Skills",
+            "/skill",
+            "/help",
+            "",
+            "/memoryish",
+            // Cut: jcode-only, no freecode backend to reach.
+            "/swarm",
+            "/review",
+            "/judge",
+            "/subagent",
+            "/subagent-model",
+            "/autoreview",
+            "/autojudge",
+            "/transport",
+            "/fast",
+            "/telemetry",
+            "/subscription",
+            "/cache",
+            "/provider-test-coverage",
+            "/model-status",
+            "/refresh-model-list",
+            "/continue",
+            "/resumeall",
+        ] {
             assert!(parse_runtime_command(content).is_none(), "{content}");
         }
     }
 
     #[test]
-    fn aliases_route_to_identical_runtime_operations() {
-        assert_eq!(
-            parse_runtime_command("/auth").unwrap().0,
-            RuntimeCommand::Auth
-        );
-        assert_eq!(
-            parse_runtime_command("/logout").unwrap().0,
-            RuntimeCommand::Logout
-        );
-        assert_eq!(
-            parse_runtime_command("/review").unwrap().0,
-            RuntimeCommand::Review
-        );
-        assert_eq!(
-            parse_runtime_command("/judge").unwrap().0,
-            RuntimeCommand::Judge
-        );
-        assert_eq!(
-            parse_runtime_command("/subagent").unwrap().0,
-            RuntimeCommand::Subagent
-        );
-        assert_eq!(
-            parse_runtime_command("/provider-test-coverage"),
-            parse_runtime_command("/model-status")
-        );
-        assert_eq!(
-            parse_runtime_command("/resumeall"),
-            parse_runtime_command("/resume-all")
-        );
-        assert_eq!(
-            parse_runtime_command("/refresh"),
-            parse_runtime_command("/refresh-model-list")
-        );
-        assert_eq!(
-            parse_runtime_command("/refresh-model-list").unwrap().0,
-            RuntimeCommand::RefreshModelList
-        );
-        assert_eq!(
-            parse_runtime_command("/continue").unwrap().0,
-            RuntimeCommand::Continue
-        );
-    }
-
-    #[test]
     fn preserves_arguments_without_local_interpretation() {
-        let (command, args) = parse_runtime_command("  /memory   search  remote/path  ").unwrap();
+        let (command, args) = parse_runtime_command("  /memory   on  extra  ").unwrap();
         assert_eq!(command, RuntimeCommand::Memory);
-        assert_eq!(args, vec!["search", "remote/path"]);
-        let (role, args) =
-            parse_runtime_command("/review openai:model Check remote state").unwrap();
-        assert_eq!(role, RuntimeCommand::Review);
-        assert_eq!(args, vec!["openai:model", "Check", "remote", "state"]);
+        assert_eq!(args, vec!["on", "extra"]);
+        let (command, args) = parse_runtime_command("/logout anthropic").unwrap();
+        assert_eq!(command, RuntimeCommand::Logout);
+        assert_eq!(args, vec!["anthropic"]);
         assert_eq!(
             parse_runtime_command("/info").unwrap().1,
             Vec::<String>::new()

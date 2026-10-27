@@ -39,7 +39,7 @@ mod model_search;
 #[path = "input_paste_preview.rs"]
 mod paste_preview;
 
-use crate::commands::registered_command_entries;
+use crate::commands::{REGISTERED_COMMANDS, registered_command_entries};
 use crate::theme::{Theme, to_hsla};
 
 const PENDING_COMMAND_NOTICE: &str =
@@ -346,17 +346,36 @@ fn command_suggestions_with_efforts(
             .collect();
     }
     let query = trimmed.to_ascii_lowercase();
-    let mut commands = registered_command_entries()
-        .filter_map(|(command, help)| {
-            let command_lower = command.to_ascii_lowercase();
-            let help_lower = help.to_ascii_lowercase();
-            (command_lower.starts_with(&query)
+    // Hidden commands (session save/rename, theming, git/release tooling, …)
+    // stay out of browsing/description matches, but an EXACT typed name must
+    // still resolve to itself — otherwise a hidden alias like `/session`
+    // (not itself a substring match for anything) can get silently hijacked
+    // by an unrelated visible command whose help text happens to contain the
+    // same word ("session" shows up in `/agents`, `/resume` and `/fork`'s
+    // help). Rank 0 (exact) always wins over rank 1 (prefix) and rank 2
+    // (description-only), regardless of hidden.
+    let mut commands = REGISTERED_COMMANDS
+        .iter()
+        .filter_map(|entry| {
+            let command_lower = entry.name.to_ascii_lowercase();
+            let help_lower = entry.help.to_ascii_lowercase();
+            let exact = command_lower == query;
+            let prefix = command_lower.starts_with(&query);
+            if entry.hidden && !exact {
+                return None;
+            }
+            (exact
+                || prefix
                 || command_lower.contains(query.trim_start_matches('/'))
                 || help_lower.contains(query.trim_start_matches('/')))
-            .then_some((command, help, command_lower.starts_with(&query)))
+            .then_some((
+                entry.name,
+                entry.help,
+                if exact { 0 } else if prefix { 1 } else { 2 },
+            ))
         })
         .collect::<Vec<_>>();
-    commands.sort_by_key(|(_, _, prefix)| !prefix);
+    commands.sort_by_key(|(_, _, rank)| *rank);
     commands
         .into_iter()
         .map(|(value, help, _)| CommandSuggestion {
@@ -2593,7 +2612,6 @@ mod tests {
         let models = vec!["gpt-5.6-sol".into(), "claude-fable-5".into()];
         let commands = command_suggestions("/m", &models);
         assert_eq!(commands[0].value, "/model");
-        assert!(commands.iter().any(|entry| entry.value == "/models"));
 
         let picker = command_suggestions("/model claude", &models);
         assert_eq!(picker.len(), 1);
@@ -2603,12 +2621,13 @@ mod tests {
         let effort = command_suggestions("/effort x", &models);
         assert_eq!(effort[0].value, "/effort xhigh");
 
-        let tui_commands = command_suggestions("/session", &models);
-        assert!(tui_commands.iter().any(|entry| entry.value == "/sessions"));
+        // Description match: "/night"'s help text is "Overnight runs — read
+        // a morning report, stop a running night", a contiguous substring
+        // match on its own, not its name.
         assert!(
-            command_suggestions("/logical commits", &models)
+            command_suggestions("/morning report", &models)
                 .iter()
-                .any(|entry| entry.value == "/commit")
+                .any(|entry| entry.value == "/night")
         );
     }
 
@@ -2625,15 +2644,15 @@ mod tests {
 
     #[test]
     fn enter_accepts_highlighted_description_match() {
-        let suggestions = command_suggestions("/logical commits", &[]);
+        let suggestions = command_suggestions("/morning report", &[]);
         assert_eq!(
             accepted_command_submission(&suggestions, 0).as_deref(),
-            Some("/commit")
+            Some("/night")
         );
-        let aliases = command_suggestions("/models", &[]);
+        let prefix = command_suggestions("/eff", &[]);
         assert_eq!(
-            accepted_command_submission(&aliases, 0).as_deref(),
-            Some("/models")
+            accepted_command_submission(&prefix, 0).as_deref(),
+            Some("/effort")
         );
     }
 

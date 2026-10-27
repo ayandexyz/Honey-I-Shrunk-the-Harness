@@ -54,27 +54,66 @@ pub(crate) struct CoreCommand {
 }
 
 pub(crate) fn locate_core() -> Result<CoreCommand> {
+    let (path, cwd) = locate_freecode_path()?;
+    Ok(command_for(path, cwd))
+}
+
+/// Just the resolved `apps/core` entry point and its cwd, without binding it
+/// to `serve`'s args — shared by the long-running core (`locate_core`) and
+/// one-off CLI invocations (`run_cli`) that pass their own subcommand.
+fn locate_freecode_path() -> Result<(PathBuf, Option<PathBuf>)> {
     if let Some(path) = std::env::var_os("FREECODE_CORE").filter(|v| !v.is_empty()) {
-        return Ok(command_for(PathBuf::from(path), None));
+        return Ok((PathBuf::from(path), None));
     }
     let exe = std::env::current_exe().ok();
     if let Some(bundled) = exe.as_deref().and_then(bundled_core) {
-        return Ok(command_for(bundled, None));
+        return Ok((bundled, None));
     }
     if let Some(root) = exe.as_deref().and_then(monorepo_root) {
         let dist = root.join("apps/core/dist/server.js");
         if dist.is_file() {
-            return Ok(command_for(dist, Some(root)));
+            return Ok((dist, Some(root)));
         }
     }
     if let Some(bin) = find_on_path("freecode") {
-        return Ok(command_for(bin, None));
+        return Ok((bin, None));
     }
     Err(Error::new(
         ErrorKind::JcodeNotFound,
         "freecode core not found: install freecode, set FREECODE_CORE, or \
          build apps/core (pnpm --filter @thisisayande/freecode-core build)",
     ))
+}
+
+/// One-off invocation of the freecode CLI (not the long-running shared
+/// core), for commands with no JSON-RPC equivalent yet (`auth status`,
+/// `auth logout`). Spawned fresh and waited on synchronously — these are
+/// rare, user-initiated actions, not hot-path traffic — and never touches
+/// the shared core connection or its stdin/stdout pipe.
+pub(crate) fn run_cli(args: &[&str]) -> Result<String> {
+    let (path, cwd) = locate_freecode_path()?;
+    let mut command = if path.extension().is_some_and(|ext| ext == "js") {
+        let mut command = Command::new("node");
+        command.arg(&path);
+        command
+    } else {
+        Command::new(&path)
+    };
+    command.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
+    if let Some(cwd) = &cwd {
+        command.current_dir(cwd);
+    }
+    let output = command.output().map_err(|e| {
+        Error::new(ErrorKind::LaunchFailed, format!("could not run freecode {args:?}: {e}"))
+    })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(Error::new(
+            ErrorKind::Harness(jcode_harness_api::ErrorCode::Internal),
+            format!("freecode {args:?} failed: {}", stderr.trim()),
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 /// A `.js` path runs under node; anything else is a freecode binary (`serve`).

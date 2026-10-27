@@ -1,6 +1,6 @@
 //! Specialist slash commands. Runtime state always belongs to the selected session.
 use super::*;
-use jcode_sdk::api::{RuntimeCommand, RuntimeCommandOutput};
+use jcode_sdk::api::RuntimeCommand;
 
 #[derive(Debug, PartialEq)]
 enum SpecialCommand {
@@ -12,6 +12,12 @@ enum SpecialCommand {
     Usage(&'static str),
 }
 
+/// `/night` is spelled that way to match freecode's TUI (`apps/tui/src/commands/
+/// built-in.ts`'s `/night`); it still tags the wire as `RuntimeCommand::Overnight`
+/// because that enum lives in the external `jcode_harness_api` crate, which
+/// this repo does not own. `/initiatives`, `/goals`, `/productivity`,
+/// `/wrapped` and the premium `/z` tier are jcode-only with no freecode
+/// equivalent and are gone, not just renamed.
 fn parse_special_command(content: &str) -> Option<SpecialCommand> {
     use SpecialCommand::*;
     let mut words = content.split_whitespace();
@@ -25,27 +31,7 @@ fn parse_special_command(content: &str) -> Option<SpecialCommand> {
         }
     };
     Some(match name {
-        "/overnight" => Runtime(RuntimeCommand::Overnight, args),
-        "/initiatives" | "/goals" => Runtime(RuntimeCommand::Initiatives, args),
-        "/productivity" | "/wrapped" => Runtime(RuntimeCommand::Productivity, args),
-        "/z" | "/zz" | "/zzz" | "/zstatus" => {
-            if !args.is_empty() {
-                Usage("Premium commands take no arguments: `/z`, `/zz`, `/zzz`, `/zstatus`.")
-            } else {
-                Runtime(
-                    RuntimeCommand::Premium,
-                    vec![
-                        match name {
-                            "/z" => "normal",
-                            "/zz" => "toggle-one",
-                            "/zzz" => "toggle-zero",
-                            _ => "status",
-                        }
-                        .into(),
-                    ],
-                )
-            }
-        }
+        "/night" => Runtime(RuntimeCommand::Overnight, args),
         "/support" => exact(
             Support,
             "Usage: `/support`. Opens a diagnostic email draft, never sends it.",
@@ -114,21 +100,6 @@ fn editable_swarm_prompt(working_dir: Option<&str>) -> anyhow::Result<std::path:
             Err(error) => return Err(error.into()),
         }
     }
-    Ok(path)
-}
-
-fn persist_review_html(
-    html: &str,
-    directory: &std::path::Path,
-) -> anyhow::Result<std::path::PathBuf> {
-    use std::io::Write;
-    std::fs::create_dir_all(directory)?;
-    let mut file = tempfile::Builder::new()
-        .prefix("overnight-review-")
-        .suffix(".html")
-        .tempfile_in(directory)?;
-    file.write_all(html.as_bytes())?;
-    let (_, path) = file.keep()?;
     Ok(path)
 }
 
@@ -216,55 +187,6 @@ impl Panel {
         cx.notify();
         true
     }
-
-    /// Extra artifacts are explicit and session-scoped, never ignored or loaded
-    /// from a path on the local machine when the result came from a remote host.
-    pub(super) fn apply_special_command_artifacts(
-        &mut self,
-        output: &RuntimeCommandOutput,
-        cx: &mut Context<Self>,
-    ) {
-        if output.session_id != self.session_id {
-            return;
-        }
-        if output.command == RuntimeCommand::Initiatives
-            && let Some(payload) = self.latest_todo_payload()
-        {
-            self.items.push(Item::Todos(payload));
-        }
-        if output.command == RuntimeCommand::Overnight
-            && let Some(html) = output.data.get("html").and_then(serde_json::Value::as_str)
-        {
-            let html = html.to_owned();
-            let task = cx.background_executor().spawn(async move {
-                let root = jcode_base::storage::jcode_dir()?.join("generated-reviews");
-                persist_review_html(&html, &root)
-            });
-            cx.spawn(async move |this, cx| {
-                let result = task.await;
-                let _ = this.update(cx, |panel, cx| {
-                    match result {
-                        Ok(path) => panel.items.push(Item::Assistant(format!("Saved the full HTML review as a private local artifact: `{}`. It was not opened or executed automatically. Review the source before opening external HTML.", path.display()))),
-                        Err(error) => panel.items.push(Item::Error(format!("Could not save the full HTML review: {error:#}. The task review remains visible above."))),
-                    }
-                    cx.notify();
-                });
-            }).detach();
-        }
-        if output.command == RuntimeCommand::Productivity
-            && let Some(data) = output
-                .data
-                .get("image")
-                .and_then(|image| image.get("base64"))
-                .and_then(serde_json::Value::as_str)
-        {
-            self.items.push(Item::Image(TranscriptImage::new(
-                "image/png".into(),
-                data.into(),
-                Some("Productivity dashboard".into()),
-            )));
-        }
-    }
 }
 
 #[cfg(test)]
@@ -277,24 +199,12 @@ mod tests {
         let (bridge, commands) = crate::harness::spawn_recording();
         let panel = cx.new(|cx| Panel::new("special-source".into(), None, None, bridge, cx));
         panel.update(cx, |panel, cx| {
-            for input in [
-                "/overnight status",
-                "/productivity",
-                "/wrapped",
-                "/initiatives",
-                "/goals",
-                "/z",
-                "/zz",
-                "/zzz",
-                "/zstatus",
-            ] {
-                assert!(panel.handle_special_command(input, cx), "{input}");
-            }
+            assert!(panel.handle_special_command("/night status", cx));
             assert!(panel.handle_special_command("/support unexpected", cx));
             assert!(matches!(panel.items.last(), Some(Item::Error(_))));
         });
         let captured: Vec<_> = commands.try_iter().collect();
-        assert_eq!(captured.len(), 9);
+        assert_eq!(captured.len(), 1);
         for command in captured {
             assert!(
                 matches!(command, Command::RuntimeCommand { session_id, .. } if session_id == "special-source")
@@ -302,118 +212,43 @@ mod tests {
         }
     }
 
-    #[gpui::test]
-    fn dashboard_artifacts_are_scoped_to_the_source_session(cx: &mut gpui::TestAppContext) {
-        let (bridge, _) = crate::harness::spawn_recording();
-        let panel = cx.new(|cx| Panel::new("special-source".into(), None, None, bridge, cx));
-        let mut output = RuntimeCommandOutput {
-            session_id: "different-session".into(),
-            command: RuntimeCommand::Productivity,
-            data: serde_json::json!({"image": {"base64": ""}}),
-            message: "report".into(),
-        };
-        panel.update(cx, |panel, cx| {
-            panel.items.clear();
-            panel.apply_special_command_artifacts(&output, cx);
-            assert!(panel.items.is_empty());
-            output.session_id = "special-source".into();
-            panel.apply_special_command_artifacts(&output, cx);
-            assert!(matches!(panel.items.last(), Some(Item::Image(_))));
-        });
-    }
-
-    #[gpui::test]
-    fn legacy_initiatives_reuses_current_session_todo_payload(cx: &mut gpui::TestAppContext) {
-        let (bridge, _) = crate::harness::spawn_recording();
-        let panel = cx.new(|cx| Panel::new("special-source".into(), None, None, bridge, cx));
-        let output = RuntimeCommandOutput {
-            session_id: "special-source".into(),
-            command: RuntimeCommand::Initiatives,
-            data: serde_json::json!({"retired": true}),
-            message: "retired".into(),
-        };
-        panel.update(cx, |panel, cx| {
-            panel.items.clear();
-            panel.items.push(Item::Todos(TodoCardPayload::default()));
-            panel.apply_special_command_artifacts(&output, cx);
-            assert_eq!(panel.items.len(), 2);
-            assert!(matches!(panel.items.last(), Some(Item::Todos(_))));
-        });
-    }
-
-    #[test]
-    fn reviews_are_private_collision_free_and_not_opened() {
-        let directory = tempfile::tempdir().unwrap();
-        let first = persist_review_html("<html>first</html>", directory.path()).unwrap();
-        let second = persist_review_html("<script>second</script>", directory.path()).unwrap();
-        assert_ne!(first, second);
-        assert_eq!(
-            std::fs::read_to_string(&first).unwrap(),
-            "<html>first</html>"
-        );
-        assert_eq!(
-            std::fs::read_to_string(&second).unwrap(),
-            "<script>second</script>"
-        );
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(
-                std::fs::metadata(first).unwrap().permissions().mode() & 0o777,
-                0o600
-            );
-        }
-    }
-
     #[test]
     fn aliases_and_exact_names() {
-        for (left, right) in [
-            ("/goals", "/initiatives"),
-            ("/wrapped", "/productivity"),
-            ("/dictation", "/dictate"),
-        ] {
-            assert_eq!(parse_special_command(left), parse_special_command(right));
-        }
+        assert_eq!(
+            parse_special_command("/dictation"),
+            parse_special_command("/dictate")
+        );
         for value in [
+            "/overnight",
             "/overnightly",
+            "/initiatives",
+            "/goals",
+            "/productivity",
+            "/wrapped",
+            "/z",
+            "/zz",
+            "/zzz",
+            "/zstatus",
             "/zebra",
             "/supported",
             "/subscribe-now",
             "dictate",
             "",
         ] {
-            assert_eq!(parse_special_command(value), None);
+            assert_eq!(parse_special_command(value), None, "{value}");
         }
         assert!(matches!(
             parse_special_command("/support extra"),
             Some(SpecialCommand::Usage(_))
         ));
-        assert!(matches!(
-            parse_special_command("/zzz extra"),
-            Some(SpecialCommand::Usage(_))
-        ));
     }
     #[test]
-    fn runtime_arguments_and_premium_toggles_are_preserved() {
+    fn night_preserves_arguments() {
         assert_eq!(
-            parse_special_command(" /overnight 8h fix tests "),
+            parse_special_command(" /night 8h fix tests "),
             Some(SpecialCommand::Runtime(
                 RuntimeCommand::Overnight,
                 vec!["8h".into(), "fix".into(), "tests".into()]
-            ))
-        );
-        assert_eq!(
-            parse_special_command("/zz"),
-            Some(SpecialCommand::Runtime(
-                RuntimeCommand::Premium,
-                vec!["toggle-one".into()]
-            ))
-        );
-        assert_eq!(
-            parse_special_command("/zzz"),
-            Some(SpecialCommand::Runtime(
-                RuntimeCommand::Premium,
-                vec!["toggle-zero".into()]
             ))
         );
     }

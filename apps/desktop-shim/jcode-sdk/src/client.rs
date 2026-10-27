@@ -746,13 +746,43 @@ impl JcodeClient {
 
     /// Runtime identity, route catalog, protocol metadata, and a live health
     /// check for a session.
+    ///
+    /// Only the variants with a clear freecode equivalent are implemented;
+    /// everything else (swarm, review/judge-as-sessions, telemetry,
+    /// subscription, the premium `/z` tier, …) has nothing to dispatch to
+    /// and falls through to the generic "not supported" error.
     pub fn runtime_command(
         &self,
         session_id: &str,
         command: jcode_harness_api::RuntimeCommand,
         args: Vec<String>,
     ) -> Result<jcode_harness_api::RuntimeCommandOutput> {
-        Err(crate::freecode_session::unsupported("runtime_command"))
+        use jcode_harness_api::RuntimeCommand::*;
+        let (data, message) = match command {
+            Skills => crate::freecode_session::skills_summary(&self.inner)?,
+            Context => crate::freecode_session::context_summary(&self.inner, session_id)?,
+            Agents => crate::freecode_session::agents_summary(&self.inner, session_id)?,
+            Info => crate::freecode_session::info_summary(&self.inner, session_id)?,
+            Memory => crate::freecode_session::memory_summary(&self.inner, &args)?,
+            Overnight => crate::freecode_session::night_summary(&self.inner, &args)?,
+            Auth => crate::freecode_session::auth_status()?,
+            Logout => {
+                let provider = args.first().ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::Harness(jcode_harness_api::ErrorCode::UnknownRequest),
+                        "Usage: `/logout <provider>`",
+                    )
+                })?;
+                crate::freecode_session::auth_logout(provider)?
+            }
+            _ => return Err(crate::freecode_session::unsupported("runtime_command")),
+        };
+        Ok(jcode_harness_api::RuntimeCommandOutput {
+            session_id: session_id.to_string(),
+            command,
+            data,
+            message,
+        })
     }
 
     pub fn get_runtime_info(&self, session_id: &str) -> Result<RuntimeInfo> {

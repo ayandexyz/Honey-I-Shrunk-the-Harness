@@ -1,4 +1,13 @@
-//! Slash-command catalog ported from the Jcode TUI. Keep command names and help in sync.
+//! Slash-command catalog. **Visible** (`public`) entries are kept to exactly
+//! freecode's own TUI surface (`apps/tui/src/commands/built-in.ts`), so the
+//! `/` picker and `/help` never advertise a feature freecode doesn't have.
+//! Desktop-only extras (session save/rename, theming, git/release tooling,
+//! debug/screenshot tools, the account picker, …) still work if typed —
+//! `registered_command()` does not filter on `hidden` — but are `hidden` so
+//! they don't clutter the picker with things that look like missing
+//! freecode functionality. A command with no freecode backend to dispatch
+//! to at all is not registered here even hidden — see
+//! `jcode-sdk/src/client.rs`'s `runtime_command` for which ones are wired.
 
 #[derive(Clone, Copy)]
 pub(crate) struct RegisteredCommand {
@@ -9,14 +18,6 @@ pub(crate) struct RegisteredCommand {
 
 impl RegisteredCommand {
     const fn public(name: &'static str, help: &'static str) -> Self {
-        Self {
-            name,
-            help,
-            hidden: false,
-        }
-    }
-
-    const fn remote(name: &'static str, help: &'static str) -> Self {
         Self {
             name,
             help,
@@ -35,204 +36,163 @@ impl RegisteredCommand {
 
 pub(crate) const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     RegisteredCommand::public("/help", "Show help and keyboard shortcuts"),
-    RegisteredCommand::public("/?", "Show help and keyboard shortcuts"),
-    RegisteredCommand::public("/commands", "Alias for /help"),
+    RegisteredCommand::hidden("/?", "Alias for /help"),
+    RegisteredCommand::hidden("/commands", "Alias for /help"),
     RegisteredCommand::public("/model", "List or switch models"),
-    RegisteredCommand::public("/models", "Alias for /model"),
-    RegisteredCommand::public(
-        "/provider-test-coverage",
-        "Show live-test evidence for the current provider/model",
-    ),
-    RegisteredCommand::hidden("/model-status", "Alias for /provider-test-coverage"),
-    RegisteredCommand::public("/refresh-model-list", "Refresh provider model catalogs"),
-    RegisteredCommand::public("/agents", "Configure models for agent roles"),
-    RegisteredCommand::public(
+    RegisteredCommand::hidden("/models", "Alias for /model"),
+    RegisteredCommand::public("/agents", "Subagents spawned in this session — watch one work"),
+    RegisteredCommand::hidden(
         "/swarm-prompt",
         "Open the active swarm routing prompt in your editor",
     ),
-    RegisteredCommand::public("/subagent", "Launch a subagent manually"),
-    RegisteredCommand::public("/observe", "Show the latest tool context in the side panel"),
-    RegisteredCommand::public("/todos", "Show the session todo list as a card in the chat"),
+    RegisteredCommand::hidden("/observe", "Show the latest tool context in the side panel"),
+    RegisteredCommand::hidden("/todos", "Show the session todo list as a card in the chat"),
     RegisteredCommand::hidden("/todo", "Alias for /todos"),
-    RegisteredCommand::public("/splitview", "Mirror the current chat in the side panel"),
-    RegisteredCommand::public("/split-view", "Alias for /splitview"),
-    RegisteredCommand::public("/btw", "Ask a side question in the side panel"),
-    RegisteredCommand::public("/ssh", "Connect to a remote machine using system SSH"),
-    RegisteredCommand::public("/git", "Show git status for the session working directory"),
-    RegisteredCommand::public("/colors", "List or change Desktop color themes"),
+    RegisteredCommand::hidden("/splitview", "Mirror the current chat in the side panel"),
+    RegisteredCommand::hidden("/split-view", "Alias for /splitview"),
+    RegisteredCommand::hidden("/btw", "Ask a side question in the side panel"),
+    RegisteredCommand::hidden("/ssh", "Connect to a remote machine using system SSH"),
+    RegisteredCommand::hidden("/git", "Show git status for the session working directory"),
+    RegisteredCommand::hidden("/colors", "List or change Desktop color themes"),
     RegisteredCommand::hidden("/color", "Alias for /colors"),
-    RegisteredCommand::public("/hotkeys", "List registered Desktop hotkeys and contexts"),
-    RegisteredCommand::public("/terminal-setup", "Explain Desktop's built-in terminal setup"),
-    RegisteredCommand::public("/commit", "Make logical commits from current changes"),
-    RegisteredCommand::public(
+    RegisteredCommand::hidden("/hotkeys", "List registered Desktop hotkeys and contexts"),
+    RegisteredCommand::hidden("/terminal-setup", "Explain Desktop's built-in terminal setup"),
+    RegisteredCommand::hidden("/commit", "Make logical commits from current changes"),
+    RegisteredCommand::hidden(
         "/commit-push",
         "Make logical commits from current changes, then push",
     ),
     RegisteredCommand::hidden("/commit-and-push", "Alias for /commit-push"),
-    RegisteredCommand::public(
+    RegisteredCommand::hidden(
         "/publish",
         "Desktop selfdev: commit, push, release, and publish, tracked in a new panel",
     ),
-    RegisteredCommand::public(
+    RegisteredCommand::hidden(
         "/fast-release",
         "Open Desktop's standard validated publish tracker",
     ),
-    RegisteredCommand::public(
+    RegisteredCommand::hidden(
         "/fast-macos-release",
         "Open Desktop's cross-platform publish tracker",
     ),
-    RegisteredCommand::public("/remote", "Reach this session from another machine"),
-    RegisteredCommand::public(
+    RegisteredCommand::hidden(
         "/remote-release",
         "Open Desktop's publish tracker with CI-managed platform builds",
     ),
     RegisteredCommand::hidden("/cut-release", "Alias for /fast-release"),
     RegisteredCommand::hidden("/commit-push-release", "Alias for /cut-release"),
-    RegisteredCommand::public(
+    RegisteredCommand::hidden(
         "/triage",
         "Triage new GitHub issues and autonomously fix the safe ones",
     ),
-    RegisteredCommand::public("/transcript", "Open the current session transcript file"),
-    RegisteredCommand::public("/subagent-model", "Show/change subagent model policy"),
-    RegisteredCommand::public("/autoreview", "Show/toggle automatic end-of-turn review"),
-    RegisteredCommand::public("/autojudge", "Show/toggle automatic end-of-turn judging"),
-    RegisteredCommand::public("/review", "Launch a one-shot headed review session"),
-    RegisteredCommand::public("/judge", "Launch a one-shot headed judge session"),
+    RegisteredCommand::hidden("/transcript", "Open the current session transcript file"),
     RegisteredCommand::public(
         "/effort",
         "Set reasoning effort (none/minimal/low/medium/high/xhigh/max)",
     ),
-    RegisteredCommand::public("/fast", "Toggle fast mode"),
-    RegisteredCommand::public("/transport", "Show/change connection transport"),
-    RegisteredCommand::public("/alignment", "Show/change default text alignment"),
-    RegisteredCommand::public(
+    RegisteredCommand::hidden("/alignment", "Show/change default text alignment"),
+    RegisteredCommand::hidden(
         "/compact-notifications",
         "Show/toggle single-line swarm/file-activity notifications",
     ),
-    RegisteredCommand::public(
+    RegisteredCommand::hidden(
         "/show-agentgrep-output",
         "Show/toggle full agentgrep search output inline in chat",
     ),
-    RegisteredCommand::public(
+    RegisteredCommand::hidden(
         "/tool-call-details",
         "Show/toggle dimmed technical details on tool rows with an intent",
     ),
-    RegisteredCommand::public(
+    RegisteredCommand::hidden(
         "/thinking-display",
         "Show/hide the model's thinking text (off/full/current)",
     ),
     RegisteredCommand::hidden("/thinking", "Alias for /thinking-display"),
     RegisteredCommand::hidden("/reasoning", "Alias for /thinking-display"),
-    RegisteredCommand::public("/cancel", "Cancel the current prompt or operation"),
+    RegisteredCommand::hidden("/cancel", "Cancel the current prompt or operation"),
     RegisteredCommand::public("/clear", "Clear conversation history"),
-    RegisteredCommand::public("/cls", "Clear the view only, keeping context"),
+    RegisteredCommand::hidden("/cls", "Clear the view only, keeping context"),
     RegisteredCommand::hidden("/clear-view", "Alias for /cls"),
     RegisteredCommand::public("/rewind", "Rewind conversation to previous message"),
-    RegisteredCommand::public("/poke", "Poke model to resume with incomplete todos"),
-    RegisteredCommand::public("/plan", "Create a plan-only response as a plan card"),
-    RegisteredCommand::public("/improve", "Autonomously improve the repository"),
-    RegisteredCommand::public("/refactor", "Run a safe refactor loop"),
+    RegisteredCommand::hidden("/poke", "Poke model to resume with incomplete todos"),
+    RegisteredCommand::hidden("/plan", "Create a plan-only response as a plan card"),
+    RegisteredCommand::hidden("/improve", "Autonomously improve the repository"),
+    RegisteredCommand::hidden("/refactor", "Run a safe refactor loop"),
     RegisteredCommand::public("/compact", "Compact context"),
-    RegisteredCommand::public("/fix", "Recover when the model cannot continue"),
-    RegisteredCommand::public("/dictate", "Run configured external dictation command"),
-    RegisteredCommand::public("/dictation", "Alias for /dictate"),
-    RegisteredCommand::public("/memory", "Toggle memory feature"),
-    RegisteredCommand::public("/test", "Verify a claim/current changes with layered tests"),
+    RegisteredCommand::hidden("/fix", "Recover when the model cannot continue"),
+    RegisteredCommand::hidden("/dictate", "Run configured external dictation command"),
+    RegisteredCommand::hidden("/dictation", "Alias for /dictate"),
+    RegisteredCommand::hidden("/memory", "Show or toggle memory settings (/memory on|off)"),
+    RegisteredCommand::hidden("/test", "Verify a claim/current changes with layered tests"),
     RegisteredCommand::public(
-        "/initiatives",
-        "Show current session goals and explain retired legacy initiatives",
+        "/night",
+        "Overnight runs — read a morning report, stop a running night",
     ),
-    RegisteredCommand::public("/goals", "Legacy alias for /initiatives"),
-    RegisteredCommand::public("/swarm", "Toggle swarm feature"),
-    RegisteredCommand::public("/overnight", "Run a supervised overnight coordinator"),
-    RegisteredCommand::public("/context", "Show the full session context snapshot"),
-    RegisteredCommand::public(
-        "/skills",
-        "Show loaded skills and jcode-endorsed recommendations",
-    ),
-    RegisteredCommand::public("/version", "Show current version"),
-    RegisteredCommand::public("/changelog", "Show recent changes in this build"),
-    RegisteredCommand::public("/applets", "Open the applet component showcase"),
-    RegisteredCommand::public("/info", "Show session info and tokens"),
-    RegisteredCommand::public(
+    RegisteredCommand::public("/context", "Show what is occupying the context window"),
+    RegisteredCommand::public("/skills", "Show loaded skills (global + project)"),
+    RegisteredCommand::hidden("/version", "Show current version"),
+    RegisteredCommand::hidden("/changelog", "Show recent changes in this build"),
+    RegisteredCommand::hidden("/applets", "Open the applet component showcase"),
+    RegisteredCommand::hidden("/info", "Show session info and tokens"),
+    RegisteredCommand::hidden(
         "/reset",
         "Review and confirm an OpenAI or Claude usage limit reset",
     ),
     RegisteredCommand::public("/usage", "Show connected provider usage limits"),
-    RegisteredCommand::public(
-        "/productivity",
-        "Generate a shareable usage report + dashboard image",
-    ),
-    RegisteredCommand::public("/wrapped", "Alias for /productivity"),
-    RegisteredCommand::public("/feedback", "Send feedback about jcode"),
-    RegisteredCommand::public("/telemetry", "Show or change what jcode sends"),
-    RegisteredCommand::public("/support", "Email support with diagnostics prefilled"),
-    RegisteredCommand::public("/subscription", "Show jcode subscription status"),
-    RegisteredCommand::public("/subscribe", "Why and how to subscribe to jcode"),
-    RegisteredCommand::public("/config", "Show or edit configuration"),
-    RegisteredCommand::public("/log", "Mark the current location in the jcode logs"),
-    RegisteredCommand::public(
+    RegisteredCommand::hidden("/support", "Email support with diagnostics prefilled"),
+    RegisteredCommand::hidden("/subscribe", "Why and how to subscribe to Honey"),
+    RegisteredCommand::hidden("/config", "Show or edit configuration"),
+    RegisteredCommand::hidden("/log", "Mark the current location in the logs"),
+    RegisteredCommand::hidden(
         "/keys",
         "List Desktop keybindings and contexts (/keys refresh to refresh the list)",
     ),
     RegisteredCommand::hidden("/keybindings", "Alias for /keys"),
-    RegisteredCommand::public(
+    RegisteredCommand::hidden(
         "/diff",
         "Cycle or set diff display mode (off/inline/full/pinned/file)",
     ),
-    RegisteredCommand::public(
+    RegisteredCommand::hidden(
         "/onboarding-preview",
         "Open real first-run Desktop in a separate fresh-profile window (Alt+9)",
     ),
-    RegisteredCommand::public(
+    RegisteredCommand::hidden(
         "/onboarding-sim",
         "Open real first-run Desktop with an isolated fresh profile (Alt+9)",
     ),
     RegisteredCommand::public("/reload", "Reload into newest available binary"),
-    RegisteredCommand::public("/restart", "Restart with current binary"),
-    RegisteredCommand::public(
+    RegisteredCommand::hidden("/restart", "Restart with current binary"),
+    RegisteredCommand::hidden(
         "/restart-all",
         "Restart the server and every Desktop window, restoring all windows and sessions",
     ),
-    RegisteredCommand::public("/rebuild", "Background rebuild and auto reload"),
-    RegisteredCommand::public("/selfdev", "Open a new self-dev jcode session"),
-    RegisteredCommand::public("/update", "Background update and auto reload"),
+    RegisteredCommand::hidden("/rebuild", "Background rebuild and auto reload"),
+    RegisteredCommand::hidden("/selfdev", "Open a new self-dev session"),
+    RegisteredCommand::hidden("/update", "Background update and auto reload"),
     RegisteredCommand::public("/resume", "Open session picker"),
-    RegisteredCommand::public("/sessions", "Alias for /resume"),
-    RegisteredCommand::public("/session", "Alias for /resume"),
-    RegisteredCommand::public("/active", "Manage live sessions (working vs ready)"),
-    RegisteredCommand::public("/catchup", "Open Catch Up picker"),
-    RegisteredCommand::public("/back", "Return to the previous Catch Up session"),
-    RegisteredCommand::public("/save", "Bookmark session for easy access"),
-    RegisteredCommand::public("/unsave", "Remove bookmark from session"),
-    RegisteredCommand::public("/rename", "Rename current session"),
+    RegisteredCommand::hidden("/sessions", "Alias for /resume"),
+    RegisteredCommand::hidden("/session", "Alias for /resume"),
+    RegisteredCommand::hidden("/active", "Manage live sessions (working vs ready)"),
+    RegisteredCommand::hidden("/catchup", "Open Catch Up picker"),
+    RegisteredCommand::hidden("/back", "Return to the previous Catch Up session"),
+    RegisteredCommand::hidden("/save", "Bookmark session for easy access"),
+    RegisteredCommand::hidden("/unsave", "Remove bookmark from session"),
+    RegisteredCommand::hidden("/rename", "Rename current session"),
     RegisteredCommand::public("/fork", "Fork session into a new window (optional prompt)"),
     RegisteredCommand::hidden("/split", "Alias for /fork"),
-    RegisteredCommand::public("/transfer", "Compact context into a fresh handoff session"),
-    RegisteredCommand::public("/workspace", "Niri-style session workspace"),
-    RegisteredCommand::public("/quit", "Exit jcode"),
-    RegisteredCommand::public("/auth", "Show authentication status"),
-    RegisteredCommand::public("/login", "Login to a provider"),
-    RegisteredCommand::public("/logout", "Log out of a provider"),
-    RegisteredCommand::public("/account", "Open the combined account picker"),
-    RegisteredCommand::public("/accounts", "Alias for /account"),
-    RegisteredCommand::public("/cache", "Show cache stats or set cache TTL"),
-    RegisteredCommand::public("/debug-visual", "Toggle visual debug overlay"),
-    RegisteredCommand::public("/screenshot-mode", "Hide identifying interface metadata"),
-    RegisteredCommand::public("/screenshot", "Export a private JSON screenshot debug snapshot"),
-    RegisteredCommand::public("/record", "Record a bounded debug snapshot timeline (JSONL)"),
-    RegisteredCommand::remote("/client-reload", "Rebuild and hot-reload the Desktop UI"),
-    RegisteredCommand::remote("/server-reload", "Request a graceful server binary reload"),
-    RegisteredCommand::remote(
-        "/continue",
-        "Continue every interrupted live session that would auto-resume",
-    ),
-    RegisteredCommand::remote("/resumeall", "Alias for /continue"),
-    RegisteredCommand::hidden("/resume-all", "Alias for /continue"),
-    RegisteredCommand::hidden("/z", "Secret premium-mode command"),
-    RegisteredCommand::hidden("/zz", "Secret premium-mode command"),
-    RegisteredCommand::hidden("/zzz", "Secret premium-mode command"),
-    RegisteredCommand::hidden("/zstatus", "Secret premium-mode status command"),
+    RegisteredCommand::hidden("/transfer", "Compact context into a fresh handoff session"),
+    RegisteredCommand::hidden("/workspace", "Niri-style session workspace"),
+    RegisteredCommand::public("/quit", "Exit Honey"),
+    RegisteredCommand::hidden("/auth", "Show authentication status"),
+    RegisteredCommand::hidden("/login", "Login to a provider"),
+    RegisteredCommand::hidden("/logout", "Log out of a provider"),
+    RegisteredCommand::hidden("/account", "Open the combined account picker"),
+    RegisteredCommand::hidden("/accounts", "Alias for /account"),
+    RegisteredCommand::hidden("/debug-visual", "Toggle visual debug overlay"),
+    RegisteredCommand::hidden("/screenshot-mode", "Hide identifying interface metadata"),
+    RegisteredCommand::hidden("/screenshot", "Export a private JSON screenshot debug snapshot"),
+    RegisteredCommand::hidden("/record", "Record a bounded debug snapshot timeline (JSONL)"),
+    RegisteredCommand::hidden("/client-reload", "Rebuild and hot-reload the Desktop UI"),
 ];
 
 /// Every non-hidden slash command with its one-line description, in
@@ -355,13 +315,88 @@ mod tests {
     }
 
     #[test]
-    fn desktop_catalog_contains_the_full_tui_command_surface() {
-        assert!(REGISTERED_COMMANDS.len() >= 100);
+    fn desktop_catalog_covers_the_freecode_tui_surface() {
+        assert!(REGISTERED_COMMANDS.len() >= 80);
+        // Freecode TUI commands with a Desktop equivalent today. `/web`,
+        // `/mcp`, `/settings`, `/shells`, `/tree`, `/extensions`, `/cost` and
+        // `/graph` exist in the TUI but have no Desktop panel yet — tracked
+        // as follow-up, not asserted here until they are built.
         for command in [
-            "/help", "/model", "/agents", "/commit", "/effort", "/clear", "/rewind", "/compact",
-            "/test", "/resume", "/rename", "/auth", "/quit",
+            "/help", "/model", "/agents", "/night", "/effort", "/resume", "/compact", "/rewind",
+            "/fork", "/reload", "/context", "/usage", "/skills",
         ] {
             assert!(registered_command(command).is_some(), "missing {command}");
+        }
+    }
+
+    /// The `/` picker and `/help` must show exactly freecode's own TUI
+    /// surface, no more — a command Desktop can still run when typed
+    /// directly (session save/rename, theming, git/release tooling, the
+    /// account picker, …) is `hidden` rather than deleted, which keeps it
+    /// working without making it look like a freecode feature. `/quit` is
+    /// the one deliberate exception: every app needs a visible way to quit,
+    /// even though freecode's TUI spells its equivalent `/exit`.
+    #[test]
+    fn picker_shows_only_the_freecode_tui_surface_plus_quit() {
+        let visible: std::collections::BTreeSet<&str> =
+            registered_command_entries().map(|(name, _)| name).collect();
+        let expected: std::collections::BTreeSet<&str> = [
+            "/help", "/model", "/agents", "/night", "/effort", "/resume", "/compact", "/rewind",
+            "/fork", "/reload", "/context", "/usage", "/skills", "/clear", "/quit",
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(visible, expected);
+        // Spot-check a few Desktop-only extras: still registered (so typing
+        // them still works) but not in the picker.
+        for command in [
+            "/auth", "/login", "/logout", "/account", "/memory", "/info", "/commit", "/rename",
+            "/colors", "/git", "/save", "/selfdev", "/publish", "/triage",
+        ] {
+            let entry = registered_command(command).unwrap_or_else(|| panic!("missing {command}"));
+            assert!(entry.hidden, "{command} should be hidden, not deleted");
+        }
+    }
+
+    /// Commands with no freecode equivalent at all (jcode's own monetization,
+    /// swarm routing, GitHub triage automation, a separate review/judge
+    /// session, …) are not registered, not just hidden — see
+    /// `jcode-sdk/src/client.rs`'s `runtime_command` for the full reasoning.
+    #[test]
+    fn commands_with_no_freecode_equivalent_are_not_registered() {
+        for command in [
+            "/provider-test-coverage",
+            "/model-status",
+            "/refresh-model-list",
+            "/subagent",
+            "/subagent-model",
+            "/autoreview",
+            "/autojudge",
+            "/review",
+            "/judge",
+            "/fast",
+            "/transport",
+            "/initiatives",
+            "/goals",
+            "/swarm",
+            "/overnight",
+            "/productivity",
+            "/wrapped",
+            "/feedback",
+            "/telemetry",
+            "/subscription",
+            "/cache",
+            "/remote",
+            "/server-reload",
+            "/continue",
+            "/resumeall",
+            "/resume-all",
+            "/z",
+            "/zz",
+            "/zzz",
+            "/zstatus",
+        ] {
+            assert!(registered_command(command).is_none(), "{command} should be gone");
         }
         assert!(!registered_command_entries().any(|(name, _)| name == "/zzz"));
     }
