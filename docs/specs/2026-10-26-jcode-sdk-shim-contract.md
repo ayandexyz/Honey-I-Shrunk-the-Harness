@@ -509,7 +509,10 @@ match. Ordered by use.
 | `ToolExec` | 2 | `tool_output` | close | ✅ done |
 | `SidePaneImages` | 2 | — | **gap** | todo — decide: cut |
 | `RuntimeCommandResult` | 2 | — | built by the harness from `runtime_command`'s reply | todo — follows `runtime_command` |
-| `SessionRecovery`, `SessionForked`, `Attached`, `AppletState` | 1 each | — | | todo — decide |
+| `SessionForked` | 1 | `session.fork` | ✅ done — `fork_session` publishes it right after the reply, carrying the same `SessionInfo` it returns |
+| `Attached` | 1 | `session.resume` / `session.start` | ✅ done — `attach_session`/`create_session` publish it after their reply, so the sound-state machine resets (`live_turn`/`cancelled`/`error_reported`) on (re)attach |
+| `SessionRecovery` | 1 | — | **gap**: jcode's server-owned crash-continuation directive, consumed via `client.send_system_reminder` — which freecode has no IPC for (see `send_system_reminder` row). No freecode concept of a daemon-detected interrupted-turn continuation to source this from | cut — would need `send_system_reminder` built first |
+| `AppletState` | 1 | — | jcode's agent-applet UI primitive | cut — applets are cut |
 | `PermissionRequest` | 1 (sound only) | `permission_asked` | answered by the freecode approve card (`panel_permission_card.rs`) | ✅ done |
 | `Compacted` | 0 | `compaction_complete` | routed, never consumed | cut |
 | `TextReplace` / `TextDone` | 0 | — | never matched | cut |

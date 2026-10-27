@@ -542,6 +542,11 @@ impl JcodeClient {
         }
         self.attach_to(&info.session_id);
         self.publish_model_info(&info.session_id);
+        crate::freecode::publish(
+            &self.inner,
+            ApiEvent::Attached { session: info.clone() },
+            Some(&info.session_id),
+        );
         Ok(info)
     }
 
@@ -576,6 +581,11 @@ impl JcodeClient {
         }
         self.attach_to(session_id);
         self.publish_model_info(session_id);
+        crate::freecode::publish(
+            &self.inner,
+            ApiEvent::Attached { session: info.clone() },
+            Some(session_id),
+        );
         Ok(info)
     }
 
@@ -585,7 +595,13 @@ impl JcodeClient {
     }
 
     pub fn fork_session(&self, session_id: &str) -> Result<SessionInfo> {
-        crate::freecode_session::fork_session(&self.inner, session_id)
+        let info = crate::freecode_session::fork_session(&self.inner, session_id)?;
+        crate::freecode::publish(
+            &self.inner,
+            ApiEvent::SessionForked { session: info.clone() },
+            Some(&info.session_id),
+        );
+        Ok(info)
     }
 
     pub fn detach_session(&self, session_id: &str) -> Result<()> {
