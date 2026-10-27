@@ -14,6 +14,7 @@ import { spawn } from "child_process";
 import {
   anthropicAuthMode,
   openaiAuthMode,
+  setApiKey,
   setProviderAuthMode,
 } from "../../providers/config.js";
 import {
@@ -291,6 +292,20 @@ const statusCommand: CommandModule = {
   },
 };
 
+const setKeyCommand: CommandModule<object, { provider: string; key: string; model?: string }> = {
+  command: "set-key <provider> <key>",
+  describe: "store a plain API key for a provider (non-OAuth)",
+  builder: (yargs) =>
+    yargs
+      .positional("provider", { type: "string", demandOption: true, describe: "provider id, e.g. anthropic, openai, gemini" })
+      .positional("key", { type: "string", demandOption: true, describe: "the API key" })
+      .option("model", { type: "string", describe: "default model id to pair with this key" }) as never,
+  handler: (argv) => {
+    setApiKey(argv.provider, argv.key, argv.model);
+    console.log(`Stored API key for ${argv.provider}.`);
+  },
+};
+
 const logoutCommand: CommandModule<object, { provider: string }> = {
   command: "logout [provider]",
   describe: "forget stored OAuth credentials and revert to API-key auth",
@@ -320,6 +335,7 @@ export const authCommand: CommandModule = {
     yargs
       .command(loginCommand as CommandModule)
       .command(statusCommand)
+      .command(setKeyCommand as CommandModule)
       .command(logoutCommand as CommandModule)
       .demandCommand(1, "Specify a subcommand"),
   handler: () => {},
