@@ -63,6 +63,23 @@ pub(crate) fn translate(states: &mut States, line: &Value) -> Vec<(ApiEvent, Str
                 call_id: call_id.clone(),
                 name: name.clone(),
             });
+            // jcode's ApiEvent::ToolStart has no args field at all — the UI
+            // only ever learns a call's input by accumulating ToolInputDelta
+            // chunks (jcode streams them token by token). Core instead sends
+            // the whole `args` object in one shot on tool_start, so without
+            // this every tool call rendered as "{}" (an empty accumulator),
+            // regardless of its real arguments. One complete "delta" is a
+            // degenerate but valid stream: the UI's incremental JSON parser
+            // handles a single full chunk the same as the last of many.
+            if let Some(args) = line.get("args")
+                && !call_id.is_empty()
+            {
+                out.push(ApiEvent::ToolInputDelta {
+                    session_id: session_id.clone(),
+                    call_id: call_id.clone(),
+                    delta: args.to_string(),
+                });
+            }
             out.push(ApiEvent::ToolExec {
                 session_id: session_id.clone(),
                 call_id,
@@ -210,6 +227,19 @@ mod tests {
         assert!(matches!(events[0], ApiEvent::TurnStopped { reason: TurnStopReason::Failure, .. }));
         assert!(matches!(&events[1], ApiEvent::Error { message, .. } if message == "provider 500"));
         assert_eq!(events.len(), 3);
+    }
+
+    #[test]
+    fn tool_start_carries_args_as_one_input_delta() {
+        let events = run(&[json!({
+            "type":"tool_start","sessionId":"s","toolCallId":"c1","toolName":"bash",
+            "args":{"command":"ls -la"}
+        })]);
+        assert!(matches!(&events[0], ApiEvent::ToolStart { call_id, name, .. }
+            if call_id == "c1" && name == "bash"));
+        assert!(matches!(&events[1], ApiEvent::ToolInputDelta { call_id, delta, .. }
+            if call_id == "c1" && delta == r#"{"command":"ls -la"}"#));
+        assert!(matches!(&events[2], ApiEvent::ToolExec { call_id, .. } if call_id == "c1"));
     }
 
     #[test]
