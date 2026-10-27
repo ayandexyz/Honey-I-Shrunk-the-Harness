@@ -60,7 +60,15 @@ async function connectServer(
       },
     );
 
-    await mcpClient.connect(transport);
+    await Promise.race([
+      mcpClient.connect(transport),
+      new Promise((_resolve, reject) =>
+        setTimeout(
+          () => reject(new Error(`MCP server "${server.name}" connect timed out after ${timeout}ms`)),
+          timeout,
+        ),
+      ),
+    ]);
 
     // Register the client so tools can use it
     registerClient(server.name, mcpClient, timeout);
