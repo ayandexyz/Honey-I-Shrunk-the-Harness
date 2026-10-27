@@ -1887,6 +1887,24 @@ export const methodHandlers: Record<
     return { title: display };
   },
 
+  // Sticky session-level override, mirroring the `effort` field `session.send`
+  // already pins onto the in-memory session (server.ts `session.effort =
+  // effort`) — this just lets a client set it without sending a turn.
+  "session.setReasoningEffort": async (
+    params: Record<string, unknown>,
+  ): Promise<{ effort: EffortLevel }> => {
+    const { sessionId, effort } = params as {
+      sessionId: string;
+      effort: EffortLevel;
+    };
+    const session = getSession(sessionId);
+    if (!session) {
+      throw new Error(`Session not found: ${sessionId}`);
+    }
+    session.effort = effort;
+    return { effort };
+  },
+
   "session.delete": async (params: Record<string, unknown>): Promise<void> => {
     const { sessionId, purge } = params as {
       sessionId: string;

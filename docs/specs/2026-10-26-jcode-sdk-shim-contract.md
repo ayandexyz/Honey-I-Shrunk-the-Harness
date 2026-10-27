@@ -242,8 +242,8 @@ never comes from upstream is this `jcode-sdk` shim.
    "not supported by freecode yet" error. Recommendation on record: hide SSH
    remotes and managed cloud (nothing in freecode backs them); replace the
    "Sign in to Jcode" footer and login picker with freecode's own provider
-   and auth state (`freecode auth login`). The "decide" rows (rename, save,
-   reasoning effort, rewind, system reminder) are the same kind of extra.
+   and auth state (`freecode auth login`). The remaining "decide" rows (save,
+   rewind undo, system reminder, transfer) are the same kind of extra.
 6. **IN PROGRESS** — fix UI fallout file by file.
    - **Jcode's on-disk state (Phase 1 finding 4), fixed without upstream
      edits**: every reader honours `JCODE_HOME` — the harness's
@@ -467,7 +467,7 @@ needs its signature to compile; it never needs a real body.
 | `rename_session` | 2 | `session.rename` (new, 2026-10-27) | `{sessionId, title?}` → `{title}`; `title` omitted clears to core's generated "Session <id>" placeholder | ✅ done |
 | `set_session_saved` | 2 | — | **gap** (pin/save a session) | unsupported error — decide |
 | `set_model` | 2 | `config.setCurrentModel` | per-process not per-session in freecode | ✅ done |
-| `set_reasoning_effort` | 2 (+1 `managed_cloud_parity.rs`) | — | **gap**, no per-session effort IPC | unsupported error — decide |
+| `set_reasoning_effort` | 2 (+1 `managed_cloud_parity.rs`) | `session.setReasoningEffort` (new, 2026-10-27) | sticky per-session override, same precedence as `session.send`'s own `effort` field (`server.ts`'s `session.effort = effort`) but settable without sending a turn | ✅ done |
 | `list_models` | 0 | `models.list` | models reach desktop through `RuntimeInfo.routes`, not this | stub — signature only |
 | `get_runtime_info` | 2 | `config.get` + `models.list` | must assemble `RuntimeInfo { provider, model, reasoning_effort, auth_method, routes: Vec<ModelRouteInfo> }` | ✅ done |
 | `get_history_with_images` | 1 | `session.tree` (previews only) | needs full messages as `HistoryMessage` + `RenderedImage` — likely a new IPC method | ✅ done |

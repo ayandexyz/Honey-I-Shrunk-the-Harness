@@ -286,13 +286,33 @@ fn current(inner: &Inner) -> Result<(Option<String>, Option<String>, Option<Stri
 /// model change, so a client can show which model it is talking to.
 pub(crate) fn model_info_event(inner: &Inner, session_id: &str) -> Result<ApiEvent> {
     let (provider, model, auth_method) = current(inner)?;
+    let reasoning_effort = inner
+        .reasoning_efforts
+        .lock()
+        .ok()
+        .and_then(|efforts| efforts.get(session_id).cloned());
     Ok(ApiEvent::ModelInfo {
         session_id: session_id.to_string(),
         provider,
         model,
-        reasoning_effort: None,
+        reasoning_effort,
         auth_method,
     })
+}
+
+/// Sticky per-session override via `session.setReasoningEffort`. Remembered
+/// here (not read back from core) because `config.get` only reports the
+/// process-global model, not a per-session effort.
+pub(crate) fn set_reasoning_effort(inner: &Inner, session_id: &str, effort: &str) -> Result<()> {
+    call(
+        inner,
+        "session.setReasoningEffort",
+        json!({ "sessionId": session_id, "effort": effort }),
+    )?;
+    if let Ok(mut efforts) = inner.reasoning_efforts.lock() {
+        efforts.insert(session_id.to_string(), effort.to_string());
+    }
+    Ok(())
 }
 
 pub(crate) fn runtime_info(inner: &Inner, session_id: &str) -> Result<RuntimeInfo> {

@@ -804,6 +804,13 @@ export const METHODS = {
     params: {} as { sessionId: string; title?: string },
     result: {} as { title: string },
   },
+  // Sticky per-session override: applies to every send() until the session
+  // ends or sends its own explicit `effort`, same precedence as the model
+  // pin (`session.model`). Session-scoped, unlike `config.setCurrentModel`.
+  "session.setReasoningEffort": {
+    params: {} as { sessionId: string; effort: import("../types.js").EffortLevel },
+    result: {} as { effort: import("../types.js").EffortLevel },
+  },
   // `purge` also removes the session's on-disk artifacts; without it the
   // record is marked deleted and the files stay.
   "session.delete": {
@@ -939,6 +946,7 @@ export const REQUIRED_PARAMS: Record<
   "session.rewind": { sessionId: "string", entryId: "string" },
   "session.archive": { sessionId: "string" },
   "session.rename": { sessionId: "string" },
+  "session.setReasoningEffort": { sessionId: "string", effort: "string" },
   "session.delete": { sessionId: "string" },
   "session.getInterrupted": {},
   "session.export": { sessionId: "string" },

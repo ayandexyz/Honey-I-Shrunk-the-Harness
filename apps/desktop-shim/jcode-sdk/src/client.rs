@@ -260,6 +260,11 @@ pub(crate) struct Inner {
     /// explore/danger), threaded into the next `session.send`/steer. No
     /// jcode-sdk equivalent — core's own permission-mode concept.
     pub(crate) agent_modes: Mutex<HashMap<String, String>>,
+    /// freecode: sticky per-session reasoning effort set via
+    /// `set_reasoning_effort` (`session.setReasoningEffort`), since
+    /// `config.get` only reports the process-global model, not this. Read
+    /// into `ModelInfo.reasoning_effort` whenever that's republished.
+    pub(crate) reasoning_efforts: Mutex<HashMap<String, String>>,
     /// freecode: true until the first session touches a just-spawned core,
     /// so exactly one `ConnectionPhase` connecting/connected pair is emitted
     /// per core process lifetime (not one per client or per attach call).
@@ -866,7 +871,9 @@ impl JcodeClient {
     /// is per-provider, so this takes a string rather than a union that would
     /// go stale.
     pub fn set_reasoning_effort(&self, session_id: &str, effort: &str) -> Result<()> {
-        Err(crate::freecode_session::unsupported("set_reasoning_effort"))
+        crate::freecode_session::set_reasoning_effort(&self.inner, session_id, effort)?;
+        self.publish_model_info(session_id);
+        Ok(())
     }
 
     /// Schedule compaction of the transcript so far, freeing context. Not
