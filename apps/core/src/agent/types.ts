@@ -335,8 +335,8 @@ export interface UserInput {
   projectPath: string;
   agentMode?: AgentMode;
   effort?: EffortLevel;
-  /** Set when the harness, not the user, wrote the prompt (a task notification). */
-  synthetic?: "task_notification";
+  /** Set when the harness, not the user, wrote the prompt (a task notification or a hidden system reminder). */
+  synthetic?: "task_notification" | "context";
   /** A subagent's definition (`agent({ subagent_type })`): its prompt and tool allowlist. */
   role?: AgentRole;
   /**

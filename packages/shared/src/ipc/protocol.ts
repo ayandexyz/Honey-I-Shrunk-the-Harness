@@ -904,6 +904,7 @@ export const REQUIRED_PARAMS: Record<
   "session.stop": { sessionId: "string" },
   "session.compact": { sessionId: "string" },
   "session.list": {},
+  "session.activeIds": {},
   "session.resume": { sessionId: "string" },
   "session.claudeList": {},
   "session.claudeTranscript": { sessionId: "string" },
