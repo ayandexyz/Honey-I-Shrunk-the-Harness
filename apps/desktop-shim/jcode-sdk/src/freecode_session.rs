@@ -250,9 +250,31 @@ pub(crate) fn cancel(inner: &Inner, session_id: &str) -> Result<()> {
     call(inner, "session.stop", json!({ "sessionId": session_id })).map(|_| ())
 }
 
-pub(crate) fn fork_session(inner: &Inner, session_id: &str) -> Result<SessionInfo> {
+/// `session.fork`'s reply is a bare id string, not an object — `session_info`
+/// needs `{"id": ...}` or `SessionInfo::session_id` (a required field) fails
+/// to deserialize.
+fn fork(inner: &Inner, session_id: &str) -> Result<String> {
     let forked = call(inner, "session.fork", json!({ "sessionId": session_id }))?;
-    session_info(&forked)
+    forked
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| Error::new(ErrorKind::UnexpectedReply, "session.fork: expected a string id"))
+}
+
+pub(crate) fn fork_session(inner: &Inner, session_id: &str) -> Result<SessionInfo> {
+    let fork_id = fork(inner, session_id)?;
+    session_info(&json!({ "id": fork_id }))
+}
+
+/// jcode's "create a fresh session containing a runtime-compacted handoff,
+/// parent unchanged" — freecode has no single operation for that, so this is
+/// fork (clone the transcript) + resume (register the clone in memory, since
+/// compact needs `getSession` to find it) + compact (summarize it in place).
+pub(crate) fn transfer_session(inner: &Inner, session_id: &str) -> Result<SessionInfo> {
+    let fork_id = fork(inner, session_id)?;
+    call(inner, "session.resume", json!({ "sessionId": fork_id }))?;
+    call(inner, "session.compact", json!({ "sessionId": fork_id }))?;
+    session_info(&json!({ "id": fork_id }))
 }
 
 pub(crate) fn compact(inner: &Inner, session_id: &str) -> Result<String> {

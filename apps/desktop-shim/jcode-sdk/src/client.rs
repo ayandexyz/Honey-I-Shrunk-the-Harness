@@ -601,7 +601,13 @@ impl JcodeClient {
 
     /// Clone a session's complete persisted context into a new idle session.
     pub fn transfer_session(&self, session_id: &str) -> Result<SessionInfo> {
-        Err(crate::freecode_session::unsupported("transfer_session"))
+        let info = crate::freecode_session::transfer_session(&self.inner, session_id)?;
+        crate::freecode::publish(
+            &self.inner,
+            ApiEvent::SessionForked { session: info.clone() },
+            Some(&info.session_id),
+        );
+        Ok(info)
     }
 
     pub fn fork_session(&self, session_id: &str) -> Result<SessionInfo> {

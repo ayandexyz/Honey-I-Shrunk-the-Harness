@@ -242,8 +242,7 @@ never comes from upstream is this `jcode-sdk` shim.
    "not supported by freecode yet" error. Recommendation on record: hide SSH
    remotes and managed cloud (nothing in freecode backs them); replace the
    "Sign in to Jcode" footer and login picker with freecode's own provider
-   and auth state (`freecode auth login`). The remaining "decide" row
-   (transfer) is the same kind of extra.
+   and auth state (`freecode auth login`).
 6. **IN PROGRESS** — fix UI fallout file by file.
    - **Jcode's on-disk state (Phase 1 finding 4), fixed without upstream
      edits**: every reader honours `JCODE_HOME` — the harness's
@@ -457,7 +456,7 @@ needs its signature to compile; it never needs a real body.
 | `list_sessions` | 0 | `session.list` | — | ✅ done |
 | `archive_session` | 0 | `session.archive` | — | stub — signature only |
 | `fork_session` | 2 | `session.fork` | close | ✅ done |
-| `transfer_session` | 1 | — | **gap** (move a session between daemons) | unsupported error — decide: error or cut |
+| `transfer_session` | 1 | `session.fork` + `session.resume` + `session.compact` | **not** "move a session between daemons" as earlier noted — upstream's own doc comment is "create a fresh session containing a runtime-compacted handoff, parent unchanged," i.e. fork + compact the clone. freecode has no single op for that, so the shim does fork → resume (registers the clone in memory, since `compact` needs `getSession` to find it) → compact; replies `SessionForked` like a plain fork. **Found and fixed in the same pass**: `fork_session`'s existing "done" row was silently broken — `session.fork`'s reply is a bare id string, not an object, so `session_info()` on it failed to deserialize (`session_id` is a required field); both now go through a shared `fork()` helper that extracts the string first | ✅ done |
 | `send_message_with_reminder` | 1 | `session.send` | jcode fires, then the harness waits for `MessageAccepted` on the event stream; freecode's `session.send` streams and resolves with the turn. Shim emits a synthetic `MessageAccepted` first | ✅ done |
 | `send_message` | 0 (tests only) | `session.send` | — | ✅ done |
 | `send_system_reminder` | 2 | `session.sendSystemReminder` (new, 2026-10-27) | `{sessionId, reminder}`; runs a real turn persisted as `synthetic: "context"` (hidden from history/title/memory, same kind the harness's own memory/todo/reminder injection uses), refused outright if the session is already mid-turn — no accept-wait or queue, matching the two production callers (turn-retry, crash-recovery), which only call this once they've confirmed the session is idle | ✅ done |
