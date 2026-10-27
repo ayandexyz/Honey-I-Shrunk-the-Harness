@@ -386,6 +386,16 @@ enum SidebarView {
     Settings,
 }
 
+/// Which half of the sidebar Accounts list is showing. Two pills side by
+/// side, not one scroll with inline headings, so a long provider catalog
+/// does not bury a short connected list (or vice versa).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum AccountsSidebarTab {
+    #[default]
+    Connected,
+    NotConnected,
+}
+
 // Minimap: a compact card in the top right that maps every strip to
 // scale, preserving the canvas aspect ratio so panels taller than wide on
 // screen stay taller than wide on the map.
@@ -841,6 +851,7 @@ pub struct Workspace {
     accounts_scroll: ScrollHandle,
     accounts_scroll_remainder: f32,
     accounts_layout_pending: bool,
+    accounts_tab: AccountsSidebarTab,
     /// Review and redemption of one login's banked usage reset.
     usage_reset: Option<usage_reset::Dialog>,
     status: String,
@@ -1158,6 +1169,7 @@ impl Workspace {
             accounts_scroll: ScrollHandle::new(),
             accounts_scroll_remainder: 0.0,
             accounts_layout_pending: true,
+            accounts_tab: AccountsSidebarTab::default(),
             usage_reset: None,
             status: "starting...".into(),
             connected: false,
@@ -1543,6 +1555,7 @@ impl Workspace {
             accounts_scroll: ScrollHandle::new(),
             accounts_scroll_remainder: 0.0,
             accounts_layout_pending: true,
+            accounts_tab: AccountsSidebarTab::default(),
             usage_reset: None,
             status: "test".into(),
             connected: true,
@@ -6827,6 +6840,10 @@ impl Workspace {
             return None;
         }
 
+        let connected_count = self.accounts.iter().filter(|a| a.available()).count();
+        let not_connected_count = self.accounts.len() - connected_count;
+        let tab = self.accounts_tab;
+
         let section = div()
             .debug_selector(|| "accounts-section".into())
             .flex_1()
@@ -6842,7 +6859,8 @@ impl Workspace {
                     .text_size(px(10.0))
                     .text_color(Theme::global().TEXT_DIM)
                     .child("accounts"),
-            );
+            )
+            .child(self.render_accounts_tabs(tab, connected_count, not_connected_count, cx));
 
         let active = self.slots.get(self.active).and_then(|slot| {
             let panel = slot.panel.read(cx);
@@ -6877,36 +6895,14 @@ impl Workspace {
             )
             .flex()
             .flex_col();
-        let mut previous_availability = None;
         for (index, account) in
             accounts::ordered(&self.accounts, active.as_deref(), &self.recent_accounts)
                 .into_iter()
                 .enumerate()
         {
             let available = account.available();
-            if previous_availability != Some(available) {
-                list = list.child(
-                    div()
-                        .debug_selector(move || {
-                            if available {
-                                "accounts-connected-heading".into()
-                            } else {
-                                "accounts-disconnected-heading".into()
-                            }
-                        })
-                        .flex_none()
-                        .px_4()
-                        .pt_2()
-                        .pb_1()
-                        .text_size(px(10.0))
-                        .text_color(Theme::global().TEXT_DIM)
-                        .child(if available {
-                            "Connected"
-                        } else {
-                            "Not connected"
-                        }),
-                );
-                previous_availability = Some(available);
+            if available != (tab == AccountsSidebarTab::Connected) {
+                continue;
             }
             let ink = if available {
                 Theme::global().TEXT
@@ -7257,6 +7253,77 @@ impl Workspace {
                 )
                 .into_any_element(),
         )
+    }
+
+    fn render_accounts_tabs(
+        &self,
+        active: AccountsSidebarTab,
+        connected_count: usize,
+        not_connected_count: usize,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let theme = Theme::global();
+        let connected_selected = active == AccountsSidebarTab::Connected;
+        let pill = |id: &'static str,
+                    label: String,
+                    selected: bool,
+                    target: AccountsSidebarTab,
+                    cx: &mut Context<Self>| {
+            div()
+                .id(id)
+                .debug_selector(move || id.into())
+                .flex_1()
+                .flex()
+                .items_center()
+                .justify_center()
+                .px_2()
+                .py_1()
+                .rounded_full()
+                .cursor_pointer()
+                .text_size(px(10.0))
+                .font_weight(if selected {
+                    gpui::FontWeight::SEMIBOLD
+                } else {
+                    gpui::FontWeight::NORMAL
+                })
+                .when(selected, |el| {
+                    el.bg(theme.ACCENT.opacity(0.16)).text_color(theme.ACCENT)
+                })
+                .when(!selected, |el| {
+                    el.text_color(theme.TEXT_DIM)
+                        .hover(|el| el.bg(theme.PANEL_BORDER))
+                })
+                .child(label)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.accounts_tab = target;
+                    cx.notify();
+                }))
+        };
+        div()
+            .debug_selector(|| "accounts-tabs".into())
+            .flex_none()
+            .flex()
+            .gap_1()
+            .mx_4()
+            .mb_1()
+            .p(px(2.0))
+            .rounded_full()
+            .bg(theme.PANEL_BORDER.opacity(0.4))
+            .child(pill(
+                "accounts-tab-connected",
+                format!("Connected ({connected_count})"),
+                connected_selected,
+                AccountsSidebarTab::Connected,
+                cx,
+            ))
+            .child(pill(
+                "accounts-tab-not-connected",
+                format!("Not connected ({not_connected_count})"),
+                !connected_selected,
+                AccountsSidebarTab::NotConnected,
+                cx,
+            ))
+            .into_any_element()
     }
 
     fn render_preference_tab(
@@ -11625,15 +11692,21 @@ mod tests {
             cx.notify();
         });
         vcx.run_until_parked();
-        let connected = vcx.debug_bounds("accounts-connected-heading").unwrap();
-        let disconnected = vcx.debug_bounds("accounts-disconnected-heading").unwrap();
-        let ready = vcx.debug_bounds("account-openrouter").unwrap();
-        let signed_out = vcx.debug_bounds("account-openai").unwrap();
-        assert!(connected.bottom() <= ready.top());
-        assert!(ready.bottom() <= disconnected.top());
-        assert!(disconnected.bottom() <= signed_out.top());
+        // Connected is the default tab: only the available account shows.
+        assert!(vcx.debug_bounds("account-openrouter").is_some());
+        assert!(vcx.debug_bounds("account-openai").is_none());
+        assert!(vcx.debug_bounds("account-claude").is_none());
         assert!(vcx.debug_bounds("account-openai-history").is_none());
-        for id in ["openai", "claude", "openrouter"] {
+        let row = vcx.debug_bounds("account-openrouter").unwrap();
+        let status = vcx.debug_bounds("account-openrouter-status").unwrap();
+        assert!(status.top() >= row.top() && status.bottom() <= row.bottom());
+
+        // Switch tabs: the available account drops out, the other two appear.
+        let not_connected = vcx.debug_bounds("accounts-tab-not-connected").unwrap();
+        vcx.simulate_click(not_connected.center(), gpui::Modifiers::default());
+        vcx.run_until_parked();
+        assert!(vcx.debug_bounds("account-openrouter").is_none());
+        for id in ["openai", "claude"] {
             let row = vcx
                 .debug_bounds(Box::leak(format!("account-{id}").into_boxed_str()))
                 .unwrap();
@@ -11642,6 +11715,7 @@ mod tests {
                 .unwrap();
             assert!(status.top() >= row.top() && status.bottom() <= row.bottom());
         }
+
         workspace.update(vcx, |w, cx| {
             for account in &mut w.accounts {
                 account.status = "not_configured".into();
@@ -11649,8 +11723,8 @@ mod tests {
             cx.notify();
         });
         vcx.run_until_parked();
-        assert!(vcx.debug_bounds("accounts-connected-heading").is_none());
-        assert!(vcx.debug_bounds("accounts-disconnected-heading").is_some());
+        // Still on Not connected: openrouter now qualifies too.
+        assert!(vcx.debug_bounds("account-openrouter").is_some());
         assert!(vcx.debug_bounds("account-openrouter-status").is_some());
     }
 
@@ -11995,12 +12069,9 @@ mod tests {
             accounts::logo("jcode").is_some(),
             "Honey Subscription must use the donut logo, not a lettermark"
         );
-        let openai_row = vcx
+        let _openai_row = vcx
             .debug_bounds("account-openai")
             .expect("the OpenAI account row should have painted");
-        let jcode_row = vcx
-            .debug_bounds("account-jcode")
-            .expect("the Honey account row and donut should have painted");
         let first_limit = vcx
             .debug_bounds("account-openai-limit-0")
             .expect("the first usage limit should paint");
@@ -12010,11 +12081,6 @@ mod tests {
         assert!(
             vcx.debug_bounds("account-openai-limit-2").is_none(),
             "additional quotas should be hidden to keep the account compact"
-        );
-        assert!(
-            vcx.debug_bounds("account-jcode-limit-unavailable")
-                .is_none(),
-            "missing quota data should not add a second line"
         );
         assert!(
             vcx.debug_bounds("account-antigravity-limit-0").is_some(),
@@ -12036,9 +12102,19 @@ mod tests {
             first_limit.size.width, second_limit.size.width,
             "each quota column should retain a readable width"
         );
+        // Expired is not "available", so jcode sits on the Not connected tab
+        // rather than painting alongside openai and antigravity here.
+        assert!(vcx.debug_bounds("account-jcode").is_none());
+
+        let not_connected = vcx.debug_bounds("accounts-tab-not-connected").unwrap();
+        vcx.simulate_click(not_connected.center(), gpui::Modifiers::default());
+        vcx.run_until_parked();
+        vcx.debug_bounds("account-jcode")
+            .expect("the Honey account row and donut should have painted");
         assert!(
-            openai_row.origin.y < jcode_row.origin.y,
-            "available accounts should be listed above expired ones"
+            vcx.debug_bounds("account-jcode-limit-unavailable")
+                .is_none(),
+            "missing quota data should not add a second line"
         );
     }
 
