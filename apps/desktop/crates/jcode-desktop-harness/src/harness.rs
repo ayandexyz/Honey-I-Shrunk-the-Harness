@@ -243,6 +243,12 @@ pub enum Command {
         request_id: String,
         decision: jcode_sdk::PermissionDecision,
     },
+    /// freecode: set the permission mode (plan/build/review/explore/danger)
+    /// for this session's next turn.
+    SetAgentMode {
+        session_id: String,
+        mode: String,
+    },
     RuntimeCommand {
         session_id: String,
         command: jcode_sdk::api::RuntimeCommand,
@@ -313,6 +319,7 @@ enum SessionCommand {
     Transfer,
     SetModel(String),
     RespondPermission(String, jcode_sdk::PermissionDecision),
+    SetAgentMode(String),
     RuntimeCommand(jcode_sdk::api::RuntimeCommand, Vec<String>),
     Operation(SessionOperation),
     Stop,
@@ -976,6 +983,12 @@ fn run_with_transports(
                 decision,
             } => {
                 let command = SessionCommand::RespondPermission(request_id, decision);
+                send_to_session_worker(&mut workers, session_id, command, |session_id| {
+                    spawn_session_worker(session_id, &updates, &transports)
+                });
+            }
+            Command::SetAgentMode { session_id, mode } => {
+                let command = SessionCommand::SetAgentMode(mode);
                 send_to_session_worker(&mut workers, session_id, command, |session_id| {
                     spawn_session_worker(session_id, &updates, &transports)
                 });
@@ -2307,6 +2320,9 @@ fn session_worker_with_connector(
                                 reason: format!("Failed to answer permission request: {error}"),
                             });
                         }
+                    }
+                    SessionCommand::SetAgentMode(mode) => {
+                        client.set_agent_mode(real_id, &mode);
                     }
                     SessionCommand::SetModel(model) => {
                         if let Err(error) = client.set_model(real_id, &model) {

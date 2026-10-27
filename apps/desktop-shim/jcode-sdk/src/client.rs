@@ -256,6 +256,10 @@ pub(crate) struct Inner {
     pub(crate) sessions: Mutex<crate::freecode_events::States>,
     /// freecode: transcript returned by `session.resume`, for `get_history`.
     pub(crate) history: Mutex<HashMap<String, serde_json::Value>>,
+    /// freecode: desktop-chosen `agentMode` per session (plan/build/review/
+    /// explore/danger), threaded into the next `session.send`/steer. No
+    /// jcode-sdk equivalent — core's own permission-mode concept.
+    pub(crate) agent_modes: Mutex<HashMap<String, String>>,
 }
 
 /// Connected harness client.
@@ -321,11 +325,28 @@ impl JcodeClient {
         }
     }
 
+    /// freecode addition: set the agent mode (`plan`/`build`/`review`/
+    /// `explore`/`danger`) the desktop wants for this session's next turn.
+    /// No jcode-sdk equivalent; core reads `agentMode` off `session.send`.
+    pub fn set_agent_mode(&self, session_id: &str, mode: &str) {
+        crate::freecode_session::set_agent_mode(&self.inner, session_id, mode);
+    }
+
+    /// freecode addition: the mode last set for this session, if any.
+    pub fn agent_mode(&self, session_id: &str) -> Option<String> {
+        crate::freecode_session::agent_mode(&self.inner, session_id)
+    }
+
     /// Retain this client's shared SSH master for reconnecting independent API
     /// channels. Returns None for isolated or already closed SSH channels.
+    // ponytail: freecode has no SSH transport (cut for v1, see shim contract
+    // doc "No freecode equivalent" table) — every client is non-SSH, so this
+    // is always None, not a todo!(). It used to panic the per-session worker
+    // thread on startup for every session, local included, leaving nothing to
+    // ever read the EventStream and the desktop stuck on "Responding" forever.
     #[cfg(unix)]
     pub fn shared_ssh_transport(&self) -> Option<crate::SharedSshTransport> {
-        todo!("jcode-sdk shim: shared_ssh_transport")
+        None
     }
 
     /// Connect to a remote shared harness using system SSH credentials/config.

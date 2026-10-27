@@ -158,6 +158,24 @@ impl Panel {
                                 cx.stop_propagation();
                             })),
                     )
+                    .child({
+                        let danger = self.agent_mode == "danger";
+                        composer_pill("panel-agent-mode")
+                            .flex_shrink(3.)
+                            .min_w(px(40.))
+                            .when(danger, |el| el.bg(theme.ERROR_BG).text_color(theme.ERROR))
+                            .when(!danger, |el| el.text_color(theme.TEXT_FAINT))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .child(mode_label(&self.agent_mode)),
+                            )
+                            .on_click(cx.listener(|this, _, _window, cx| {
+                                this.cycle_agent_mode(cx);
+                                cx.stop_propagation();
+                            }))
+                    })
                     .children(effort.map(|effort| {
                         composer_pill("panel-model-effort")
                             .flex_shrink(3.)
@@ -448,6 +466,17 @@ pub(super) fn pretty_model_label(model: Option<&str>) -> String {
     match pretty.strip_prefix("Claude ") {
         Some(rest) if !rest.trim().is_empty() => rest.to_string(),
         _ => pretty,
+    }
+}
+
+/// freecode addition: short label for the permission-mode pill.
+pub(super) fn mode_label(mode: &str) -> &'static str {
+    match mode {
+        "plan" => "Plan",
+        "review" => "Review",
+        "explore" => "Explore",
+        "danger" => "Danger",
+        _ => "Build",
     }
 }
 

@@ -103,11 +103,14 @@ pub(crate) fn send_message(
     content: &str,
     images: Vec<(String, String)>,
 ) -> Result<()> {
-    let params = json!({
+    let mut params = json!({
         "sessionId": session_id,
         "message": content,
         "images": wire_images(images),
     });
+    if let Some(mode) = agent_mode(inner, session_id) {
+        params["agentMode"] = json!(mode);
+    }
     let reply = send_request(inner, "session.send", params)?;
     if let Ok(mut states) = inner.sessions.lock() {
         states.entry(session_id.to_string()).or_default().turn_open = true;
@@ -154,17 +157,27 @@ pub(crate) fn steer(
     content: &str,
     images: Vec<(String, String)>,
 ) -> Result<()> {
-    call(
-        inner,
-        "session.send",
-        json!({
-            "sessionId": session_id,
-            "message": content,
-            "images": wire_images(images),
-            "streamingBehavior": "steer",
-        }),
-    )
-    .map(|_| ())
+    let mut params = json!({
+        "sessionId": session_id,
+        "message": content,
+        "images": wire_images(images),
+        "streamingBehavior": "steer",
+    });
+    if let Some(mode) = agent_mode(inner, session_id) {
+        params["agentMode"] = json!(mode);
+    }
+    call(inner, "session.send", params).map(|_| ())
+}
+
+/// freecode addition: desktop-chosen agent mode for a session's next turn.
+pub(crate) fn set_agent_mode(inner: &Inner, session_id: &str, mode: &str) {
+    if let Ok(mut modes) = inner.agent_modes.lock() {
+        modes.insert(session_id.to_string(), mode.to_string());
+    }
+}
+
+pub(crate) fn agent_mode(inner: &Inner, session_id: &str) -> Option<String> {
+    inner.agent_modes.lock().ok()?.get(session_id).cloned()
 }
 
 /// jcode passes `(media_type, base64)` pairs.

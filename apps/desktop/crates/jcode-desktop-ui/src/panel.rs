@@ -603,6 +603,9 @@ pub struct Panel {
     orchestration: Option<orchestration::State>,
     recovery_picker_open: bool,
     model_picker_open: bool,
+    /// freecode addition: the permission mode (plan/build/review/explore/
+    /// danger) sent with this session's next turn. No jcode-sdk equivalent.
+    agent_mode: String,
     focus_pending: bool,
     /// Read-only transcript surface (resume preview): the chat renderer
     /// without composer, footer, or focus stealing.
@@ -1044,6 +1047,7 @@ impl Panel {
             .then(orchestration::State::fixture),
             recovery_picker_open: false,
             model_picker_open: false,
+            agent_mode: "build".into(),
             focus_pending: false,
             transcript_only: false,
             login: None,
@@ -2167,6 +2171,11 @@ impl Panel {
                     }
                 }
                 "/model" | "/models" => self.open_model_picker(cx),
+                "/mode" => self.cycle_agent_mode(cx),
+                "/plan" | "/build" | "/review" | "/explore" | "/danger" => {
+                    let mode = trimmed.trim_start_matches('/').to_string();
+                    self.set_agent_mode(&mode, cx);
+                }
                 "/update" => {
                     let request = crate::updates::request_now();
                     let message = match request {
@@ -2321,6 +2330,28 @@ impl Panel {
             } if name == "todo" => parse_todo_tool_output(output),
             _ => None,
         })
+    }
+
+    /// freecode addition: step through plan/build/review/explore/danger and
+    /// send the new mode to core for this session's next turn. No picker —
+    /// five options cycle cheaply on repeated clicks.
+    pub(crate) fn cycle_agent_mode(&mut self, cx: &mut Context<Self>) {
+        const MODES: [&str; 5] = ["plan", "build", "review", "explore", "danger"];
+        let next = MODES
+            .iter()
+            .position(|m| *m == self.agent_mode)
+            .map(|i| MODES[(i + 1) % MODES.len()])
+            .unwrap_or("build");
+        self.set_agent_mode(next, cx);
+    }
+
+    pub(crate) fn set_agent_mode(&mut self, mode: &str, cx: &mut Context<Self>) {
+        self.agent_mode = mode.to_string();
+        self.bridge.send(Command::SetAgentMode {
+            session_id: self.session_id.clone(),
+            mode: mode.to_string(),
+        });
+        cx.notify();
     }
 
     fn open_model_picker(&mut self, cx: &mut Context<Self>) {
@@ -2765,6 +2796,12 @@ impl Panel {
     }
 
     fn apply_event(&mut self, event: &ApiEvent, cx: &mut Context<Self>) {
+        if matches!(event, ApiEvent::PermissionRequest { .. }) {
+            eprintln!(
+                "[debug permission] panel session_id={} apply_event received: {event:?}",
+                self.session_id
+            );
+        }
         if matches!(
             event,
             ApiEvent::TextDelta { .. }

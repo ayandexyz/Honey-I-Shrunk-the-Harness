@@ -188,6 +188,7 @@ fn start(
         client_handles: AtomicUsize::new(0),
         sessions: Mutex::new(crate::freecode_events::States::new()),
         history: Mutex::new(HashMap::new()),
+        agent_modes: Mutex::new(HashMap::new()),
     });
     Ok((child, stdout, inner))
 }
@@ -224,11 +225,19 @@ fn dispatch(inner: &Inner, value: Value) {
         }
         return;
     }
+    // TEMP DEBUG (permission-card investigation): confirm core's raw line
+    // reaches the shim before translation can hide a parsing gap.
+    if value.get("type").and_then(Value::as_str) == Some("permission_asked") {
+        eprintln!("[debug permission] raw line from core: {value}");
+    }
     let events = match inner.sessions.lock() {
         Ok(mut states) => crate::freecode_events::translate(&mut states, &value),
         Err(_) => return,
     };
     for (event, session) in events {
+        if matches!(event, ApiEvent::PermissionRequest { .. }) {
+            eprintln!("[debug permission] translated event for session={session}: {event:?}");
+        }
         publish(inner, event, Some(&session));
     }
 }
@@ -240,6 +249,12 @@ pub(crate) fn publish(inner: &Inner, event: ApiEvent, target: Option<&str>) {
     let Ok(mut subs) = inner.subscribers.lock() else {
         return;
     };
+    if matches!(event, ApiEvent::PermissionRequest { .. }) {
+        eprintln!(
+            "[debug permission] publish: session={session:?} subscriber_filters={:?}",
+            subs.iter().map(|(id, f, _)| (*id, f.clone())).collect::<Vec<_>>()
+        );
+    }
     subs.retain(|(_, filter, tx): &Subscriber| {
         let wanted = match (filter, session) {
             (Some(filter), Some(session)) => filter == session,
