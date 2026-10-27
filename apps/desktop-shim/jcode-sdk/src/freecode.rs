@@ -341,6 +341,8 @@ pub(crate) fn session_info(session: &Value) -> Result<SessionInfo> {
         "archived": status == "archived",
         "updated_at_ms": session.get("updatedAt"),
         "last_active_at_ms": session.get("lastTurnAt"),
+        "saved": session.get("pinned").and_then(Value::as_bool).unwrap_or(false),
+        "save_label": session.get("pinnedLabel"),
     });
     serde_json::from_value(info).map_err(|e| {
         Error::new(ErrorKind::UnexpectedReply, format!("session.list: {e}"))
@@ -389,5 +391,19 @@ mod tests {
         assert_eq!(info.status, "idle");
         assert!(info.archived);
         assert_eq!(info.updated_at_ms, Some(2000));
+    }
+
+    #[test]
+    fn session_info_maps_pinned_to_saved() {
+        let pinned = session_info(&json!({
+            "id": "s1", "pinned": true, "pinnedLabel": "release checklist",
+        }))
+        .unwrap();
+        assert!(pinned.saved);
+        assert_eq!(pinned.save_label.as_deref(), Some("release checklist"));
+
+        let unpinned = session_info(&json!({ "id": "s2" })).unwrap();
+        assert!(!unpinned.saved);
+        assert_eq!(unpinned.save_label, None);
     }
 }

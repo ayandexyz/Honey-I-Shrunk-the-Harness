@@ -357,6 +357,38 @@ fn model_routes(provider: &str, models: &Value) -> Vec<ModelRouteInfo> {
         .collect()
 }
 
+/// Bookmark/unbookmark a session. A non-empty `label` also becomes its
+/// title — `session.setSaved`'s reply carries the new title only when that
+/// happened, and the shim synthesizes `SessionRenamed` from it itself, the
+/// same reason `rename_session` does: a client's event subscription is
+/// scoped to the session it attached to, so core's own broadcast (if any)
+/// would be dropped for a session renamed from the sidebar without being
+/// open.
+pub(crate) fn set_session_saved(
+    inner: &Inner,
+    session_id: &str,
+    saved: bool,
+    label: Option<String>,
+) -> Result<()> {
+    let mut params = json!({ "sessionId": session_id, "saved": saved });
+    if let Some(label) = &label {
+        params["label"] = json!(label);
+    }
+    let result = call(inner, "session.setSaved", params)?;
+    if let Some(display_title) = result.get("title").and_then(Value::as_str) {
+        publish(
+            inner,
+            ApiEvent::SessionRenamed {
+                session_id: session_id.to_string(),
+                title: Some(display_title.to_string()),
+                display_title: display_title.to_string(),
+            },
+            Some(session_id),
+        );
+    }
+    Ok(())
+}
+
 /// jcode's three decisions onto core's `PermissionAnswer`. "Always" is
 /// core's project-wide rule, its closest match; deny is an answer too.
 pub(crate) fn respond_to_permission(

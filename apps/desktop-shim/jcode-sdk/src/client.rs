@@ -894,7 +894,7 @@ impl JcodeClient {
         saved: bool,
         label: Option<String>,
     ) -> Result<()> {
-        Err(crate::freecode_session::unsupported("set_session_saved"))
+        crate::freecode_session::set_session_saved(&self.inner, session_id, saved, label)
     }
 
     /// Report a user action in an agent applet instance.

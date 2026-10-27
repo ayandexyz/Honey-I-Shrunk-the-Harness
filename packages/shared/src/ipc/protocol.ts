@@ -811,6 +811,13 @@ export const METHODS = {
     params: {} as { sessionId: string; effort: import("../types.js").EffortLevel },
     result: {} as { effort: import("../types.js").EffortLevel },
   },
+  // Bookmark/unbookmark a session (desktop's pin, jcode's `/save <label>`).
+  // A non-empty `label` also becomes the title; `title` is set on the result
+  // only when that happened, so a caller knows to refresh its display title.
+  "session.setSaved": {
+    params: {} as { sessionId: string; saved: boolean; label?: string },
+    result: {} as { title?: string },
+  },
   // `purge` also removes the session's on-disk artifacts; without it the
   // record is marked deleted and the files stay.
   "session.delete": {
@@ -947,6 +954,7 @@ export const REQUIRED_PARAMS: Record<
   "session.archive": { sessionId: "string" },
   "session.rename": { sessionId: "string" },
   "session.setReasoningEffort": { sessionId: "string", effort: "string" },
+  "session.setSaved": { sessionId: "string", saved: "boolean" },
   "session.delete": { sessionId: "string" },
   "session.getInterrupted": {},
   "session.export": { sessionId: "string" },

@@ -36,6 +36,8 @@ export interface SessionContext {
   turnCount: number;
   parentId?: string;
   messages: SerializedMessage[];
+  pinned?: boolean;
+  pinnedLabel?: string;
 }
 
 // =============================================================================
@@ -117,6 +119,8 @@ export class SessionManager {
       lastTurnAt: meta.lastTurnAt,
       turnCount: meta.turnCount,
       parentId: meta.parentId,
+      pinned: meta.pinned,
+      pinnedLabel: meta.pinnedLabel,
       messages,
     };
   }
@@ -162,6 +166,8 @@ export class SessionManager {
       lastTurnAt: meta.lastTurnAt,
       turnCount: meta.turnCount,
       parentId: meta.parentId,
+      pinned: meta.pinned,
+      pinnedLabel: meta.pinnedLabel,
       messages: [], // Don't load messages for list
     }));
   }
@@ -177,6 +183,25 @@ export class SessionManager {
     const display = title?.trim() || `Session ${sessionId}`;
     await this.sessionStore.updateMeta(sessionId, { title: display });
     return display;
+  }
+
+  // Bookmark/unbookmark a session (desktop's pin, jcode's `/save`). A
+  // non-empty label also becomes the title, mirroring jcode's
+  // SetSessionSaved. Unpinning clears the label — it has no meaning without
+  // the bookmark it was attached to.
+  async setSaved(
+    sessionId: string,
+    saved: boolean,
+    label?: string,
+  ): Promise<{ title?: string }> {
+    await this.sessionStore.updateMeta(sessionId, {
+      pinned: saved,
+      pinnedLabel: saved ? label : undefined,
+    });
+    if (saved && label?.trim()) {
+      return { title: await this.rename(sessionId, label) };
+    }
+    return {};
   }
 
   // Delete a session. `purge` also removes the transcript files from disk

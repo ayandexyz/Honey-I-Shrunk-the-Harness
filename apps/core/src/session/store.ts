@@ -38,6 +38,10 @@ export interface SessionMeta {
   leafId?: string;
   /** Bookmarks for the tree view, keyed by entry id. */
   labels?: Record<string, string>;
+  /** User-pinned/saved (desktop's bookmark star; jcode's `/save`). */
+  pinned?: boolean;
+  /** Optional label given when pinning. Cleared when unpinned. */
+  pinnedLabel?: string;
 }
 
 /**

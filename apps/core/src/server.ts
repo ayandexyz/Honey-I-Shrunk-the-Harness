@@ -1905,6 +1905,25 @@ export const methodHandlers: Record<
     return { effort };
   },
 
+  "session.setSaved": async (
+    params: Record<string, unknown>,
+  ): Promise<{ title?: string }> => {
+    const { sessionId, saved, label } = params as {
+      sessionId: string;
+      saved: boolean;
+      label?: string;
+    };
+    const manager = await getSessionManager();
+    const result = await manager.setSaved(sessionId, saved, label);
+    if (result.title) {
+      BusEvents.stream(sessionId, {
+        type: "session_renamed",
+        title: result.title,
+      });
+    }
+    return result;
+  },
+
   "session.delete": async (params: Record<string, unknown>): Promise<void> => {
     const { sessionId, purge } = params as {
       sessionId: string;
