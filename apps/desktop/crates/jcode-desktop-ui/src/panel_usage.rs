@@ -490,22 +490,25 @@ mod tests {
 
     #[test]
     fn active_limits_match_credentials_not_model_family() {
-        let mut accounts = crate::accounts::parse(r#"{"providers":[{"id":"openai","status":"available"},{"id":"openai-api","status":"available"},{"id":"openrouter","status":"available"}]}"#).unwrap();
+        let mut accounts = crate::accounts::parse(r#"{"providers":[{"id":"openai","status":"available"},{"id":"openrouter","status":"available"}]}"#).unwrap();
         accounts[0].limits.push(UsageLimit {
             name: "5 hour".into(),
             usage_percent: 25.,
             reset_in: Some("2h".into()),
         });
+        // freecode's catalogue has one id per provider regardless of auth
+        // mode, so OAuth and API key both resolve to the same account.
         assert_eq!(
             active_limits(&accounts, Some("openai"), Some("oauth"))
                 .unwrap()
                 .len(),
             1
         );
-        assert!(
+        assert_eq!(
             active_limits(&accounts, Some("openai"), Some("api key"))
                 .unwrap()
-                .is_empty()
+                .len(),
+            1
         );
         assert!(
             active_limits(&accounts, Some("openrouter"), Some("api key"))
@@ -648,7 +651,7 @@ mod tests {
     fn claude_oauth_limits_paint_with_daemon_display_name(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
             let mut accounts = crate::accounts::parse(
-                r#"{"providers":[{"id":"claude","status":"available","auth_kind":"OAuth"},{"id":"anthropic-api","status":"available","auth_kind":"API key"}]}"#,
+                r#"{"providers":[{"id":"anthropic","status":"available","auth_kind":"OAuth"}]}"#,
             )
             .unwrap();
             crate::accounts::merge_usage_for_tests(
@@ -662,7 +665,7 @@ mod tests {
                 crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
             workspace.push_test_panel("claude-session", cx);
             workspace.test_panel(0).unwrap().update(cx, |panel, _| {
-                // The daemon reports `Claude`, not the canonical `claude` id.
+                // The daemon reports `Claude`, not the canonical `anthropic` id.
                 panel.provider = Some("Claude".into());
                 panel.auth_method = Some("oauth".into());
                 panel.model = Some("claude-opus-4-5".into());
@@ -680,7 +683,7 @@ mod tests {
     fn throttled_claude_oauth_quota_says_limits_are_unavailable(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
             let mut accounts = crate::accounts::parse(
-                r#"{"providers":[{"id":"claude","status":"available","auth_kind":"OAuth"}]}"#,
+                r#"{"providers":[{"id":"anthropic","status":"available","auth_kind":"OAuth"}]}"#,
             )
             .unwrap();
             crate::accounts::merge_usage_for_tests(

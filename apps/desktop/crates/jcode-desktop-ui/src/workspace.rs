@@ -2104,6 +2104,76 @@ impl Workspace {
         .detach();
     }
 
+    /// Switch every open session to `provider`'s first model — the "Switch"
+    /// pill on a connected-but-not-current account row. `/model`'s picker
+    /// only ever lists the CURRENT provider's models (it calls `models.list`
+    /// scoped to whatever `config.get` reports as current), so there is no
+    /// in-composer way to reach a different connected provider without
+    /// already knowing one of its model ids by heart; this is that way.
+    /// Picks the first model models.dev reports — a reasonable default, not
+    /// a recommendation — `/model` still works afterward to pick another.
+    fn switch_to_provider(&mut self, provider: String, cx: &mut Context<Self>) {
+        let session_ids: Vec<String> = self
+            .slots
+            .iter()
+            .filter(|slot| !slot.closing)
+            .map(|slot| slot.panel.read(cx).session_id.clone())
+            .collect();
+        let task_provider = provider.clone();
+        let task = cx.background_executor().spawn(async move {
+            if crate::harness::screenshot_mode() {
+                return Err(
+                    "Switching providers is disabled in the offline preview.".to_string(),
+                );
+            }
+            let client = jcode_sdk::JcodeClient::connect(jcode_sdk::ConnectOptions {
+                client_name: "jcode-desktop-accounts".into(),
+                ensure_runtime: false,
+                ..Default::default()
+            })
+            .map_err(|_| {
+                "Could not connect to Honey. Try again when the connection is restored."
+                    .to_string()
+            })?;
+            let models = client.list_provider_models(&task_provider).map_err(|_| {
+                format!("Could not list {task_provider}'s models.")
+            })?;
+            models
+                .into_iter()
+                .next()
+                .ok_or_else(|| format!("{task_provider} has no models to switch to."))
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok(model) => {
+                        let route = format!("{provider}:{model}");
+                        for session_id in &session_ids {
+                            this.bridge.send(Command::SetModel {
+                                session_id: session_id.clone(),
+                                model: route.clone(),
+                            });
+                            // SetModel's ModelInfo event updates the identity
+                            // label but not the model LIST — that only comes
+                            // from RuntimeInfo, which is scoped to whichever
+                            // provider it was last fetched for. Without this,
+                            // `/model` keeps listing the old provider's
+                            // models after a provider switch.
+                            this.bridge.send(Command::RefreshRuntime {
+                                session_id: session_id.clone(),
+                            });
+                        }
+                        accounts::request_refresh();
+                    }
+                    Err(error) => eprintln!("switch_to_provider({provider}): {error}"),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     fn create_folder_search(&self, cx: &mut Context<Self>) -> Entity<PromptInput> {
         let weak = cx.weak_entity();
         let change_weak = weak.clone();
@@ -7366,6 +7436,75 @@ impl Workspace {
             let is_api_key = account.auth_kind == "API key";
             let provider_id = account.id.clone();
             let display_name = account.display_name.clone();
+            // The provider actually in use right now (`active`, computed
+            // above from the focused session's live `ModelInfo`) gets a
+            // tag; every other connected provider gets a one-click way to
+            // become it, since `/model`'s picker only ever lists the
+            // CURRENT provider's models and can't reach another connected
+            // one on its own.
+            let is_active = available && Some(account.id.as_str()) == active.as_deref();
+            let status_or_switch: Option<gpui::AnyElement> = if is_active {
+                Some(
+                    div()
+                        .debug_selector({
+                            let id = account.id.clone();
+                            move || format!("account-{id}-active")
+                        })
+                        .flex_none()
+                        .px(px(8.0))
+                        .h(px(16.0))
+                        .flex()
+                        .items_center()
+                        .rounded_full()
+                        .text_size(px(9.0))
+                        .bg(Theme::global().OK.opacity(0.16))
+                        .text_color(Theme::global().OK)
+                        .child("Active")
+                        .into_any_element(),
+                )
+            } else if available {
+                let switch_target = account.id.clone();
+                let switch_label = account.display_name.clone();
+                let tooltip_label = switch_label.clone();
+                Some(
+                    div()
+                        .id(("account-switch", index))
+                        .debug_selector({
+                            let id = account.id.clone();
+                            move || format!("account-{id}-switch")
+                        })
+                        .flex_none()
+                        .px(px(8.0))
+                        .h(px(16.0))
+                        .flex()
+                        .items_center()
+                        .rounded_full()
+                        .cursor_pointer()
+                        .text_size(px(9.0))
+                        .bg(Theme::global().ACCENT.opacity(0.16))
+                        .text_color(Theme::global().ACCENT)
+                        .hover(|el| el.bg(Theme::global().ACCENT.opacity(0.26)))
+                        .tooltip(move |_, cx| {
+                            cx.new(|_| {
+                                remotes::HeaderTooltip(
+                                    format!(
+                                        "Switch the current session to {tooltip_label}'s default model. Pick a different one afterward with /model."
+                                    )
+                                    .into(),
+                                )
+                            })
+                            .into()
+                        })
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.switch_to_provider(switch_target.clone(), cx);
+                        }))
+                        .child("Switch")
+                        .into_any_element(),
+                )
+            } else {
+                None
+            };
             list = list.child(
                 div()
                     .flex_none()
@@ -7398,6 +7537,7 @@ impl Workspace {
                     })
                     .child(logo)
                     .child(details)
+                    .children(status_or_switch)
                     .child(
                         div()
                             .flex_none()

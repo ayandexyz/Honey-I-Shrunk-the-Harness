@@ -795,6 +795,12 @@ impl JcodeClient {
         crate::freecode_session::set_api_key(&self.inner, provider, api_key)
     }
 
+    /// Model ids for `provider`, independent of which provider is current —
+    /// for the account panel's "switch to this provider" action.
+    pub fn list_provider_models(&self, provider: &str) -> Result<Vec<String>> {
+        crate::freecode_session::list_provider_models(&self.inner, provider)
+    }
+
     /// Reload credentials saved by an out-of-band OAuth login. This does not
     /// send a chat message or transport any credential material.
     pub fn notify_auth_changed(&self, provider: &str) -> Result<()> {

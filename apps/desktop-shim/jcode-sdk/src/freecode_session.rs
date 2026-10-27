@@ -341,6 +341,21 @@ pub(crate) fn set_api_key(inner: &Inner, provider: &str, api_key: &str) -> Resul
     .map(|_| ())
 }
 
+/// Model ids for a given provider, regardless of which one is current —
+/// for the account panel's "switch to this provider" action, which needs a
+/// default model for a provider the session may not be using yet. The
+/// session-scoped model list (via `runtime_info`'s routes) only ever covers
+/// the CURRENT provider.
+pub(crate) fn list_provider_models(inner: &Inner, provider: &str) -> Result<Vec<String>> {
+    let result = call(inner, "models.list", json!({ "providerId": provider }))?;
+    Ok(result
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|model| model.get("id").and_then(Value::as_str).map(str::to_owned))
+        .collect())
+}
+
 /// `/skills` — every loaded skill (repo + global + plugin), from `skills.list`.
 pub(crate) fn skills_summary(inner: &Inner) -> Result<(Value, String)> {
     let result = call(inner, "skills.list", json!({}))?;

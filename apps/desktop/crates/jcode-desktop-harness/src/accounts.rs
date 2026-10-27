@@ -268,15 +268,23 @@ impl Account {
 /// Resolve the credential, not the model family (Claude can use OpenRouter).
 /// The daemon may report a display name (`Claude`, `Anthropic`, `OpenAI`,
 /// `GitHub Copilot`) rather than a canonical id, so normalize first.
-pub fn credential_id(provider: &str, auth: Option<&str>) -> String {
-    let api_key = auth == Some("api key");
+///
+/// `auth` is unused: this used to split a provider into a separate id per
+/// auth mode (`claude`/`anthropic-api`, `openai`/`openai-api`, …), matching
+/// jcode's own catalog, which lists OAuth and API-key credentials for the
+/// same provider as distinct accounts. freecode's catalogue does not split
+/// them — `freecode auth status --json` reports exactly one id per provider
+/// (`anthropic`, `openai`, `gemini`, …) whichever auth mode is configured —
+/// so splitting here made every OAuth-authenticated account resolve to an id
+/// (`claude`, `github copilot`→`copilot`, …) that never appears in the real
+/// account list, and it would never match as the active or usage-limit
+/// account. Kept as a parameter so a future freecode catalogue split would
+/// not need to change every call site.
+pub fn credential_id(provider: &str, _auth: Option<&str>) -> String {
     let provider = provider.trim().to_ascii_lowercase();
     match provider.as_str() {
-        "anthropic" | "claude" if api_key => "anthropic-api".to_owned(),
-        "anthropic" | "claude" | "claude-cli" => "claude".to_owned(),
-        "openai" if api_key => "openai-api".to_owned(),
-        "gemini" if api_key => "gemini-api".to_owned(),
-        "github copilot" => "copilot".to_owned(),
+        "anthropic" | "claude" | "claude-cli" => "anthropic".to_owned(),
+        "github copilot" => "github-copilot".to_owned(),
         _ => provider,
     }
 }
@@ -712,16 +720,20 @@ mod tests {
     }
 
     #[test]
-    fn credential_identity_distinguishes_oauth_from_api_keys() {
-        assert_eq!(credential_id("anthropic", Some("oauth")), "claude");
-        assert_eq!(credential_id("anthropic", Some("api key")), "anthropic-api");
-        assert_eq!(credential_id("openai", Some("api key")), "openai-api");
-        assert_eq!(credential_id("openai", Some("oauth")), "openai");
+    fn credential_identity_matches_freecodes_single_id_per_provider() {
+        // freecode's catalogue has one id per provider, the same whether
+        // it's authenticated by OAuth or API key — unlike auth mode, which
+        // never changes the result.
+        for auth in [Some("oauth"), Some("api key"), None] {
+            assert_eq!(credential_id("anthropic", auth), "anthropic");
+            assert_eq!(credential_id("openai", auth), "openai");
+            assert_eq!(credential_id("gemini", auth), "gemini");
+        }
         assert_eq!(credential_id("openrouter", None), "openrouter");
         // The daemon reports display names, not canonical ids.
-        assert_eq!(credential_id("Claude", Some("oauth")), "claude");
-        assert_eq!(credential_id("Anthropic", Some("oauth")), "claude");
-        assert_eq!(credential_id("Claude", Some("api key")), "anthropic-api");
+        assert_eq!(credential_id("Claude", Some("oauth")), "anthropic");
+        assert_eq!(credential_id("Anthropic", Some("oauth")), "anthropic");
+        assert_eq!(credential_id("GitHub Copilot", None), "github-copilot");
         assert_eq!(credential_id("OpenAI", Some("oauth")), "openai");
         assert_eq!(credential_id("OpenRouter", None), "openrouter");
     }
