@@ -2401,6 +2401,14 @@ impl Workspace {
                     }
                 }
             }
+            Update::AgentMode { session_id, mode } => {
+                for slot in &self.slots {
+                    if slot.panel.read(cx).session_id == session_id {
+                        slot.panel.update(cx, |panel, cx| panel.set_agent_mode(&mode, cx));
+                        break;
+                    }
+                }
+            }
             Update::MessageSubmitted { .. } => {}
             Update::SessionSaved {
                 session_id,

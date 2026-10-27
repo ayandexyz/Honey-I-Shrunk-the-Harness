@@ -500,7 +500,7 @@ match. Ordered by use.
 | `ToolInputDelta` | 9 | — | freecode sends a tool call's full `args` in one `tool_start` line, not token-by-token; the shim emits ONE complete delta right after `ToolStart` so the UI's incremental-JSON accumulator (which otherwise only ever saw jcode's real per-token stream) has something to parse — without it every tool call rendered its args as `{}` | ✅ done |
 | `ModelInfo` | 8 | `config.get` | sent after attach and on model change | todo |
 | `TokenUsage` | 6 | `usage_totals` | field rename | ✅ done |
-| `ConnectionPhase` | 6 | — | `connecting`/`connected`/`disconnected`, from the shim's own child-process state | todo |
+| `ConnectionPhase` | 6 | — | `connecting`/`connected` only (no `disconnected`), from the shim's own child-process state: `Inner.connecting` (an `AtomicBool`, set on core spawn) is consumed once by whichever of `attach_session`/`create_session` runs first against a freshly-spawned core, so the panel shows "Connecting" during a cold `apps/core` boot instead of nothing. Does not cover a core dying mid-session — the shim has no transparent respawn under a live client, so that still surfaces as a transport error on the next call, not a phase event | ✅ done (partial — see gap) |
 | `SidePanelState` | 4 | — | **gap** (jcode side panel pages) | todo — decide: cut |
 | `ReasoningDone` | 4 | `thinking` | close | ✅ done |
 | `SessionRenamed` | 3 | — | synthesized by the shim right after `session.rename`'s reply confirms the write (not a stream event on freecode's side) | ✅ done |

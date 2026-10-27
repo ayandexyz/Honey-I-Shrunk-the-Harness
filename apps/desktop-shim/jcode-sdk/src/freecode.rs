@@ -189,6 +189,7 @@ fn start(
         sessions: Mutex::new(crate::freecode_events::States::new()),
         history: Mutex::new(HashMap::new()),
         agent_modes: Mutex::new(HashMap::new()),
+        connecting: AtomicBool::new(true),
     });
     Ok((child, stdout, inner))
 }

@@ -13,12 +13,44 @@ pub(super) fn retry_startup(request_id: Option<&str>) -> bool {
 pub(super) fn create(
     connector: impl FnOnce() -> jcode_sdk::Result<JcodeClient>,
     working_dir: Option<String>,
+    updates: &UpdateSender,
+    request_id: Option<&str>,
 ) -> jcode_sdk::Result<(SessionInfo, JcodeClient)> {
     let started = Instant::now();
     let connection = connector();
     let connect_elapsed = started.elapsed();
     let connected = connection.is_ok();
     let result = connection.and_then(|client| {
+        // The provider/model identity does not need a session: send it as
+        // soon as the core connection is up, the way the TUI's `config.get`
+        // populates its status line before any session exists. Without this
+        // the composer's model pill stays blank for the whole `session.start`
+        // round trip (core may still be cold-booting), even though the
+        // answer was already available.
+        if let Some(request_id) = request_id {
+            if let Ok(info) = client.get_runtime_info(request_id) {
+                let _ = updates.send(Update::Event {
+                    session_id: request_id.to_string(),
+                    event: ApiEvent::RuntimeInfo {
+                        session_id: request_id.to_string(),
+                        provider: info.provider,
+                        model: info.model,
+                        routes: info.routes,
+                        reasoning_effort: info.reasoning_effort,
+                        auth_method: info.auth_method,
+                    },
+                });
+            }
+            // Same reasoning as RuntimeInfo above: the TUI restores the last
+            // agent mode before any session exists (`getLastAgentMode`), but
+            // the panel otherwise always opens on a hardcoded "build".
+            if let Ok(Some(mode)) = client.last_agent_mode() {
+                let _ = updates.send(Update::AgentMode {
+                    session_id: request_id.to_string(),
+                    mode,
+                });
+            }
+        }
         let session = client.create_session(working_dir)?;
         Ok((session, client))
     });

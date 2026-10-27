@@ -165,6 +165,14 @@ pub enum Update {
     Disconnected {
         reason: String,
     },
+    /// freecode addition: the mode the user last picked (`config.getLastAgentMode`),
+    /// sent once right after connect so a fresh panel starts on it instead of
+    /// always reopening on the hardcoded "build" default — the way the TUI's
+    /// `getLastAgentMode` call restores it at startup.
+    AgentMode {
+        session_id: String,
+        mode: String,
+    },
 }
 
 /// Commands flowing from the UI into the bridge.
@@ -825,8 +833,12 @@ fn run_with_transports(
                     .name("jcode-bridge-create".into())
                     .spawn(move || {
                         loop {
-                            let result =
-                                spawn_profile::create(|| connect("create"), working_dir.clone());
+                            let result = spawn_profile::create(
+                                || connect("create"),
+                                working_dir.clone(),
+                                &updates,
+                                request_id.as_deref(),
+                            );
                             match result {
                                 Ok((session, client)) => {
                                     let _ = internal.send(Command::CreatedInternal {

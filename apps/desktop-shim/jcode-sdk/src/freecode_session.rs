@@ -169,6 +169,14 @@ pub(crate) fn steer(
     call(inner, "session.send", params).map(|_| ())
 }
 
+/// freecode addition: the mode the user last picked, the way the TUI starts
+/// a fresh session on `config.getLastAgentMode` rather than a hardcoded
+/// default. `None` when core has never recorded one (fresh install).
+pub(crate) fn last_agent_mode(inner: &Inner) -> Result<Option<String>> {
+    let result = call(inner, "config.getLastAgentMode", json!({}))?;
+    Ok(result.as_str().map(str::to_string))
+}
+
 /// freecode addition: desktop-chosen agent mode for a session's next turn.
 pub(crate) fn set_agent_mode(inner: &Inner, session_id: &str, mode: &str) {
     if let Ok(mut modes) = inner.agent_modes.lock() {

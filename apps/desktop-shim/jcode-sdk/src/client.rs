@@ -260,6 +260,10 @@ pub(crate) struct Inner {
     /// explore/danger), threaded into the next `session.send`/steer. No
     /// jcode-sdk equivalent — core's own permission-mode concept.
     pub(crate) agent_modes: Mutex<HashMap<String, String>>,
+    /// freecode: true until the first session touches a just-spawned core,
+    /// so exactly one `ConnectionPhase` connecting/connected pair is emitted
+    /// per core process lifetime (not one per client or per attach call).
+    pub(crate) connecting: AtomicBool,
 }
 
 /// Connected harness client.
@@ -335,6 +339,13 @@ impl JcodeClient {
     /// freecode addition: the mode last set for this session, if any.
     pub fn agent_mode(&self, session_id: &str) -> Option<String> {
         crate::freecode_session::agent_mode(&self.inner, session_id)
+    }
+
+    /// freecode addition: the mode the user last picked, across sessions
+    /// (`config.getLastAgentMode`). No jcode-sdk equivalent — jcode has no
+    /// persisted agent-mode concept.
+    pub fn last_agent_mode(&self) -> Result<Option<String>> {
+        crate::freecode_session::last_agent_mode(&self.inner)
     }
 
     /// Retain this client's shared SSH master for reconnecting independent API
@@ -516,6 +527,19 @@ impl JcodeClient {
     /// Create a session with the normal assembled system prompt.
     pub fn create_session(&self, working_dir: Option<String>) -> Result<SessionInfo> {
         let info = crate::freecode_session::create_session(&self.inner, working_dir)?;
+        // No session id exists yet to carry a "connecting" phase, so this
+        // only reports the result: the core finished booting by the time
+        // `session.start` returned.
+        if self.inner.connecting.swap(false, Ordering::AcqRel) {
+            crate::freecode::publish(
+                &self.inner,
+                ApiEvent::ConnectionPhase {
+                    session_id: info.session_id.clone(),
+                    phase: "connected".into(),
+                },
+                Some(&info.session_id),
+            );
+        }
         self.attach_to(&info.session_id);
         Ok(info)
     }
@@ -530,7 +554,25 @@ impl JcodeClient {
     }
 
     pub fn attach_session(&self, session_id: &str) -> Result<SessionInfo> {
+        // The only path with a session id before the slow part runs: report
+        // the core's own boot, not a per-turn retry (jcode has no such
+        // concept here — freecode never retries a request transparently).
+        let reporting = self.inner.connecting.swap(false, Ordering::AcqRel);
+        if reporting {
+            crate::freecode::publish(
+                &self.inner,
+                ApiEvent::ConnectionPhase { session_id: session_id.to_string(), phase: "connecting".into() },
+                Some(session_id),
+            );
+        }
         let info = crate::freecode_session::attach_session(&self.inner, session_id)?;
+        if reporting {
+            crate::freecode::publish(
+                &self.inner,
+                ApiEvent::ConnectionPhase { session_id: session_id.to_string(), phase: "connected".into() },
+                Some(session_id),
+            );
+        }
         self.attach_to(session_id);
         Ok(info)
     }
