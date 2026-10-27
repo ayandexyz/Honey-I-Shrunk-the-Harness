@@ -282,6 +282,19 @@ fn current(inner: &Inner) -> Result<(Option<String>, Option<String>, Option<Stri
     Ok((provider, get("model"), auth))
 }
 
+/// `ModelInfo` for `session_id`: sent unsolicited after attach and again on
+/// model change, so a client can show which model it is talking to.
+pub(crate) fn model_info_event(inner: &Inner, session_id: &str) -> Result<ApiEvent> {
+    let (provider, model, auth_method) = current(inner)?;
+    Ok(ApiEvent::ModelInfo {
+        session_id: session_id.to_string(),
+        provider,
+        model,
+        reasoning_effort: None,
+        auth_method,
+    })
+}
+
 pub(crate) fn runtime_info(inner: &Inner, session_id: &str) -> Result<RuntimeInfo> {
     let (provider, model, auth_method) = current(inner)?;
     let routes = match &provider {

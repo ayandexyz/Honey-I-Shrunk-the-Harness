@@ -498,7 +498,7 @@ match. Ordered by use.
 | `ToolDone` | 11 | `tool_complete` | close | ✅ done |
 | `TurnStopped` | 10 | `done` / `session.stop` | `TurnStopReason` (`Interrupted`/`Failure`/`Crash`/`LimitReached`/`ProviderGuardrail`/`Unknown`) needs mapping from freecode's stop paths | ✅ done |
 | `ToolInputDelta` | 9 | — | freecode sends a tool call's full `args` in one `tool_start` line, not token-by-token; the shim emits ONE complete delta right after `ToolStart` so the UI's incremental-JSON accumulator (which otherwise only ever saw jcode's real per-token stream) has something to parse — without it every tool call rendered its args as `{}` | ✅ done |
-| `ModelInfo` | 8 | `config.get` | sent after attach and on model change | todo |
+| `ModelInfo` | 8 | `config.get` | sent after attach and on model change | ✅ done — `publish_model_info` in `client.rs`, fired from `create_session`/`attach_session`/`set_model`; best-effort, skipped on a failed `config.get` |
 | `TokenUsage` | 6 | `usage_totals` | field rename | ✅ done |
 | `ConnectionPhase` | 6 | — | `connecting`/`connected` only (no `disconnected`), from the shim's own child-process state: `Inner.connecting` (an `AtomicBool`, set on core spawn) is consumed once by whichever of `attach_session`/`create_session` runs first against a freshly-spawned core, so the panel shows "Connecting" during a cold `apps/core` boot instead of nothing. Does not cover a core dying mid-session — the shim has no transparent respawn under a live client, so that still surfaces as a transport error on the next call, not a phase event | ✅ done (partial — see gap) |
 | `SidePanelState` | 4 | — | **gap** (jcode side panel pages) | todo — decide: cut |

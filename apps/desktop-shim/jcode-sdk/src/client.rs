@@ -541,6 +541,7 @@ impl JcodeClient {
             );
         }
         self.attach_to(&info.session_id);
+        self.publish_model_info(&info.session_id);
         Ok(info)
     }
 
@@ -574,6 +575,7 @@ impl JcodeClient {
             );
         }
         self.attach_to(session_id);
+        self.publish_model_info(session_id);
         Ok(info)
     }
 
@@ -831,8 +833,17 @@ impl JcodeClient {
     /// Switch the session to a different model. `model` is an id from
     /// `list_models`.
     pub fn set_model(&self, session_id: &str, model: &str) -> Result<()> {
-        let _ = session_id;
-        crate::freecode_session::set_model(&self.inner, model)
+        crate::freecode_session::set_model(&self.inner, model)?;
+        self.publish_model_info(session_id);
+        Ok(())
+    }
+
+    /// Best-effort: a failed lookup just skips the event, same as other
+    /// synthesized-event call sites in this file.
+    fn publish_model_info(&self, session_id: &str) {
+        if let Ok(event) = crate::freecode_session::model_info_event(&self.inner, session_id) {
+            crate::freecode::publish(&self.inner, event, Some(session_id));
+        }
     }
 
     /// Set how much the model deliberates before answering. The accepted set
