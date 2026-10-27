@@ -162,9 +162,9 @@ never comes from upstream is this `jcode-sdk` shim.
      session" — `create_session` and the event translation are Phase 4.
      The installed release (0.47.1) predates the EOF fix; until the next
      release, only the repo core shuts down on EOF.
-4. **IN PROGRESS (branch `phase-2-desktop`) — shim + approve card built and
-   verified through the shim; what is left is a human driving one turn in
-   the GPUI window (see "Not yet verified" below).**
+4. **✅ COMPLETE 2026-10-27 (branch `phase-2-desktop`) — shim + approve card
+   built, and every row in the Session + turn methods / Streaming events
+   tables is now `done` or a deliberate `cut`/`stub`.**
    - **Turns** (`freecode_session.rs`): jcode's send is fire-and-forget,
      core's `session.send` answers when the turn ends. The shim leaves the
      request in flight, publishes `MessageAccepted` + `SessionStatus(running)`
@@ -233,9 +233,21 @@ never comes from upstream is this `jcode-sdk` shim.
      MiniMax-M3 — events `MessageAccepted → SessionStatus → TextDelta("pong")
      → TokenUsage → TurnDone`, history `user/assistant` round-trips. The
      failure path was verified by accident first (expired OpenAI OAuth):
-     `MessageAccepted → SessionStatus → TurnStopped → Error`. **Not yet
-     verified in the GPUI window**: the draft panel creates its session
-     only when a prompt is submitted, which needs a human at the keyboard.
+     `MessageAccepted → SessionStatus → TurnStopped → Error`.
+   - **Verified live in the GPUI window, 2026-10-27**: two real turns through
+     `apps/core` on Haiku 4.5 (Anthropic OAuth) — full streamed replies
+     rendered in both panels, with real token counts and timing ("Worked
+     43s · 12.8k in · 62 out"). Sidebar correctly lists freecode sessions
+     grouped by project. One build bug found and fixed along the way:
+     `rewind`'s new error path used a nonexistent `ErrorKind::InvalidRequest`
+     (the code lives on `jcode_harness_api::ErrorCode`, wrapped by
+     `ErrorKind::Harness`) — caught by a clean rebuild, not by the
+     `cargo build` that had reported success right after that commit.
+     Benign noise observed and not a bug: `session startup://draft/<id> lost:
+     ...; reconnecting` repeats for the pre-promotion placeholder id even
+     after the real session is created and connected — an upstream UI-layer
+     artifact (the placeholder worker never resolves against any real
+     backend, freecode included), harmless to the real session's own stream.
 5. **DEFERRED 2026-10-26 (user decision: get the desktop running first).**
    Decide + implement the SSH/managed-cloud/accounts gap (stub vs. hide).
    Until then their UI stays visible and every action fails with the shim's
@@ -260,7 +272,9 @@ never comes from upstream is this `jcode-sdk` shim.
      opt-out, `JCODE_NO_TELEMETRY=1`. Found because the isolated home grew
      `telemetry_*` files; one test run before the flag did send a version
      ping (`telemetry_version_sent` = 0.99.1).
-7. Smoke test: real session, real streaming reply, through the GPU UI.
+7. **✅ COMPLETE 2026-10-27** — smoke test: real session, real streaming
+   reply, through the GPU UI. See step 4's "Verified live in the GPUI
+   window" note.
 
 ## Maintenance going forward
 
