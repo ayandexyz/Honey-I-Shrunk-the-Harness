@@ -433,6 +433,51 @@ pub(crate) fn set_session_saved(
     Ok(())
 }
 
+/// jcode's `message_index` is a numeric position; core's `session.rewind`
+/// takes an `entryId`. `session.tree` returns the active path in order, so
+/// `message_index` is treated as a plain index into it — the same
+/// conversion jcode's own backend would do internally, just done here
+/// instead. Remembers the pre-rewind leaf so `rewind_undo` has somewhere to
+/// go back to.
+pub(crate) fn rewind(inner: &Inner, session_id: &str, message_index: usize) -> Result<()> {
+    let tree = call(inner, "session.tree", json!({ "sessionId": session_id }))?;
+    let entries = tree.as_array().ok_or_else(|| {
+        Error::new(ErrorKind::UnexpectedReply, "session.tree: expected an array")
+    })?;
+    let target = entries
+        .get(message_index)
+        .and_then(|e| e.get("id"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            Error::new(ErrorKind::InvalidRequest, format!("rewind: no entry at index {message_index}"))
+        })?
+        .to_string();
+    let current = entries
+        .iter()
+        .find(|e| e.get("active").and_then(Value::as_bool) == Some(true))
+        .and_then(|e| e.get("id"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    call(inner, "session.rewind", json!({ "sessionId": session_id, "entryId": target }))?;
+    if let (Ok(mut undo), Some(current)) = (inner.rewind_undo.lock(), current) {
+        undo.insert(session_id.to_string(), current);
+    }
+    Ok(())
+}
+
+/// Restore the leaf `rewind` moved away from. No-op-with-error if nothing
+/// was rewound on this client since the last undo (matches core's own
+/// "nothing to do" shape for an unreachable request, not a panic).
+pub(crate) fn rewind_undo(inner: &Inner, session_id: &str) -> Result<()> {
+    let target = inner
+        .rewind_undo
+        .lock()
+        .ok()
+        .and_then(|mut undo| undo.remove(session_id))
+        .ok_or_else(|| unsupported("rewind_undo: nothing to undo"))?;
+    call(inner, "session.rewind", json!({ "sessionId": session_id, "entryId": target })).map(|_| ())
+}
+
 /// jcode's three decisions onto core's `PermissionAnswer`. "Always" is
 /// core's project-wide rule, its closest match; deny is an answer too.
 pub(crate) fn respond_to_permission(

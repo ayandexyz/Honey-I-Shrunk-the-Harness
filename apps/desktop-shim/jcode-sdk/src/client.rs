@@ -265,6 +265,11 @@ pub(crate) struct Inner {
     /// `config.get` only reports the process-global model, not this. Read
     /// into `ModelInfo.reasoning_effort` whenever that's republished.
     pub(crate) reasoning_efforts: Mutex<HashMap<String, String>>,
+    /// freecode: the entry id that was the active leaf just before the last
+    /// `rewind`, so `rewind_undo` has somewhere to go back to. One level —
+    /// jcode's own doc calls it "the history the LAST rewind removed", not a
+    /// full undo stack.
+    pub(crate) rewind_undo: Mutex<HashMap<String, String>>,
     /// freecode: true until the first session touches a just-spawned core,
     /// so exactly one `ConnectionPhase` connecting/connected pair is emitted
     /// per core process lifetime (not one per client or per attach call).
@@ -715,7 +720,7 @@ impl JcodeClient {
     }
 
     pub fn rewind(&self, session_id: &str, message_index: usize) -> Result<()> {
-        Err(crate::freecode_session::unsupported("rewind"))
+        crate::freecode_session::rewind(&self.inner, session_id, message_index)
     }
 
     pub fn respond_to_permission(
@@ -916,7 +921,7 @@ impl JcodeClient {
 
     /// Restore the history the last `rewind` removed.
     pub fn rewind_undo(&self, session_id: &str) -> Result<()> {
-        Err(crate::freecode_session::unsupported("rewind_undo"))
+        crate::freecode_session::rewind_undo(&self.inner, session_id)
     }
 
     /// Drop soft interrupts that are queued but not yet delivered.

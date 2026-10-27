@@ -190,6 +190,7 @@ fn start(
         history: Mutex::new(HashMap::new()),
         agent_modes: Mutex::new(HashMap::new()),
         reasoning_efforts: Mutex::new(HashMap::new()),
+        rewind_undo: Mutex::new(HashMap::new()),
         connecting: AtomicBool::new(true),
     });
     Ok((child, stdout, inner))

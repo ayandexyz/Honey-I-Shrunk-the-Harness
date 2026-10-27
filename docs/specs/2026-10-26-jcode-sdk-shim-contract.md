@@ -242,8 +242,8 @@ never comes from upstream is this `jcode-sdk` shim.
    "not supported by freecode yet" error. Recommendation on record: hide SSH
    remotes and managed cloud (nothing in freecode backs them); replace the
    "Sign in to Jcode" footer and login picker with freecode's own provider
-   and auth state (`freecode auth login`). The remaining "decide" rows
-   (rewind undo, transfer) are the same kind of extra.
+   and auth state (`freecode auth login`). The remaining "decide" row
+   (transfer) is the same kind of extra.
 6. **IN PROGRESS** — fix UI fallout file by file.
    - **Jcode's on-disk state (Phase 1 finding 4), fixed without upstream
      edits**: every reader honours `JCODE_HOME` — the harness's
@@ -472,8 +472,8 @@ needs its signature to compile; it never needs a real body.
 | `get_runtime_info` | 2 | `config.get` + `models.list` | must assemble `RuntimeInfo { provider, model, reasoning_effort, auth_method, routes: Vec<ModelRouteInfo> }` | ✅ done |
 | `get_history_with_images` | 1 | `session.tree` (previews only) | needs full messages as `HistoryMessage` + `RenderedImage` — likely a new IPC method | ✅ done |
 | `get_history` | 0 | — | — | ✅ done |
-| `rewind` | 1 | `session.rewind` | `message_index` vs `entryId` | unsupported error |
-| `rewind_undo` | 1 | — | **gap** | unsupported error — decide |
+| `rewind` | 1 | `session.rewind` | `message_index` treated as a plain index into `session.tree`'s array (its `id` at that position becomes `entryId`); the pre-rewind active leaf is remembered for `rewind_undo` | ✅ done |
+| `rewind_undo` | 1 | `session.rewind` (same method, forward) | "undo" is just `session.rewind` back to the leaf recorded before the last `rewind` on this client — one level, matching jcode's own doc ("restore the history **the last** rewind removed", not a stack). Errors cleanly if nothing was rewound since the last undo | ✅ done |
 | `events` / `next_timeout` / `is_closed` | 1 / 1 / 3* | the `session.send` stream | event-stream plumbing | ✅ done |
 | `supports` | 2 | — | stub to "everything the shim implements" | ✅ done |
 | `launch` / `ensure_runtime` | 6* | spawn `apps/core` | jcode launches its own daemon; shim spawns core instead | ✅ done |
