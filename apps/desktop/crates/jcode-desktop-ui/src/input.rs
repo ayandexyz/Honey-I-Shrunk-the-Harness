@@ -213,6 +213,9 @@ pub struct PromptInput {
     trailing_inset: f32,
     /// False when a host container draws the box (onboarding email tab).
     chrome: bool,
+    /// A tight single-line field (a sidebar filter box), not the chat
+    /// composer's padding and type scale.
+    compact: bool,
     /// Cycle example prompts behind an empty chat composer.
     example_prompts: bool,
     /// Project this composer works in. Scopes personalized example prompts.
@@ -568,6 +571,7 @@ impl PromptInput {
             spacious: false,
             trailing_inset: 0.,
             chrome: true,
+            compact: false,
             example_prompts: false,
             working_dir: None,
             motion: Default::default(),
@@ -678,6 +682,13 @@ impl PromptInput {
     /// The host draws the fill, border and corners around this field.
     pub(crate) fn without_chrome(mut self) -> Self {
         self.chrome = false;
+        self
+    }
+
+    /// A tight single-line filter box (e.g. a sidebar search), not the chat
+    /// composer's padding and type scale.
+    pub(crate) fn compact(mut self) -> Self {
+        self.compact = true;
         self
     }
 
@@ -2460,8 +2471,9 @@ impl Render for PromptInput {
             })
             // Near-pill corners. A single-line composer is ~38px tall, so an
             // 18px radius reads as fully round while multi-line drafts keep
-            // straight sides instead of turning into an ellipse.
-            .rounded(px(18.0))
+            // straight sides instead of turning into an ellipse. Compact's
+            // own row is ~22px tall, so it needs a tighter radius to match.
+            .rounded(px(if self.compact { 11.0 } else { 18.0 }))
             .when(!self.attachments.is_empty(), |el| {
                 el.child(
                     div()
@@ -2498,6 +2510,7 @@ impl Render for PromptInput {
                     .px_4()
                     .py_2()
                     .text_size(px(14.0))
+                    .when(self.compact, |el| el.px_3().py_1().text_size(px(11.0)))
                     .when(spacious, |el| {
                         // One line of 16px text plus padding.
                         el.min_h(px(SPACIOUS_MIN_HEIGHT))

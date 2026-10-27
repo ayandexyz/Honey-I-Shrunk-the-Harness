@@ -328,6 +328,19 @@ pub(crate) fn set_model(inner: &Inner, model: &str) -> Result<()> {
     .map(|_| ())
 }
 
+/// Persist a plain API key in freecode's config store (`config.setApiKey`,
+/// same write path as the CLI's `freecode auth set-key`). Overwrites any key
+/// already on file for this provider, so this one call covers both
+/// connecting a new provider and updating an existing key.
+pub(crate) fn set_api_key(inner: &Inner, provider: &str, api_key: &str) -> Result<()> {
+    call(
+        inner,
+        "config.setApiKey",
+        json!({ "provider": provider, "apiKey": api_key }),
+    )
+    .map(|_| ())
+}
+
 /// (provider, model, auth method) from `config.get`.
 fn current(inner: &Inner) -> Result<(Option<String>, Option<String>, Option<String>)> {
     let config = call(inner, "config.get", json!({}))?;

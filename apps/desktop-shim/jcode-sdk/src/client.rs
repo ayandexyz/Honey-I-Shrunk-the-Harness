@@ -759,10 +759,10 @@ impl JcodeClient {
         crate::freecode_session::runtime_info(&self.inner, session_id)
     }
 
-    /// Persist an API key in jcode's owner-only provider store and hot-reload
-    /// provider credentials.
+    /// Persist an API key in freecode's config store and let the model
+    /// picker and account list pick it up on their next refresh.
     pub fn set_api_key(&self, provider: &str, api_key: &str) -> Result<()> {
-        Err(crate::freecode_session::unsupported("set_api_key"))
+        crate::freecode_session::set_api_key(&self.inner, provider, api_key)
     }
 
     /// Reload credentials saved by an out-of-band OAuth login. This does not

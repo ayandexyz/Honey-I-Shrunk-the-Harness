@@ -396,6 +396,20 @@ enum AccountsSidebarTab {
     NotConnected,
 }
 
+/// Inline "paste your API key" editor opened from a sidebar account row.
+/// Works the same whether the provider already has a key on file (saving
+/// overwrites it) or none yet (saving connects it) — `config.setApiKey`
+/// does not distinguish the two.
+struct AccountKeyEntry {
+    provider_id: String,
+    display_name: String,
+    /// Whether this provider already had a key, for the entry's wording.
+    updating: bool,
+    input: Entity<crate::login_input::LoginInput>,
+    busy: bool,
+    error: Option<String>,
+}
+
 // Minimap: a compact card in the top right that maps every strip to
 // scale, preserving the canvas aspect ratio so panels taller than wide on
 // screen stay taller than wide on the map.
@@ -853,6 +867,7 @@ pub struct Workspace {
     accounts_layout_pending: bool,
     accounts_tab: AccountsSidebarTab,
     accounts_search: Entity<PromptInput>,
+    accounts_key_entry: Option<AccountKeyEntry>,
     /// Review and redemption of one login's banked usage reset.
     usage_reset: Option<usage_reset::Dialog>,
     status: String,
@@ -1173,6 +1188,7 @@ impl Workspace {
             accounts_layout_pending: true,
             accounts_tab: AccountsSidebarTab::default(),
             accounts_search,
+            accounts_key_entry: None,
             usage_reset: None,
             status: "starting...".into(),
             connected: false,
@@ -1561,6 +1577,7 @@ impl Workspace {
             accounts_layout_pending: true,
             accounts_tab: AccountsSidebarTab::default(),
             accounts_search,
+            accounts_key_entry: None,
             usage_reset: None,
             status: "test".into(),
             connected: true,
@@ -1982,12 +1999,109 @@ impl Workspace {
         cx.new(|cx| {
             let mut input = PromptInput::new(cx, "Search accounts…", |_, _, _, _| {})
                 .without_command_completion()
+                .compact()
                 .with_on_change(move |_, app| {
                     let _ = weak.update(app, |_, cx| cx.notify());
                 });
             input.set_submission_enabled(false, cx);
             input
         })
+    }
+
+    /// Open the inline "paste your API key" editor for one sidebar account
+    /// row. `updating` only changes the wording — the save path is identical
+    /// whether a key is already on file or not.
+    fn open_account_key_entry(
+        &mut self,
+        provider_id: String,
+        display_name: String,
+        updating: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let placeholder = if updating {
+            format!("New API key for {display_name}")
+        } else {
+            format!("API key for {display_name}")
+        };
+        let input = cx.new(|cx| crate::login_input::LoginInput::new(cx, placeholder));
+        let focus = input.read(cx).focus_handle.clone();
+        window.focus(&focus, cx);
+        self.accounts_key_entry = Some(AccountKeyEntry {
+            provider_id,
+            display_name,
+            updating,
+            input,
+            busy: false,
+            error: None,
+        });
+        cx.notify();
+    }
+
+    fn cancel_account_key_entry(&mut self, cx: &mut Context<Self>) {
+        self.accounts_key_entry = None;
+        cx.notify();
+    }
+
+    fn submit_account_key_entry(&mut self, cx: &mut Context<Self>) {
+        let Some(entry) = self.accounts_key_entry.as_mut() else {
+            return;
+        };
+        if entry.busy {
+            return;
+        }
+        let secret = entry.input.update(cx, |input, cx| input.take(cx));
+        let secret = secret.trim().to_string();
+        if secret.is_empty() {
+            entry.error = Some("Paste an API key first.".into());
+            cx.notify();
+            return;
+        }
+        entry.busy = true;
+        entry.error = None;
+        let provider_id = entry.provider_id.clone();
+        let attempt = entry.input.entity_id();
+        let task = cx.background_executor().spawn(async move {
+            if crate::harness::screenshot_mode() {
+                return Err(
+                    "Sign-in is disabled in the offline preview. No credentials were changed."
+                        .to_string(),
+                );
+            }
+            let client = jcode_sdk::JcodeClient::connect(jcode_sdk::ConnectOptions {
+                client_name: "jcode-desktop-accounts".into(),
+                ensure_runtime: false,
+                ..Default::default()
+            })
+            .map_err(|_| {
+                "Could not connect to Honey. Try again when the connection is restored."
+                    .to_string()
+            })?;
+            client.set_api_key(&provider_id, &secret).map_err(|_| {
+                "Could not save this API key. Check the key and try again.".to_string()
+            })
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| {
+                let Some(entry) = this.accounts_key_entry.as_mut() else {
+                    return;
+                };
+                if entry.input.entity_id() != attempt {
+                    return;
+                }
+                entry.busy = false;
+                match result {
+                    Ok(()) => {
+                        this.accounts_key_entry = None;
+                        accounts::request_refresh();
+                    }
+                    Err(error) => entry.error = Some(error),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn create_folder_search(&self, cx: &mut Context<Self>) -> Entity<PromptInput> {
@@ -6899,7 +7013,12 @@ impl Workspace {
                     .mb_1()
                     .child(self.accounts_search.clone()),
             )
-            .child(self.render_accounts_tabs(tab, connected_count, not_connected_count, cx));
+            .child(self.render_accounts_tabs(tab, connected_count, not_connected_count, cx))
+            .children(
+                self.accounts_key_entry
+                    .as_ref()
+                    .map(|entry| self.render_account_key_entry(entry, cx)),
+            );
 
         let active = self.slots.get(self.active).and_then(|slot| {
             let panel = slot.panel.read(cx);
@@ -7241,6 +7360,12 @@ impl Workspace {
             let grows = account.shows_oauth_history()
                 || (available && account.offerable_resets().next().is_some())
                 || (available && account.upgrade_offer().is_some());
+            // Only a plain API key has somewhere for a click to go: connect
+            // (not connected) or update (already connected). OAuth/device-code
+            // rows have no inline credential to paste, so they stay inert here.
+            let is_api_key = account.auth_kind == "API key";
+            let provider_id = account.id.clone();
+            let display_name = account.display_name.clone();
             list = list.child(
                 div()
                     .flex_none()
@@ -7258,6 +7383,19 @@ impl Workspace {
                     .when(grows, |row| row.items_start())
                     .gap_2()
                     .hover(|el| el.bg(Theme::global().HEADER_BG))
+                    .when(is_api_key, |el| {
+                        el.cursor_pointer().on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                this.open_account_key_entry(
+                                    provider_id.clone(),
+                                    display_name.clone(),
+                                    available,
+                                    window,
+                                    cx,
+                                );
+                            },
+                        ))
+                    })
                     .child(logo)
                     .child(details)
                     .child(
@@ -7362,6 +7500,110 @@ impl Workspace {
                 AccountsSidebarTab::NotConnected,
                 cx,
             ))
+            .into_any_element()
+    }
+
+    fn render_account_key_entry(
+        &self,
+        entry: &AccountKeyEntry,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let theme = Theme::global();
+        let title = if entry.updating {
+            format!("Update API key for {}", entry.display_name)
+        } else {
+            format!("Connect {}", entry.display_name)
+        };
+        div()
+            .debug_selector(|| "account-key-entry".into())
+            .flex_none()
+            .mx_4()
+            .mb_1()
+            .p_2()
+            .rounded_lg()
+            .bg(theme.PANEL_BG)
+            .flex()
+            .flex_col()
+            .gap_1()
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                if event.is_held {
+                    return;
+                }
+                match event.keystroke.key.as_str() {
+                    "enter" => {
+                        this.submit_account_key_entry(cx);
+                        cx.stop_propagation();
+                    }
+                    "escape" => {
+                        this.cancel_account_key_entry(cx);
+                        cx.stop_propagation();
+                    }
+                    _ => {}
+                }
+            }))
+            .child(
+                div()
+                    .text_size(px(10.0))
+                    .text_color(theme.TEXT_DIM)
+                    .child(title),
+            )
+            .child(
+                div()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(theme.INPUT_BORDER)
+                    .bg(theme.INPUT_BG)
+                    .text_size(px(11.0))
+                    .child(entry.input.clone()),
+            )
+            .children(entry.error.clone().map(|error| {
+                div()
+                    .debug_selector(|| "account-key-entry-error".into())
+                    .text_size(px(10.0))
+                    .text_color(theme.ERROR)
+                    .child(error)
+            }))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .mt_1()
+                    .child(
+                        div()
+                            .id("account-key-entry-save")
+                            .debug_selector(|| "account-key-entry-save".into())
+                            .px_2()
+                            .py_1()
+                            .rounded_full()
+                            .cursor_pointer()
+                            .text_size(px(10.0))
+                            .bg(theme.ACCENT.opacity(0.16))
+                            .text_color(theme.ACCENT)
+                            .hover(|el| el.bg(theme.ACCENT.opacity(0.26)))
+                            .when(entry.busy, |el| el.opacity(0.6))
+                            .child(if entry.busy { "Saving…" } else { "Save" })
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.submit_account_key_entry(cx);
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("account-key-entry-cancel")
+                            .debug_selector(|| "account-key-entry-cancel".into())
+                            .px_2()
+                            .py_1()
+                            .rounded_full()
+                            .cursor_pointer()
+                            .text_size(px(10.0))
+                            .text_color(theme.TEXT_DIM)
+                            .hover(|el| el.bg(theme.PANEL_BORDER))
+                            .child("Cancel")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.cancel_account_key_entry(cx);
+                            })),
+                    ),
+            )
             .into_any_element()
     }
 

@@ -587,7 +587,8 @@ UI path fails visibly instead of hanging.
 | `connect_ssh`/`SharedSshTransport`/`shared_ssh_transport` | referenced in `harness_transport.rs`, `managed_cloud.rs` | SSH remote machines, managed cloud | cut — stub returns error |
 | `global_events`/`GlobalEventStream`/`GlobalEventsOptions` | 0 | fan-in across all sessions, background discovery | cut |
 | `launch`/`LaunchOptions`/`LaunchedInstance`/`ensure_runtime` | see session table | jcode's self-managed daemon launch/instance ownership | stub — becomes "spawn `apps/core`" |
-| `set_api_key` / `notify_auth_changed` / `invalidate_usage` | 1 / 2 / 1 | OAuth-reload, usage-reset invalidation (partial overlap: freecode has `config.setApiKey`) | stub — partial |
+| `set_api_key` | 1 | `config.setApiKey`, same write path as `freecode auth set-key` | done |
+| `notify_auth_changed` / `invalidate_usage` | 2 / 1 | OAuth-reload, usage-reset invalidation | stub — partial |
 | `clear_api_key` | 0 | | cut |
 | `configure_tools`/`list_tools`/`submit_tool_result`/custom `ToolCall` event | 0 | client-supplied custom tools | cut — freecode's tool system is entirely server-side |
 | `applet_action` / `close_applet` | 1 / 1 | jcode's agent-applet UI primitive | cut — stub returns error |
