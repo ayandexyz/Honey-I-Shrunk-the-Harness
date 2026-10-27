@@ -471,7 +471,10 @@ pub(crate) fn rewind(inner: &Inner, session_id: &str, message_index: usize) -> R
         .and_then(|e| e.get("id"))
         .and_then(Value::as_str)
         .ok_or_else(|| {
-            Error::new(ErrorKind::InvalidRequest, format!("rewind: no entry at index {message_index}"))
+            Error::new(
+                ErrorKind::Harness(jcode_harness_api::ErrorCode::InvalidRequest),
+                format!("rewind: no entry at index {message_index}"),
+            )
         })?
         .to_string();
     let current = entries
