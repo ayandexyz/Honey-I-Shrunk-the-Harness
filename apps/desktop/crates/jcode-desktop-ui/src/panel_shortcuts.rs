@@ -50,6 +50,16 @@ impl Panel {
     }
 
     pub(super) fn jump_to_latest_if_empty(&mut self, cx: &mut Context<Self>) {
+        // This binding matches every `PromptInput` in the panel ("ChatPanel
+        // > PromptInput"), but only ever checks the main composer's content.
+        // With the question card's "Other" field focused (panel_question_card.rs)
+        // that field is reliably empty when the user's very first keystroke
+        // there is a space, so a space meant to be typed got eaten as the
+        // jump-to-latest shortcut instead.
+        if self.question_requests.front().is_some_and(|r| r.other_input.is_some()) {
+            cx.propagate();
+            return;
+        }
         if self.input.read(cx).content.is_empty() {
             self.jump_to_latest(cx);
         } else {
@@ -172,6 +182,61 @@ mod tests {
             panel.read_with(vcx, |panel, cx| panel.input.read(cx).content.to_string()),
             ""
         );
+    }
+
+    /// This keybinding matches every `PromptInput` ("ChatPanel > PromptInput"),
+    /// including the question card's "Other" field — but only ever checks the
+    /// MAIN composer's content, which is empty whenever the first keystroke
+    /// typed into a freshly opened "Other" field is a space. That swallowed
+    /// the space instead of typing it: see panel_question_card.rs.
+    #[gpui::test]
+    fn space_types_into_the_question_cards_other_field_instead_of_jumping(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (panel, vcx) = scrolled_up_panel(cx);
+        assert_eq!(
+            panel.read_with(vcx, |panel, cx| panel.input.read(cx).content.to_string()),
+            "",
+            "the main composer must be empty for this to be a real repro of the bug"
+        );
+
+        let payload = jcode_sdk::QuestionPayload {
+            request_id: "q1".into(),
+            questions: vec![jcode_sdk::QuestionSpec {
+                question: "Which approach?".into(),
+                header: None,
+                options: vec![jcode_sdk::QuestionOption { label: "A".into(), description: String::new() }],
+            }],
+        };
+        panel.update(vcx, |panel, cx| {
+            panel.apply(
+                &ApiEvent::RuntimeCommandResult {
+                    session_id: "session-a".into(),
+                    command: jcode_sdk::api::RuntimeCommand::Info,
+                    data: payload.to_data(),
+                    message: String::new(),
+                },
+                cx,
+            );
+        });
+        vcx.run_until_parked();
+        let other = vcx.debug_bounds("question-other").unwrap();
+        vcx.simulate_click(other.center(), gpui::Modifiers::default());
+        vcx.run_until_parked();
+
+        vcx.simulate_keystrokes("space");
+        vcx.run_until_parked();
+
+        let other_content = panel.read_with(vcx, |panel, cx| {
+            panel
+                .question_requests
+                .front()
+                .and_then(|r| r.other_input.as_ref())
+                .map(|input| input.read(cx).content.to_string())
+        });
+        assert_eq!(other_content.as_deref(), Some(" "));
+        // The main composer's jump shortcut must not have fired either.
+        assert!(!panel.read_with(vcx, |panel, _| panel.stick_to_bottom));
     }
 
     #[gpui::test]
