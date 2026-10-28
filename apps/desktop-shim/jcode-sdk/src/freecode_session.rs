@@ -222,10 +222,14 @@ pub(crate) fn last_agent_mode(inner: &Inner) -> Result<Option<String>> {
 }
 
 /// freecode addition: desktop-chosen agent mode for a session's next turn.
+/// Also persists it as core's `lastAgentMode` (`config.setLastAgentMode`,
+/// fire-and-forget like the TUI's own call) so the next new session restores
+/// it via `last_agent_mode` instead of silently falling back to "build".
 pub(crate) fn set_agent_mode(inner: &Inner, session_id: &str, mode: &str) {
     if let Ok(mut modes) = inner.agent_modes.lock() {
         modes.insert(session_id.to_string(), mode.to_string());
     }
+    let _ = call(inner, "config.setLastAgentMode", json!({ "mode": mode }));
 }
 
 pub(crate) fn agent_mode(inner: &Inner, session_id: &str) -> Option<String> {

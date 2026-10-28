@@ -7,6 +7,47 @@ A native desktop client for [Jcode](https://github.com/1jehuang/jcode), with AI 
 - [User and developer guide](docs/desktop-guide.md)
 - [Product vision](PRODUCT.md)
 
+## Installing Honey (this fork)
+
+This fork ships as **Honey**. Builds are published on the latest
+[`desktop-v*` release](https://github.com/ayandexyz/Honey-I-Shrunk-the-Harness/releases)
+for Linux x86_64 and aarch64.
+
+### Debian / Ubuntu (.deb)
+
+Download the matching `.deb` asset (`Honey-<version>-linux-amd64.deb` for
+x86_64, `-arm64.deb` for aarch64), then:
+
+```bash
+sudo apt install ./Honey-<version>-linux-amd64.deb
+```
+
+Launch it from your app menu ("Honey") or run `honey` in a terminal.
+
+### Arch / Omarchy (and any non-deb distro)
+
+Arch has no native `.deb` support, so use the `.tar.gz` asset
+(`Honey-<version>-linux-x86_64.tar.gz`, or `-aarch64.tar.gz`) instead:
+
+```bash
+# download + extract
+curl -LO https://github.com/ayandexyz/Honey-I-Shrunk-the-Harness/releases/download/desktop-v<version>/Honey-<version>-linux-x86_64.tar.gz
+mkdir -p ~/.local/opt/honey
+tar -xzf Honey-<version>-linux-x86_64.tar.gz -C ~/.local/opt/honey
+
+# make it runnable from anywhere
+mkdir -p ~/.local/bin ~/.local/share/applications ~/.local/share/icons
+ln -sf ~/.local/opt/honey/Honey-<version>-linux-x86_64/honey ~/.local/bin/honey
+cp ~/.local/opt/honey/Honey-<version>-linux-x86_64/honey.png ~/.local/share/icons/honey.png
+sed "s#Icon=honey#Icon=$HOME/.local/share/icons/honey.png#" \
+  ~/.local/opt/honey/Honey-<version>-linux-x86_64/honey.desktop \
+  > ~/.local/share/applications/honey.desktop
+update-desktop-database ~/.local/share/applications
+```
+
+Make sure `~/.local/bin` is on your `PATH`. Launch with `honey`, or find
+"Honey" in your app launcher once the `.desktop` entry is picked up.
+
 ## Single-panel windows
 
 Run `jcode-desktop --single-panel` for one chat panel in its own native window,
