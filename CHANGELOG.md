@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.47.2
+
+Core-side wiring for the Honey desktop app (`apps/desktop`): `session.rename`, `set_reasoning_effort`, `set_session_saved`, and `send_system_reminder` now round-trip end to end over the JSON-RPC shim, a plain-API-key `auth set-key` command landed, and a hung MCP connect no longer blocks startup.
+
+### Added
+
+- `freecode auth set-key` — set a plain API key for a provider without the OAuth flow (`686cadf4`).
+- `session.rename`, `set_reasoning_effort`, `set_session_saved`, `send_system_reminder` IPC methods, built for the desktop shim (`cc7ab814`, `b4cab6b0`, `55d584ce`, `5a8b9bbf`).
+
+### Fixed
+
+- MCP connects that hang no longer block the rest of startup; the dead graft server config was removed (`bd5fb01a`).
+- Two build breaks left by the desktop-shim commits (`271cad27`).
+
 ## v0.47.1
 
 ChatGPT-subscription sessions now keep their prompt cache across a whole task instead of re-sending the conversation every step, a permission-approval hook no longer stalls read-only subagents, and two out-of-memory crashes are gone. Per-turn context (recalled memories, the todo list, reminders) is now appended to the conversation once when it changes — the way Claude Code and opencode deliver it — instead of being rebuilt at the end of every request.
