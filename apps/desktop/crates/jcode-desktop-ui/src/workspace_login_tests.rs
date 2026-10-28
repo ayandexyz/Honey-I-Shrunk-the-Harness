@@ -388,8 +388,13 @@ fn footer_and_account_model_actions_share_slash_menu_without_new_windows(
         assert!(vcx.debug_bounds("slash-command-overlay").is_some());
         vcx.simulate_keystrokes("enter");
         vcx.run_until_parked();
+        // Not necessarily the very next command: a RuntimeInfo/ModelInfo
+        // event along the way can also queue a FetchContextLimit
+        // (panel_usage.rs).
         assert!(
-            matches!(commands.try_recv(), Ok(Command::SetModel { model, .. }) if model == "openai-api:test")
+            commands
+                .try_iter()
+                .any(|c| matches!(c, Command::SetModel { model, .. } if model == "openai-api:test"))
         );
         source.read_with(vcx, |panel, cx| {
             assert_eq!(panel.input.read(cx).content.as_ref(), "keep this draft")

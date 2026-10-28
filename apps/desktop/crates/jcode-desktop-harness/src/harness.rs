@@ -180,6 +180,13 @@ pub enum Update {
         session_id: String,
         mode: String,
     },
+    /// freecode: the model's context-window size, resolved by core from
+    /// models.dev (`Command::FetchContextLimit`). `None` for an unknown
+    /// model — the panel shows just the empty ring, never a wrong number.
+    ContextLimit {
+        session_id: String,
+        limit: Option<u64>,
+    },
 }
 
 /// Commands flowing from the UI into the bridge.
@@ -282,6 +289,14 @@ pub enum Command {
         session_id: String,
         mode: String,
     },
+    /// freecode: ask core for a model's real context-window size (models.dev),
+    /// answered as `Update::ContextLimit`. Sent whenever the panel's
+    /// provider/model changes.
+    FetchContextLimit {
+        session_id: String,
+        provider: String,
+        model: String,
+    },
     RuntimeCommand {
         session_id: String,
         command: jcode_sdk::api::RuntimeCommand,
@@ -355,6 +370,7 @@ enum SessionCommand {
     AnswerQuestion(String, Vec<String>),
     RejectQuestion(String),
     SetAgentMode(String),
+    FetchContextLimit(String, String),
     RuntimeCommand(jcode_sdk::api::RuntimeCommand, Vec<String>),
     Operation(SessionOperation),
     Stop,
@@ -1047,6 +1063,16 @@ fn run_with_transports(
             }
             Command::SetAgentMode { session_id, mode } => {
                 let command = SessionCommand::SetAgentMode(mode);
+                send_to_session_worker(&mut workers, session_id, command, |session_id| {
+                    spawn_session_worker(session_id, &updates, &transports)
+                });
+            }
+            Command::FetchContextLimit {
+                session_id,
+                provider,
+                model,
+            } => {
+                let command = SessionCommand::FetchContextLimit(provider, model);
                 send_to_session_worker(&mut workers, session_id, command, |session_id| {
                     spawn_session_worker(session_id, &updates, &transports)
                 });
@@ -2430,6 +2456,13 @@ fn session_worker_with_connector(
                     }
                     SessionCommand::SetAgentMode(mode) => {
                         client.set_agent_mode(real_id, &mode);
+                    }
+                    SessionCommand::FetchContextLimit(provider, model) => {
+                        let limit = client.model_context_limit(&provider, &model).ok().flatten();
+                        let _ = updates.send(Update::ContextLimit {
+                            session_id: session_id.clone(),
+                            limit,
+                        });
                     }
                     SessionCommand::SetModel(model) => {
                         if let Err(error) = client.set_model(real_id, &model) {

@@ -344,6 +344,33 @@ impl Panel {
         Some((total, turns))
     }
 
+    /// Re-fetches `context_limit` from core (models.dev) when the active
+    /// (provider, model) pair changes. Clears the stale number immediately
+    /// so the ring never shows one model's percentage against another's
+    /// window while the request is in flight.
+    pub(super) fn maybe_fetch_context_limit(&mut self, cx: &mut Context<Self>) {
+        let (Some(provider), Some(model)) = (self.provider.clone(), self.model.clone()) else {
+            return;
+        };
+        let key = (provider.clone(), model.clone());
+        if self.context_limit_for.as_ref() == Some(&key) {
+            return;
+        }
+        self.context_limit_for = Some(key);
+        self.context_limit = None;
+        self.bridge.send(Command::FetchContextLimit {
+            session_id: self.session_id.clone(),
+            provider,
+            model,
+        });
+        cx.notify();
+    }
+
+    pub(crate) fn set_context_limit(&mut self, limit: Option<u64>, cx: &mut Context<Self>) {
+        self.context_limit = limit;
+        cx.notify();
+    }
+
     /// Context window ring plus percentage. Sits in the composer's bottom row
     /// right after the credential method pill.
     pub(super) fn render_context_meter(&self) -> Option<gpui::AnyElement> {
@@ -351,14 +378,14 @@ impl Panel {
             return None;
         }
         let theme = Theme::global();
-        let window = self.model.as_deref().and_then(context_window_for_model);
+        let window = self.context_limit;
         let used = self.context_tokens;
         let percent = used
             .zip(window)
             .map(|(used, window)| (used as f64 / window as f64 * 100.) as f32);
         // Unknown usage shows only the empty ring, never a placeholder dash.
         let label = percent.map(|percent| format!("{:.0}%", percent.min(100.)));
-        let detail = context_usage_label(self.model.as_deref(), self.context_tokens)
+        let detail = context_usage_label(window, self.context_tokens)
             .map(|label| format!("Context window: {label}. Model capacity is an estimate. Usage reflects the latest reported request."))
             .unwrap_or_else(|| "Context usage is not reported yet.".into());
         Some(

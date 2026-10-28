@@ -2626,6 +2626,14 @@ impl Workspace {
                     }
                 }
             }
+            Update::ContextLimit { session_id, limit } => {
+                for slot in &self.slots {
+                    if slot.panel.read(cx).session_id == session_id {
+                        slot.panel.update(cx, |panel, cx| panel.set_context_limit(limit, cx));
+                        break;
+                    }
+                }
+            }
             Update::MessageSubmitted { .. } => {}
             Update::SessionSaved {
                 session_id,

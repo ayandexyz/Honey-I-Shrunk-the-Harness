@@ -754,6 +754,10 @@ impl JcodeClient {
         crate::freecode_session::reject_question(&self.inner, request_id)
     }
 
+    pub fn model_context_limit(&self, provider: &str, model: &str) -> Result<Option<u64>> {
+        crate::freecode_session::model_context_limit(&self.inner, provider, model)
+    }
+
     /// Models this session can switch to, and which one is serving it.
     pub fn list_models(&self, session_id: &str) -> Result<(Vec<String>, Option<String>)> {
         todo!("jcode-sdk shim: list_models")

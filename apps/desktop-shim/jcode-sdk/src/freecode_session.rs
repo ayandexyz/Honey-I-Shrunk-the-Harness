@@ -658,6 +658,21 @@ pub(crate) fn runtime_info(inner: &Inner, session_id: &str) -> Result<RuntimeInf
     })
 }
 
+/// freecode addition: the model's context-window size, resolved by core from
+/// models.dev — the same call the TUI makes (`getModelContextLimit`). Desktop
+/// previously had no equivalent and fell back to
+/// `jcode_base::provider::context_limit_for_model_with_provider`, jcode's own
+/// static table, which is wrong or missing for models freecode supports that
+/// jcode doesn't know about. `0` from core means "unknown model".
+pub(crate) fn model_context_limit(inner: &Inner, provider: &str, model: &str) -> Result<Option<u64>> {
+    let result = call(
+        inner,
+        "models.contextLimit",
+        json!({ "provider": provider, "model": model }),
+    )?;
+    Ok(result.as_u64().filter(|&limit| limit > 0))
+}
+
 fn model_routes(provider: &str, models: &Value) -> Vec<ModelRouteInfo> {
     models
         .as_array()

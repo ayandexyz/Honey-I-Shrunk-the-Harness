@@ -474,6 +474,13 @@ pub struct Panel {
     pending_save_requests: usize,
     /// Latest provider-reported prompt occupancy, with cache accounting normalized.
     context_tokens: Option<u64>,
+    /// The active model's context-window size, from core's models.dev
+    /// catalogue (`Command::FetchContextLimit`) — never the local
+    /// `jcode_base` static table, which freecode's own models aren't in.
+    context_limit: Option<u64>,
+    /// (provider, model) last fetched or in flight, so a RuntimeInfo/ModelInfo
+    /// event that repeats the same model doesn't re-request it.
+    context_limit_for: Option<(String, String)>,
     response_stats: response_stats::Tracker,
     pub items: Transcript,
     /// Streaming assistant text accumulates here until the turn ends.
@@ -951,6 +958,8 @@ impl Panel {
             pending_effort: None,
             pending_save_requests: 0,
             context_tokens: usage_fixture.then_some(100_000),
+            context_limit: None,
+            context_limit_for: None,
             response_stats: response_stats::Tracker::default(),
             items: demo_items(fixture.as_deref()).into(),
             streaming_text: if streaming_fixture {
@@ -3043,6 +3052,7 @@ impl Panel {
                     self.auth_method = Some(human_auth_method(method));
                 }
                 self.sync_effort_menu(cx);
+                self.maybe_fetch_context_limit(cx);
             }
             ApiEvent::RuntimeInfo {
                 provider,
@@ -3069,6 +3079,7 @@ impl Panel {
                     input.set_model_routes(models, routes, self.model.clone(), cx);
                 });
                 self.sync_effort_menu(cx);
+                self.maybe_fetch_context_limit(cx);
             }
             ApiEvent::TokenUsage {
                 input,
@@ -5641,10 +5652,10 @@ fn pretty_auth_method(method: &str) -> String {
     }
 }
 
-fn context_usage_label(model: Option<&str>, context_tokens: Option<u64>) -> Option<String> {
+fn context_usage_label(window: Option<u64>, context_tokens: Option<u64>) -> Option<String> {
     let mut parts = Vec::new();
     if let Some(used) = context_tokens {
-        match model.and_then(context_window_for_model) {
+        match window {
             Some(window) => {
                 let percent = (used as f64 / window as f64 * 100.0).min(100.0);
                 parts.push(format!(
@@ -5668,11 +5679,6 @@ fn compact_dir(path: &str) -> String {
         home if home == "~" => "~ (home)".to_string(),
         shortened => shortened,
     }
-}
-
-/// Use the same model capacity catalog as the CLI instead of desktop-only guesses.
-fn context_window_for_model(model: &str) -> Option<u64> {
-    jcode_base::provider::context_limit_for_model_with_provider(model, None).map(|n| n as u64)
 }
 
 /// Match the TUI's output-token estimate and thresholds, using desktop theme
@@ -7746,29 +7752,13 @@ mod tests {
         assert_eq!(account_method_label(Some(""), Some("")), "Accounts");
         assert_eq!(context_usage_label(None, None), None);
         assert_eq!(
-            context_usage_label(Some("gpt-5.6-sol"), Some(100_000)).as_deref(),
+            context_usage_label(Some(272_000), Some(100_000)).as_deref(),
             Some("100.0k / 272.0k (37%)")
         );
         assert_eq!(
-            context_usage_label(Some("mystery-model"), Some(1_500)).as_deref(),
+            context_usage_label(None, Some(1_500)).as_deref(),
             Some("1.5k tokens")
         );
-    }
-
-    #[test]
-    fn context_windows_match_the_families_jcode_uses() {
-        assert_eq!(context_window_for_model("gpt-5.6-sol"), Some(272_000));
-        assert_eq!(context_window_for_model("gpt-5.4-alto"), Some(1_000_000));
-        assert_eq!(
-            context_window_for_model("gpt-5.2-chat-latest"),
-            Some(128_000)
-        );
-        assert_eq!(
-            context_window_for_model("claude-sonnet-4-20250514"),
-            Some(200_000)
-        );
-        assert_eq!(context_window_for_model("gemini-3-pro"), Some(1_000_000));
-        assert_eq!(context_window_for_model("mystery"), None);
     }
 
     #[test]
@@ -9312,8 +9302,11 @@ mod tests {
             .expect("model command suggestion exists");
         vcx.simulate_click(command.center(), gpui::Modifiers::default());
         vcx.run_until_parked();
+        // Not an empty channel: applying the RuntimeInfo above also queues a
+        // FetchContextLimit (panel_usage.rs). The thing this test actually
+        // guards against is clicking /model itself picking a model.
         assert!(
-            commands.try_recv().is_err(),
+            commands.try_iter().all(|c| !matches!(c, Command::SetModel { .. })),
             "clicking /model opens choices without selecting a model"
         );
         vcx.update(|_, cx| assert_eq!(panel.read(cx).input.read(cx).content.as_ref(), "/model "));
