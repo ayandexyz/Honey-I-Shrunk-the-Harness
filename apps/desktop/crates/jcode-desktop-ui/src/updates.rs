@@ -155,7 +155,7 @@ fn source_build() -> bool {
             && match components.as_slice() {
                 [profile, binary] | [_, profile, binary] => {
                     (*profile == "debug" || *profile == "release")
-                        && (*binary == "jcode-desktop" || *binary == "jcode-desktop.exe")
+                        && (*binary == "honey-desktop" || *binary == "honey-desktop.exe")
                 }
                 _ => false,
             }

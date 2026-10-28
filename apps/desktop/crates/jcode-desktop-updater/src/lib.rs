@@ -2,14 +2,14 @@
 //!
 //! macOS updates through Sparkle. Every other packaged build updates through
 //! [`update`], which the background updater, `/update`, and the headless
-//! `jcode-desktop --update` share, so CI exercises exactly what users run.
+//! `honey-desktop --update` share, so CI exercises exactly what users run.
 //!
 //! Three installation shapes are supported:
 //! - Portable: an extracted tarball or Windows zip in a user-writable
 //!   directory. Files are swapped in place, the running executable included
 //!   (both Linux and NTFS allow renaming a running image).
 //! - Managed (Linux): versioned bundles under `~/.local/opt/jcode-desktop`
-//!   with an atomically switched `~/.local/bin/jcode-desktop` symlink.
+//!   with an atomically switched `~/.local/bin/honey-desktop` symlink.
 //! - System (Linux .deb or root-owned directory): the first update adopts a
 //!   managed per-user install, and launches of the system copy redirect to it
 //!   while it is newer. A later system package upgrade that is newer wins.
@@ -103,7 +103,7 @@ pub fn is_source_build(executable: &Path) -> bool {
     let Some(binary) = components.last().and_then(|name| name.to_str()) else {
         return false;
     };
-    if binary != "jcode-desktop" && binary != "jcode-desktop.exe" {
+    if binary != "honey-desktop" && binary != "honey-desktop.exe" {
         return false;
     }
     for depth in [2, 3] {
@@ -519,16 +519,16 @@ pub(crate) mod tests {
     fn source_checkouts_are_detected_by_their_cargo_target() {
         let checkout = tempfile::tempdir().unwrap();
         fs::write(checkout.path().join("Cargo.toml"), "").unwrap();
-        let binary = checkout.path().join("target/release/jcode-desktop");
+        let binary = checkout.path().join("target/release/honey-desktop");
         assert!(is_source_build(&binary));
         assert!(is_source_build(
-            &checkout.path().join("target/x86_64-pc-windows-msvc/debug/jcode-desktop.exe")
+            &checkout.path().join("target/x86_64-pc-windows-msvc/debug/honey-desktop.exe")
         ));
-        assert!(!is_source_build(&checkout.path().join("dist/jcode-desktop")));
-        assert!(!is_source_build(Path::new("/usr/bin/jcode-desktop")));
+        assert!(!is_source_build(&checkout.path().join("dist/honey-desktop")));
+        assert!(!is_source_build(Path::new("/usr/bin/honey-desktop")));
         // A managed install staged by an acceptance test under target/.
         assert!(!is_source_build(&checkout.path().join(
-            "target/ui-review/home/.local/opt/jcode-desktop/0.5.0/jcode-desktop"
+            "target/ui-review/home/.local/opt/jcode-desktop/0.5.0/honey-desktop"
         )));
         assert!(!is_source_build(&checkout.path().join("target/release/jcode")));
     }

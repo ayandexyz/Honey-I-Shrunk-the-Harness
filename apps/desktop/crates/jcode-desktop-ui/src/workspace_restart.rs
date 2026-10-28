@@ -239,7 +239,7 @@ fn is_desktop_process(pid: u32) -> bool {
     #[cfg(target_os = "linux")]
     {
         fs::read_link(format!("/proc/{pid}/exe"))
-            .map(|exe| exe.to_string_lossy().contains("jcode-desktop"))
+            .map(|exe| exe.to_string_lossy().contains("honey-desktop"))
             .unwrap_or(false)
     }
     #[cfg(not(target_os = "linux"))]
@@ -496,7 +496,7 @@ fn relaunch(executable: &Path, restore_dir: &Path, manifests: &[Manifest], log: 
     }
 }
 
-/// Entry point for `jcode-desktop --restart-all-worker`.
+/// Entry point for `honey-desktop --restart-all-worker`.
 pub fn run_worker(args: impl IntoIterator<Item = OsString>) -> i32 {
     let args: Vec<OsString> = args.into_iter().collect();
     let restart_server = !args.iter().any(|arg| arg == NO_SERVER_FLAG);

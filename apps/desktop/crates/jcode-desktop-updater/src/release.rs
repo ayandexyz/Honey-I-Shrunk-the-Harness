@@ -127,9 +127,9 @@ impl Target {
 
     pub fn executable(&self) -> &'static str {
         if self.zip {
-            "jcode-desktop.exe"
+            "honey-desktop.exe"
         } else {
-            "jcode-desktop"
+            "honey-desktop"
         }
     }
 }

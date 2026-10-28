@@ -51,12 +51,12 @@ cargo_dir=$([ "$profile" = release ] && echo release || echo debug)
 (cd apps/desktop &&
   JCODE_DESKTOP_VERSION="$version" CARGO_PROFILE_DEV_DEBUG=0 \
     cargo build --locked --profile "$profile" -p jcode-desktop)
-install -m755 "apps/desktop/target/$cargo_dir/jcode-desktop" "$stage/"
+install -m755 "apps/desktop/target/$cargo_dir/honey-desktop" "$stage/"
 # A script, not a symlink: the updater refuses links inside an archive.
 cat > "$stage/honey" <<'EOF'
 #!/bin/sh
 # Honey launcher: runs the desktop binary that sits next to this script.
-exec "$(dirname "$(readlink -f "$0")")/jcode-desktop" "$@"
+exec "$(dirname "$(readlink -f "$0")")/honey-desktop" "$@"
 EOF
 chmod 755 "$stage/honey"
 install -m644 apps/desktop/assets/app-icon/icon-1024.png "$stage/honey.png"
@@ -86,7 +86,7 @@ if [ "$expected" != "$actual" ]; then
 fi
 
 # Fail before archiving if the bundle cannot even report its version.
-"$stage/jcode-desktop" --version | grep -q "v$version" ||
+"$stage/honey-desktop" --version | grep -q "v$version" ||
   { echo "error: packaged binary does not report v$version" >&2; exit 1; }
 
 tar -C "$out" -czf "$out/$name.tar.gz" "$name"
@@ -99,7 +99,7 @@ if command -v dpkg-deb >/dev/null; then
     "$deb/usr/share/applications" "$deb/usr/share/icons/hicolor/1024x1024/apps"
   cp -a "$stage/." "$deb/usr/lib/honey/"
   rm "$deb/usr/lib/honey/"{honey,honey.png,honey.desktop}
-  ln -s ../lib/honey/jcode-desktop "$deb/usr/bin/honey"
+  ln -s ../lib/honey/honey-desktop "$deb/usr/bin/honey"
   install -m644 "$stage/honey.desktop" "$deb/usr/share/applications/honey.desktop"
   install -m644 "$stage/honey.png" "$deb/usr/share/icons/hicolor/1024x1024/apps/honey.png"
   cat > "$deb/DEBIAN/control" <<EOF

@@ -70,7 +70,7 @@ fn main() {
     // Link the object directly so the Objective-C class and its +load method
     // cannot be discarded as an unreferenced member of a static archive.
     println!(
-        "cargo:rustc-link-arg-bin=jcode-desktop={}",
+        "cargo:rustc-link-arg-bin=honey-desktop={}",
         object.display()
     );
     println!("cargo:rustc-link-lib=framework=AppKit");

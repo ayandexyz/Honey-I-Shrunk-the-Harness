@@ -44,6 +44,13 @@ edition.workspace = true
 description = "Jcode Desktop: a spatial, niri-inspired canvas of Jcode sessions"
 license.workspace = true
 
+# freecode: the shipped executable is "honey-desktop", not the package name
+# (unchanged to avoid conflicts on every upstream subtree merge). Every place
+# that detects or packages the binary by filename must match this.
+[[bin]]
+name = "honey-desktop"
+path = "src/main.rs"
+
 [dependencies]
 anyhow = "1"
 jcode-desktop-model.workspace = true

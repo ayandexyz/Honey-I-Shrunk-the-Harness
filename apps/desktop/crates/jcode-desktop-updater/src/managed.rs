@@ -1,7 +1,7 @@
 //! Per-user versioned installs under `~/.local/opt/jcode-desktop` (Linux).
 //!
 //! Each release is a complete directory, published with one atomic rename, and
-//! `~/.local/bin/jcode-desktop` is switched to it with another. Copies that
+//! `~/.local/bin/honey-desktop` is switched to it with another. Copies that
 //! cannot update themselves (a .deb in /usr/bin, a root-owned extraction) are
 //! adopted: the first update installs a managed copy, and launching the system
 //! copy redirects to the newest managed version while it is newer.
@@ -19,7 +19,7 @@ use std::{
 
 use crate::{InstallKind, release::parse_version};
 
-const EXECUTABLE: &str = "jcode-desktop";
+const EXECUTABLE: &str = "honey-desktop";
 /// Versions kept beside the newest, for windows still running an older build.
 const KEEP_OLDER: usize = 2;
 
@@ -34,7 +34,7 @@ fn root_of(home: &Path) -> PathBuf {
 }
 
 fn launcher_of(home: &Path) -> PathBuf {
-    home.join(".local/bin/jcode-desktop")
+    home.join(".local/bin/honey-desktop")
 }
 
 /// Owned by this user and not writable by anyone else. Group write is allowed
@@ -209,7 +209,7 @@ impl Managed {
             // A launcher is a convenience. The version directory is complete
             // and redirects already find it, so a failure here is not fatal.
             if let Err(error) = self.switch_launcher(&destination) {
-                eprintln!("jcode-desktop update: could not update the launcher: {error:#}");
+                eprintln!("honey-desktop update: could not update the launcher: {error:#}");
             }
         }
         Ok(())
@@ -335,10 +335,10 @@ mod tests {
         let home = home();
         let executable = install_version(home.path(), "0.5.0", "old desktop");
         let launcher = launcher_of(home.path());
-        symlink("../opt/jcode-desktop/0.5.0/jcode-desktop", &launcher).unwrap();
+        symlink("../opt/jcode-desktop/0.5.0/honey-desktop", &launcher).unwrap();
 
         let outcome = update(home.path(), &executable, "0.5.0", "0.6.0").unwrap().unwrap();
-        let new = root_of(home.path()).join("0.6.0/jcode-desktop");
+        let new = root_of(home.path()).join("0.6.0/honey-desktop");
         assert_eq!(
             outcome,
             crate::Outcome::Installed {
@@ -364,11 +364,11 @@ mod tests {
     fn a_system_install_is_adopted_and_launches_redirect_to_it() {
         let home = home();
         let system = tempfile::tempdir().unwrap();
-        let executable = system.path().join("jcode-desktop");
+        let executable = system.path().join("honey-desktop");
         fs::write(&executable, "system desktop").unwrap();
 
         let outcome = update(home.path(), &executable, "0.5.0", "0.6.0").unwrap().unwrap();
-        let managed = root_of(home.path()).join("0.6.0/jcode-desktop");
+        let managed = root_of(home.path()).join("0.6.0/honey-desktop");
         assert!(matches!(
             &outcome,
             crate::Outcome::Installed { kind: InstallKind::System, relaunch, .. } if *relaunch == managed
@@ -385,7 +385,7 @@ mod tests {
     fn a_foreign_launcher_is_left_alone() {
         let home = home();
         let system = tempfile::tempdir().unwrap();
-        let executable = system.path().join("jcode-desktop");
+        let executable = system.path().join("honey-desktop");
         fs::write(&executable, "system desktop").unwrap();
         install_version(home.path(), "0.1.0", "unused");
         let launcher = launcher_of(home.path());
@@ -405,7 +405,7 @@ mod tests {
         let moved = home.path().join("elsewhere");
         fs::rename(root_of(home.path()), &moved).unwrap();
         symlink(&moved, root_of(home.path())).unwrap();
-        let executable = root_of(home.path()).join("0.5.0/jcode-desktop");
+        let executable = root_of(home.path()).join("0.5.0/honey-desktop");
         assert!(update(home.path(), &executable, "0.5.0", "0.6.0").is_err());
     }
 
@@ -428,7 +428,7 @@ mod tests {
             install_version(home.path(), version, version);
         }
         symlink(
-            root_of(home.path()).join("0.1.0/jcode-desktop"),
+            root_of(home.path()).join("0.1.0/honey-desktop"),
             launcher_of(home.path()),
         )
         .unwrap();

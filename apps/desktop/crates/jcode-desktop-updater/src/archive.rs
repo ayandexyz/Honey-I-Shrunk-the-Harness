@@ -24,9 +24,12 @@ const MAX_EXTRACTED: u64 = 2 * MAX_ARCHIVE;
 /// the bundled freecode core with its ripgrep and onnxruntime sidecars, and a
 /// launcher. This list is a contract with every installed copy: an older
 /// updater rejects any archive that differs from it, so changing it strands
-/// users (docs/specs/2026-10-27-honey-desktop-release.md).
+/// users (docs/specs/2026-10-27-honey-desktop-release.md). The desktop
+/// executable was renamed `jcode-desktop` -> `honey-desktop` 2026-10-29
+/// (§2.2 of that spec); any install from before that date needs one manual
+/// reinstall to cross the gap, same as every other change to this list.
 pub const UNIX_FILES: [&str; 7] = [
-    "jcode-desktop",
+    "honey-desktop",
     "freecode",
     "rg",
     "honey",
@@ -36,10 +39,10 @@ pub const UNIX_FILES: [&str; 7] = [
 ];
 /// Files in a Windows zip. The first three are executables.
 pub const WINDOWS_FILES: [&str; 5] = [
-    "jcode-desktop.exe",
+    "honey-desktop.exe",
     "jcode.exe",
     "jcode-harness-api-bridge.exe",
-    "jcode-desktop.exe.manifest",
+    "honey-desktop.exe.manifest",
     "Jcode.png",
 ];
 

@@ -6,6 +6,32 @@ beta.3). See §6 for what exists. Rest of the doc is the plan. Companion to
 `2026-10-26-jcode-sdk-shim-contract.md` (how the app works); this is how it
 ships.
 
+**2026-10-29 follow-up**: the shipped executable itself was renamed
+`jcode-desktop` -> `honey-desktop` (package name in `apps/desktop/Cargo.toml`
+stays `jcode-desktop`, via an explicit `[[bin]]`, for the reason item 5 in
+§2.2 already gives for the version field: it conflicts on every upstream
+subtree merge otherwise). This was previously deliberate — see the original
+§2.2 item 8 and §6 R2 text below — because `archive.rs`'s `UNIX_FILES` is a
+contract with every installed copy. Rationale for revisiting it: "Honey" had
+already rebranded everything else a user or packager sees (download name,
+launcher, icon, `.desktop` entry); the one file that still said
+`jcode-desktop` was the compiled binary itself, which surprised a user
+inspecting their own install. **Consequence**: any copy installed before this
+change (running the old `jcode-desktop` binary, with the old `UNIX_FILES`
+baked in) cannot self-update past it — the next release is the one single
+exception that needs a manual reinstall, same mechanism as every other
+`UNIX_FILES` change. Every release after that self-updates normally.
+Touched: `Cargo.toml` (`[[bin]]`), `build.rs` (macOS link-arg-bin),
+`managed.rs` (`EXECUTABLE`, launcher path), `release.rs`
+(`Target::executable()`), `archive.rs` (`UNIX_FILES`/`WINDOWS_FILES`),
+`lib.rs` and `updates.rs`/`updates/linux.rs` (`is_source_build` /
+`source_executable` detection), `workspace_restart.rs`
+(`is_desktop_process`'s `/proc/<pid>/exe` check), and
+`scripts/package-honey-linux.sh`. Left unchanged, on purpose: the
+`~/.local/opt/jcode-desktop` install-root directory name, the internal crate
+names (`jcode-desktop-ui`, `jcode-desktop-updater`, …), and the upstream git
+remote — none of those are the shipped binary.
+
 Goal: a user downloads **Honey** (the `apps/desktop` GPU frontend running on
 freecode core) from freecode.website, installs it in one step, and from then
 on gets new versions automatically — the way Jcode Desktop ships from
@@ -110,7 +136,11 @@ small but every one is needed.
    `Jcode-<version>-<os>-<arch>.<ext>` (the rebrand script skips them on
    purpose — they are matched, not displayed). Rename to `Honey-…` in the
    package scripts **and** the updater's `Target` patterns together, or users
-   download a file called "Jcode".
+   download a file called "Jcode". *(Done — see §6.)* The archive's inner
+   executable name was a separate, later call: kept as `jcode-desktop` here
+   deliberately (an update-contract filename, not user-facing), then renamed
+   to `honey-desktop` on 2026-10-29 — see the follow-up note at the top of
+   this doc.
 9. **Icon** — `apps/web2/public/logoText.png` (1254×1254, square, opaque
    white background) → `apps/desktop/assets/app-icon/icon-1024.png`
    (`magick logoText.png -resize 1024x1024 icon-1024.png`); replaces the
@@ -262,8 +292,10 @@ borrow from).
 - The updater validates an archive against a **fixed file list compiled
   into the installed copy** (`archive.rs` `UNIX_FILES`), so the list is a
   contract: an archive with any other file is rejected forever by older
-  installs. Honey's Linux list, the same on every architecture:
-  `jcode-desktop`, `freecode`, `rg`, `honey` (a launcher *script* — the
+  installs. Honey's Linux list, the same on every architecture (renamed
+  2026-10-29, see the follow-up note at the top of this doc —
+  `jcode-desktop` before that date):
+  `honey-desktop`, `freecode`, `rg`, `honey` (a launcher *script* — the
   updater forbids links), `honey.desktop`, `honey.png`,
   `libonnxruntime.so.1`. The versioned `libonnxruntime.so.1.21.0` duplicate
   and the GPU-provider `libonnxruntime_providers_shared.so` (x86_64 only)

@@ -84,7 +84,7 @@ pub(super) fn source_executable(executable: &Path, checkout: &Path) -> bool {
     // nested elsewhere under target is not a source executable.
     match components.as_slice() {
         [profile, binary] | [_, profile, binary] => {
-            (*profile == "debug" || *profile == "release") && *binary == "jcode-desktop"
+            (*profile == "debug" || *profile == "release") && *binary == "honey-desktop"
         }
         _ => false,
     }
@@ -168,11 +168,11 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("Cargo.toml"), "[workspace]").unwrap();
         assert!(source_executable(
-            &root.path().join("target/debug/jcode-desktop"),
+            &root.path().join("target/debug/honey-desktop"),
             root.path()
         ));
         assert!(!source_executable(
-            Path::new("/usr/bin/jcode-desktop"),
+            Path::new("/usr/bin/honey-desktop"),
             root.path()
         ));
         assert!(!source_executable(
@@ -188,13 +188,13 @@ mod tests {
         assert!(!source_executable(
             &root
                 .path()
-                .join("target/accept/home/.local/opt/jcode-desktop/0.1.0-beta.24/jcode-desktop"),
+                .join("target/accept/home/.local/opt/jcode-desktop/0.1.0-beta.24/honey-desktop"),
             root.path(),
         ));
         assert!(source_executable(
             &root
                 .path()
-                .join("target/x86_64-unknown-linux-gnu/release/jcode-desktop"),
+                .join("target/x86_64-unknown-linux-gnu/release/honey-desktop"),
             root.path(),
         ));
     }

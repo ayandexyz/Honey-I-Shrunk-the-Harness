@@ -137,7 +137,7 @@ fn spawn_terminal(working_dir: Option<&str>) -> anyhow::Result<TerminalResource>
         command.arg("--interactive");
     }
     command.env("TERM", "xterm-256color");
-    command.env("TERM_PROGRAM", "jcode-desktop");
+    command.env("TERM_PROGRAM", "honey-desktop");
     command.env("COLORTERM", "truecolor");
     if let Some(dir) = working_dir {
         command.cwd(dir);

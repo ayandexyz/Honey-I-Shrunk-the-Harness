@@ -302,10 +302,10 @@ mod tests {
         let target = Target::for_platform("linux", "x86_64").unwrap();
         let (_root, executable) = bundle(target, b"x");
         assert!(Portable::detect(&target, &executable).is_ok());
-        let renamed = executable.with_file_name(format!("jcode-desktop{OLD_INFIX}123"));
+        let renamed = executable.with_file_name(format!("honey-desktop{OLD_INFIX}123"));
         assert!(Portable::detect(&target, &renamed).is_ok());
         fs::remove_file(executable.with_file_name("honey.png")).unwrap();
         assert!(Portable::detect(&target, &executable).is_err());
-        assert!(Portable::detect(&target, Path::new("/usr/bin/jcode-desktop")).is_err());
+        assert!(Portable::detect(&target, Path::new("/usr/bin/honey-desktop")).is_err());
     }
 }
