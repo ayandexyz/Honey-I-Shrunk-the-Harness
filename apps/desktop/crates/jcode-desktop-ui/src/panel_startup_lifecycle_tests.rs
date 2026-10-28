@@ -365,3 +365,40 @@ fn startup_composer_keeps_docked_shape_before_transcript_fills_space(
             .is_some_and(|layout| layout.compact)
     }));
 }
+
+/// A session that started on the welcome screen keeps `startup_layout: Some`
+/// for the rest of its life (see `startup_composer_keeps_docked_shape_...`
+/// above), which used to mean it rendered through the welcome-layout
+/// composer at `panel.rs` forever — a different branch than the ordinary
+/// docked composer, and one that never called `render_permission_card`. A
+/// permission ask on such a session (the common case: any session that
+/// began at the welcome screen) then had nowhere to paint its Allow/Deny
+/// card, leaving the turn stuck with no way to answer it from the UI.
+#[gpui::test]
+fn permission_request_renders_a_card_after_the_welcome_screen_commits(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (panel, vcx) = focused_startup_panel(cx);
+    vcx.simulate_input("First question");
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    assert!(panel.read_with(vcx, |panel, _| panel.startup_layout.is_some()));
+
+    panel.update(vcx, |panel, cx| {
+        panel.apply(
+            &ApiEvent::PermissionRequest {
+                session_id: "startup-lifecycle".into(),
+                request_id: "req-1".into(),
+                tool_name: "bash".into(),
+                description: "git branch --show-current".into(),
+            },
+            cx,
+        );
+    });
+    vcx.run_until_parked();
+
+    assert!(
+        vcx.debug_bounds("permission-card").is_some(),
+        "a permission request on a session still carrying startup_layout must render its Allow/Deny card"
+    );
+}
