@@ -4,7 +4,7 @@
 //! (`ReasoningDone`) and reports a cancelled turn as `TurnStopped`, neither of
 //! which core sends as its own event.
 
-use jcode_harness_api::{ApiEvent, ErrorCode, TurnStopReason};
+use jcode_harness_api::{ApiEvent, ErrorCode, RuntimeCommand, TurnStopReason};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -143,6 +143,27 @@ pub(crate) fn translate(states: &mut States, line: &Value) -> Vec<(ApiEvent, Str
             tool_name: text("toolName"),
             description: text("description"),
         }),
+        "question_asked" => {
+            let questions = line
+                .get("questions")
+                .cloned()
+                .and_then(|v| serde_json::from_value(v).ok())
+                .unwrap_or_default();
+            let payload = crate::question::QuestionPayload {
+                request_id: text("requestId"),
+                questions,
+            };
+            out.push(ApiEvent::RuntimeCommandResult {
+                session_id: session_id.clone(),
+                // See question.rs: never a real runtime command, just the
+                // least-surprising tag for a carrier core never otherwise
+                // uses. Detection on the UI side keys off the sentinel in
+                // `data`, not this field.
+                command: RuntimeCommand::Info,
+                data: payload.to_data(),
+                message: String::new(),
+            });
+        }
         "cache_status" => {
             if text("state") == "miss" {
                 let n = |key: &str| line.get(key).and_then(Value::as_u64);

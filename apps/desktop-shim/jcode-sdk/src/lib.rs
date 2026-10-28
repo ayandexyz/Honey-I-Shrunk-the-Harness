@@ -151,6 +151,7 @@ mod diagnostics;
 mod errors;
 mod launch;
 mod process;
+pub mod question;
 mod ssh;
 mod structured;
 pub mod turn_retry;
@@ -172,6 +173,7 @@ pub use client::{
 pub use diagnostics::{SocketState, Stage, describe_disconnect, explain, human_duration};
 pub use errors::{Error, ErrorKind, Result};
 pub use jcode_applet_types as applet;
+pub use question::{QUESTION_SENTINEL_KEY, QuestionOption, QuestionPayload, QuestionSpec};
 pub use jcode_harness_api::{
     SessionEditStats, enrich_sessions_from_edit_stats, enrich_sessions_from_local_edit_stats,
     enrich_sessions_from_local_swarm_state, enrich_sessions_from_swarm_state,

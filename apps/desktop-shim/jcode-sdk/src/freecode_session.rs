@@ -778,6 +778,22 @@ pub(crate) fn respond_to_permission(
     .map(|_| ())
 }
 
+/// freecode addition: answer a `question` tool ask. `answers` is one string
+/// per question, in order — the picked option's label, or the typed "Other"
+/// text.
+pub(crate) fn answer_question(inner: &Inner, request_id: &str, answers: Vec<String>) -> Result<()> {
+    call(
+        inner,
+        "question.answer",
+        json!({ "requestId": request_id, "answers": answers }),
+    )
+    .map(|_| ())
+}
+
+pub(crate) fn reject_question(inner: &Inner, request_id: &str) -> Result<()> {
+    call(inner, "question.reject", json!({ "requestId": request_id })).map(|_| ())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

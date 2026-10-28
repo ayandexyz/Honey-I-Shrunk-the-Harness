@@ -87,6 +87,9 @@ mod composer;
 // freecode: approve/deny card for runtime permission requests.
 #[path = "panel_permission_card.rs"]
 mod permission_card;
+// freecode: answer card for the `question` tool.
+#[path = "panel_question_card.rs"]
+mod question_card;
 #[path = "panel_diff.rs"]
 mod diff_review;
 #[path = "panel_effort.rs"]
@@ -558,6 +561,7 @@ pub struct Panel {
     tool_detail_motion: HashMap<String, crate::transition::AnimatedValue>,
     prompt_queue: queue::PromptQueue,
     permission_requests: permission_card::PendingPermissions,
+    question_requests: question_card::PendingQuestions,
     pending_users: VecDeque<usize>,
     accepted_users: HashMap<usize, Instant>,
     /// Newly received tool calls, keyed by call id, while their entrance runs.
@@ -1021,6 +1025,7 @@ impl Panel {
             tool_detail_motion: HashMap::new(),
             prompt_queue: queue::PromptQueue::default(),
             permission_requests: Default::default(),
+            question_requests: Default::default(),
             pending_users: VecDeque::new(),
             accepted_users: HashMap::new(),
             arriving_tools: HashMap::new(),
@@ -2830,6 +2835,7 @@ impl Panel {
         }
         self.response_stats.observe(event, self.provider.as_deref());
         self.permission_requests.observe(event);
+        self.question_requests.observe(event);
         self.observe_activity_state(event);
         if let Some(cue) = self.sound_events.observe(event)
             && self.preview_state.is_none()
@@ -2838,9 +2844,16 @@ impl Panel {
             crate::sounds::play(cue, cx);
         }
         match event {
-            ApiEvent::RuntimeCommandResult { message, .. } => {
-                self.items.push(Item::Assistant(message.clone()));
-                self.stick_to_bottom = true;
+            ApiEvent::RuntimeCommandResult { message, data, .. } => {
+                // A `question` tool ask smuggled through this carrier (see
+                // panel_question_card.rs) is not a real runtime command
+                // reply — question_requests.observe already queued it above,
+                // and pushing it here too would show it as a stray assistant
+                // message as well as the answer card.
+                if jcode_sdk::QuestionPayload::from_data(data).is_none() {
+                    self.items.push(Item::Assistant(message.clone()));
+                    self.stick_to_bottom = true;
+                }
             }
             ApiEvent::MessageAccepted { .. } => {
                 acknowledge_next(
@@ -5055,6 +5068,7 @@ impl Render for Panel {
                                     .flex_col()
                                     .gap_2()
                                     .children(self.render_permission_card(cx))
+                                    .children(self.render_question_card(cx))
                                     .children(self.render_prompt_queue(cx))
                                     .children(self.render_voice_pending())
                                     .child(self.render_composer(window, cx))

@@ -265,6 +265,17 @@ pub enum Command {
         request_id: String,
         decision: jcode_sdk::PermissionDecision,
     },
+    /// freecode: answer a `question` tool ask (one string per question).
+    AnswerQuestion {
+        session_id: String,
+        request_id: String,
+        answers: Vec<String>,
+    },
+    /// freecode: decline a `question` tool ask outright (Esc in the TUI).
+    RejectQuestion {
+        session_id: String,
+        request_id: String,
+    },
     /// freecode: set the permission mode (plan/build/review/explore/danger)
     /// for this session's next turn.
     SetAgentMode {
@@ -341,6 +352,8 @@ enum SessionCommand {
     Transfer,
     SetModel(String),
     RespondPermission(String, jcode_sdk::PermissionDecision),
+    AnswerQuestion(String, Vec<String>),
+    RejectQuestion(String),
     SetAgentMode(String),
     RuntimeCommand(jcode_sdk::api::RuntimeCommand, Vec<String>),
     Operation(SessionOperation),
@@ -1009,6 +1022,25 @@ fn run_with_transports(
                 decision,
             } => {
                 let command = SessionCommand::RespondPermission(request_id, decision);
+                send_to_session_worker(&mut workers, session_id, command, |session_id| {
+                    spawn_session_worker(session_id, &updates, &transports)
+                });
+            }
+            Command::AnswerQuestion {
+                session_id,
+                request_id,
+                answers,
+            } => {
+                let command = SessionCommand::AnswerQuestion(request_id, answers);
+                send_to_session_worker(&mut workers, session_id, command, |session_id| {
+                    spawn_session_worker(session_id, &updates, &transports)
+                });
+            }
+            Command::RejectQuestion {
+                session_id,
+                request_id,
+            } => {
+                let command = SessionCommand::RejectQuestion(request_id);
                 send_to_session_worker(&mut workers, session_id, command, |session_id| {
                     spawn_session_worker(session_id, &updates, &transports)
                 });
@@ -2375,6 +2407,24 @@ fn session_worker_with_connector(
                             let _ = updates.send(Update::CommandFailed {
                                 session_id: session_id.clone(),
                                 reason: format!("Failed to answer permission request: {error}"),
+                            });
+                        }
+                    }
+                    SessionCommand::AnswerQuestion(request_id, answers) => {
+                        if let Err(error) =
+                            client.answer_question(real_id, &request_id, answers)
+                        {
+                            let _ = updates.send(Update::CommandFailed {
+                                session_id: session_id.clone(),
+                                reason: format!("Failed to answer question: {error}"),
+                            });
+                        }
+                    }
+                    SessionCommand::RejectQuestion(request_id) => {
+                        if let Err(error) = client.reject_question(real_id, &request_id) {
+                            let _ = updates.send(Update::CommandFailed {
+                                session_id: session_id.clone(),
+                                reason: format!("Failed to reject question: {error}"),
                             });
                         }
                     }

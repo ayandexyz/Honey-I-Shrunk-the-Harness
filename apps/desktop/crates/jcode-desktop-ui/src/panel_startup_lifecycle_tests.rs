@@ -402,3 +402,56 @@ fn permission_request_renders_a_card_after_the_welcome_screen_commits(
         "a permission request on a session still carrying startup_layout must render its Allow/Deny card"
     );
 }
+
+/// Same gap as the permission card above, for the `question` tool's answer
+/// card (`panel_question_card.rs`) — it must also reach the startup-layout
+/// composer branch, not just the ordinary docked one.
+#[gpui::test]
+fn question_asked_renders_a_card_after_the_welcome_screen_commits(cx: &mut gpui::TestAppContext) {
+    let (panel, vcx) = focused_startup_panel(cx);
+    vcx.simulate_input("First question");
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    assert!(panel.read_with(vcx, |panel, _| panel.startup_layout.is_some()));
+
+    let payload = jcode_sdk::QuestionPayload {
+        request_id: "q1".into(),
+        questions: vec![jcode_sdk::QuestionSpec {
+            question: "Which approach?".into(),
+            header: Some("Approach".into()),
+            options: vec![
+                jcode_sdk::QuestionOption { label: "Fast".into(), description: "ship now".into() },
+                jcode_sdk::QuestionOption { label: "Safe".into(), description: "take longer".into() },
+            ],
+        }],
+    };
+    panel.update(vcx, |panel, cx| {
+        panel.apply(
+            &ApiEvent::RuntimeCommandResult {
+                session_id: "startup-lifecycle".into(),
+                command: jcode_sdk::api::RuntimeCommand::Info,
+                data: payload.to_data(),
+                message: String::new(),
+            },
+            cx,
+        );
+    });
+    vcx.run_until_parked();
+
+    assert!(
+        vcx.debug_bounds("question-card").is_some(),
+        "a question_asked event on a session still carrying startup_layout must render its answer card"
+    );
+    // The smuggled event must not also land as a stray assistant message.
+    assert!(panel.read_with(vcx, |panel, _| !panel
+        .items
+        .iter()
+        .any(|item| matches!(item, Item::Assistant(text) if text.is_empty()))));
+
+    let option = vcx.debug_bounds("question-option-0").unwrap();
+    vcx.simulate_click(option.center(), gpui::Modifiers::default());
+    vcx.run_until_parked();
+
+    // One question, one answer: the card closes once it's picked.
+    assert!(vcx.debug_bounds("question-card").is_none());
+}

@@ -739,6 +739,21 @@ impl JcodeClient {
         crate::freecode_session::respond_to_permission(&self.inner, request_id, decision)
     }
 
+    pub fn answer_question(
+        &self,
+        session_id: &str,
+        request_id: &str,
+        answers: Vec<String>,
+    ) -> Result<()> {
+        let _ = session_id;
+        crate::freecode_session::answer_question(&self.inner, request_id, answers)
+    }
+
+    pub fn reject_question(&self, session_id: &str, request_id: &str) -> Result<()> {
+        let _ = session_id;
+        crate::freecode_session::reject_question(&self.inner, request_id)
+    }
+
     /// Models this session can switch to, and which one is serving it.
     pub fn list_models(&self, session_id: &str) -> Result<(Vec<String>, Option<String>)> {
         todo!("jcode-sdk shim: list_models")
