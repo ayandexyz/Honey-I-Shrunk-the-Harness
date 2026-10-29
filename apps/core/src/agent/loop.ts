@@ -1322,6 +1322,16 @@ export class AgentLoop {
             totalOutputTokens,
             totalCacheReadTokens,
             totalCacheWriteTokens,
+            // This call alone — never summed — so a frontend can show
+            // current context occupancy (desktop's ring) or a per-call
+            // cost breakdown without mistaking the run-spend totals above
+            // for either.
+            inputTokens: turnResult.usage.inputTokens ?? 0,
+            outputTokens: turnResult.usage.outputTokens ?? 0,
+            cacheReadTokens: turnResult.usage.cacheReadInputTokens,
+            cacheCreationTokens:
+              turnResult.usage.cacheWriteInputTokens ??
+              turnResult.usage.cacheCreationInputTokens,
           });
 
           // Spend circuit breaker (RC7/D7): loop-health only warns on a stuck

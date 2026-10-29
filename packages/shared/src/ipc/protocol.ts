@@ -239,6 +239,16 @@ export type StreamEvent =
       totalOutputTokens: number;
       totalCacheReadTokens: number;
       totalCacheWriteTokens?: number;
+      // This single completed call's own numbers (never summed across turns).
+      // inputTokens is already inclusive of cache reads/writes, same as
+      // totalInputTokens above — it's the occupancy of the model's context
+      // window right now, not spend. A frontend that needs "how full is the
+      // window" or "this call's cost" must read these, never the total*
+      // fields, which only answer "how much has this run spent so far."
+      inputTokens: number;
+      outputTokens: number;
+      cacheReadTokens?: number;
+      cacheCreationTokens?: number;
     }
   | { type: "compaction_start"; sessionId?: string; trigger: "auto" | "manual" } // compaction began
   | {

@@ -103,12 +103,21 @@ pub(crate) fn translate(states: &mut States, line: &Value) -> Vec<(ApiEvent, Str
         }
         "usage_totals" => {
             let n = |key: &str| line.get(key).and_then(Value::as_u64);
+            // ApiEvent::TokenUsage is one completed model request's own
+            // numbers (jcode's contract: "one usage event per completed
+            // model request" — panel_response_stats.rs sums these across
+            // tool rounds, and panel.rs's context ring reads `input` as
+            // current window occupancy). core's totalInputTokens etc. are
+            // the run's cumulative spend instead, which inflates both
+            // consumers the more tool calls a turn makes — use the
+            // per-call inputTokens/outputTokens/cacheReadTokens/
+            // cacheCreationTokens fields core sends alongside them.
             out.push(ApiEvent::TokenUsage {
                 session_id: session_id.clone(),
-                input: n("totalInputTokens").unwrap_or(0),
-                output: n("totalOutputTokens").unwrap_or(0),
-                cache_read_input: n("totalCacheReadTokens"),
-                cache_creation_input: n("totalCacheWriteTokens"),
+                input: n("inputTokens").unwrap_or(0),
+                output: n("outputTokens").unwrap_or(0),
+                cache_read_input: n("cacheReadTokens"),
+                cache_creation_input: n("cacheCreationTokens"),
             });
         }
         "turn_started" => {
@@ -410,6 +419,25 @@ mod tests {
             &events[2],
             ApiEvent::BackgroundProgress { label, summary, done: true, .. }
                 if label == "$ pnpm test" && summary == "Done"
+        ));
+    }
+
+    #[test]
+    fn token_usage_uses_this_calls_numbers_not_the_run_cumulative_totals() {
+        // totalInputTokens etc. are the run's cumulative spend (they'd dwarf
+        // any real context window after a few tool rounds); inputTokens etc.
+        // are this one completed call's own numbers, which is what
+        // ApiEvent::TokenUsage's contract requires (one event per request).
+        let events = run(&[json!({
+            "type":"usage_totals","sessionId":"s",
+            "totalInputTokens":3_400_000,"totalOutputTokens":50_000,
+            "totalCacheReadTokens":3_000_000,"totalCacheWriteTokens":100_000,
+            "inputTokens":90_000,"outputTokens":2_000,
+            "cacheReadTokens":80_000,"cacheCreationTokens":5_000,
+        })]);
+        assert!(matches!(
+            &events[0],
+            ApiEvent::TokenUsage { input: 90_000, output: 2_000, cache_read_input: Some(80_000), cache_creation_input: Some(5_000), .. }
         ));
     }
 
