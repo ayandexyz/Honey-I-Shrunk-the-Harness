@@ -4090,6 +4090,13 @@ export class AgentLoop {
     this.pendingSteers.push({ id, text, synthetic });
   }
 
+  // A mode switch sent while this loop is running (server routes it here
+  // instead of through run()'s input, which only applies at the next turn).
+  // Takes effect from the next tool-batch boundary, same as a steered message.
+  setAgentMode(mode: AgentMode): void {
+    this.state.agentMode = mode;
+  }
+
   // Steers that never reached the model because the run ended (interrupt,
   // failure, hard stop) before the next drain point. The server re-parks
   // them — a user's words as follow-ups, a notification as a notification —

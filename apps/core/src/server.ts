@@ -834,6 +834,16 @@ export const methodHandlers: Record<
       // moment it reached the model.
       const active = activeLoops.get(sessionId);
       if (streamingBehavior === "steer" && active) {
+        // A mode switch sent mid-turn used to be silently dropped here: this
+        // branch returns before the post-queue code that applies
+        // paramAgentMode to the session. Apply it to both the session (so it
+        // sticks for the next turn) and the live loop (so it takes effect
+        // for this turn's remaining tool calls too).
+        if (paramAgentMode) {
+          (session as unknown as Record<string, unknown>).agentMode =
+            paramAgentMode;
+          active.setAgentMode(paramAgentMode as AgentMode);
+        }
         // Same id on the queued row and the persisted message, so the
         // TUI can promote the row when `message_steered` arrives.
         const id = randomUUID();
