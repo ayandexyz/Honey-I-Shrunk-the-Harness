@@ -2368,6 +2368,19 @@ impl Panel {
         cx.notify();
     }
 
+    /// Display-only restore of the last-picked mode (`Update::AgentMode`,
+    /// harness_spawn.rs), which fires before the real session exists — at
+    /// that point `self.session_id` is still the `startup://draft` placeholder,
+    /// so sending `Command::SetAgentMode` here (as `set_agent_mode` does for an
+    /// actual user pick) would target a session id that will never exist.
+    /// The real session is created/resumed with this same mode already baked
+    /// in (jcode-sdk's `create_session`/`attach_session`), so this only needs
+    /// to make the pill show the right value early — nothing to tell core.
+    pub(crate) fn restore_agent_mode(&mut self, mode: &str, cx: &mut Context<Self>) {
+        self.agent_mode = mode.to_string();
+        cx.notify();
+    }
+
     fn open_model_picker(&mut self, cx: &mut Context<Self>) {
         if self.is_side_document() {
             return;

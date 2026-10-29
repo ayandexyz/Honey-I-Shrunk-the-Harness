@@ -18,16 +18,31 @@ pub(crate) fn unsupported(what: &str) -> Error {
     )
 }
 
+/// Like the TUI's `currentAgentMode` riding along on its very first
+/// `session.send`: core's `session.start`/`session.resume` both take
+/// `agentMode` directly and store it on the session at creation time, no
+/// separate round trip needed or raced against. The desktop UI's early,
+/// cosmetic pill restore (harness_spawn.rs, before this real session exists)
+/// no longer tries to push a mode onto core itself — this is the only place
+/// that does, and it does it atomically with the session that mode belongs to.
 pub(crate) fn create_session(inner: &Inner, working_dir: Option<String>) -> Result<SessionInfo> {
     let mut params = json!({});
     if let Some(dir) = &working_dir {
         params["projectPath"] = json!(dir);
+    }
+    if let Ok(Some(mode)) = last_agent_mode(inner) {
+        params["agentMode"] = json!(mode);
     }
     let started = call(inner, "session.start", params)?;
     let id = started
         .get("sessionId")
         .and_then(Value::as_str)
         .ok_or_else(|| Error::new(ErrorKind::UnexpectedReply, "session.start: no sessionId"))?;
+    if let Ok(mut modes) = inner.agent_modes.lock() {
+        if let Ok(Some(mode)) = last_agent_mode(inner) {
+            modes.insert(id.to_string(), mode);
+        }
+    }
     // Core's own title for a fresh session is "Session <id>"; leave it unset
     // so the desktop shows its placeholder until the first turn names it.
     session_info(&json!({ "id": id, "projectPath": working_dir }))
@@ -35,8 +50,17 @@ pub(crate) fn create_session(inner: &Inner, working_dir: Option<String>) -> Resu
 
 /// `session.resume` loads the session into core and returns its transcript,
 /// which is kept for the `get_history` call the harness makes right after.
+/// Carries the last-picked mode the same way `create_session` does, rather
+/// than relying on whatever mode the session happened to be saved with.
 pub(crate) fn attach_session(inner: &Inner, session_id: &str) -> Result<SessionInfo> {
-    let resumed = call(inner, "session.resume", json!({ "sessionId": session_id }))?;
+    let mut params = json!({ "sessionId": session_id });
+    if let Ok(Some(mode)) = last_agent_mode(inner) {
+        params["agentMode"] = json!(mode.clone());
+        if let Ok(mut modes) = inner.agent_modes.lock() {
+            modes.insert(session_id.to_string(), mode);
+        }
+    }
+    let resumed = call(inner, "session.resume", params)?;
     if let Ok(mut history) = inner.history.lock() {
         history.insert(
             session_id.to_string(),
