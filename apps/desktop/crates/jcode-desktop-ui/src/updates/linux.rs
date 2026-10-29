@@ -188,7 +188,7 @@ mod tests {
         assert!(!source_executable(
             &root
                 .path()
-                .join("target/accept/home/.local/opt/jcode-desktop/0.1.0-beta.24/honey-desktop"),
+                .join("target/accept/home/.local/opt/honey/0.1.0-beta.24/honey-desktop"),
             root.path(),
         ));
         assert!(source_executable(

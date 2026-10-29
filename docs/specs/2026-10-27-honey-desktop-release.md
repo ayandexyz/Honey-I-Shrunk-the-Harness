@@ -28,9 +28,15 @@ Touched: `Cargo.toml` (`[[bin]]`), `build.rs` (macOS link-arg-bin),
 `source_executable` detection), `workspace_restart.rs`
 (`is_desktop_process`'s `/proc/<pid>/exe` check), and
 `scripts/package-honey-linux.sh`. Left unchanged, on purpose: the
-`~/.local/opt/jcode-desktop` install-root directory name, the internal crate
-names (`jcode-desktop-ui`, `jcode-desktop-updater`, …), and the upstream git
-remote — none of those are the shipped binary.
+internal crate names (`jcode-desktop-ui`, `jcode-desktop-updater`, …) and
+the upstream git remote — neither is the shipped binary or the install root.
+
+**2026-10-29 follow-up #2**: the managed install-root directory was also
+renamed, `~/.local/opt/jcode-desktop` -> `~/.local/opt/honey`
+(`managed.rs`'s `root_of()`, plus the literal paths its own tests build).
+Same consequence as the binary rename above: a copy installed under the old
+root cannot find itself under the new one and needs one manual reinstall to
+cross the gap; every release after that self-updates normally.
 
 Goal: a user downloads **Honey** (the `apps/desktop` GPU frontend running on
 freecode core) from freecode.website, installs it in one step, and from then

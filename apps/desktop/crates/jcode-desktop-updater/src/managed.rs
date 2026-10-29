@@ -1,4 +1,4 @@
-//! Per-user versioned installs under `~/.local/opt/jcode-desktop` (Linux).
+//! Per-user versioned installs under `~/.local/opt/honey` (Linux).
 //!
 //! Each release is a complete directory, published with one atomic rename, and
 //! `~/.local/bin/honey-desktop` is switched to it with another. Copies that
@@ -30,7 +30,7 @@ pub(crate) struct Managed {
 }
 
 fn root_of(home: &Path) -> PathBuf {
-    home.join(".local/opt/jcode-desktop")
+    home.join(".local/opt/honey")
 }
 
 fn launcher_of(home: &Path) -> PathBuf {
@@ -303,7 +303,7 @@ mod tests {
     fn install_version(home: &Path, version: &str, contents: &str) -> PathBuf {
         let directory = root_of(home).join(version);
         fs::create_dir_all(&directory).unwrap();
-        for directory in [".local", ".local/opt", ".local/opt/jcode-desktop", ".local/bin"] {
+        for directory in [".local", ".local/opt", ".local/opt/honey", ".local/bin"] {
             let path = home.join(directory);
             fs::create_dir_all(&path).unwrap();
             fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
@@ -335,7 +335,7 @@ mod tests {
         let home = home();
         let executable = install_version(home.path(), "0.5.0", "old desktop");
         let launcher = launcher_of(home.path());
-        symlink("../opt/jcode-desktop/0.5.0/honey-desktop", &launcher).unwrap();
+        symlink("../opt/honey/0.5.0/honey-desktop", &launcher).unwrap();
 
         let outcome = update(home.path(), &executable, "0.5.0", "0.6.0").unwrap().unwrap();
         let new = root_of(home.path()).join("0.6.0/honey-desktop");

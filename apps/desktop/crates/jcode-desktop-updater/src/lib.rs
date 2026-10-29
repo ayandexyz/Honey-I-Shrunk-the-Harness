@@ -8,7 +8,7 @@
 //! - Portable: an extracted tarball or Windows zip in a user-writable
 //!   directory. Files are swapped in place, the running executable included
 //!   (both Linux and NTFS allow renaming a running image).
-//! - Managed (Linux): versioned bundles under `~/.local/opt/jcode-desktop`
+//! - Managed (Linux): versioned bundles under `~/.local/opt/honey`
 //!   with an atomically switched `~/.local/bin/honey-desktop` symlink.
 //! - System (Linux .deb or root-owned directory): the first update adopts a
 //!   managed per-user install, and launches of the system copy redirect to it
@@ -528,7 +528,7 @@ pub(crate) mod tests {
         assert!(!is_source_build(Path::new("/usr/bin/honey-desktop")));
         // A managed install staged by an acceptance test under target/.
         assert!(!is_source_build(&checkout.path().join(
-            "target/ui-review/home/.local/opt/jcode-desktop/0.5.0/honey-desktop"
+            "target/ui-review/home/.local/opt/honey/0.5.0/honey-desktop"
         )));
         assert!(!is_source_build(&checkout.path().join("target/release/jcode")));
     }
