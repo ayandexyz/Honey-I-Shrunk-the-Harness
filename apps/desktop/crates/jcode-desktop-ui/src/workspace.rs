@@ -7597,6 +7597,7 @@ impl Workspace {
             div()
                 .id(id)
                 .debug_selector(move || id.into())
+                .min_w_0()
                 .flex_1()
                 .flex()
                 .items_center()
@@ -7606,6 +7607,7 @@ impl Workspace {
                 .rounded_full()
                 .cursor_pointer()
                 .text_size(px(10.0))
+                .truncate()
                 .font_weight(if selected {
                     gpui::FontWeight::SEMIBOLD
                 } else {

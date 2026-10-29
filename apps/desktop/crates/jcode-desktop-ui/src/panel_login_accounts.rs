@@ -1319,6 +1319,7 @@ impl Panel {
         let connected_tab = div()
             .id("login-tab-connected")
             .debug_selector(|| "login-tab-connected".into())
+            .min_w_0()
             .flex_1()
             .flex()
             .items_center()
@@ -1328,6 +1329,7 @@ impl Panel {
             .rounded_full()
             .cursor_pointer()
             .text_size(px(12.))
+            .truncate()
             .font_weight(if connected_selected {
                 FontWeight::SEMIBOLD
             } else {
@@ -1351,6 +1353,7 @@ impl Panel {
         let not_connected_tab = div()
             .id("login-tab-not-connected")
             .debug_selector(|| "login-tab-not-connected".into())
+            .min_w_0()
             .flex_1()
             .flex()
             .items_center()
@@ -1360,6 +1363,7 @@ impl Panel {
             .rounded_full()
             .cursor_pointer()
             .text_size(px(12.))
+            .truncate()
             .font_weight(if not_connected_selected {
                 FontWeight::SEMIBOLD
             } else {
