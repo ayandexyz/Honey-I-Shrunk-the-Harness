@@ -225,11 +225,23 @@ pub(crate) fn last_agent_mode(inner: &Inner) -> Result<Option<String>> {
 /// Also persists it as core's `lastAgentMode` (`config.setLastAgentMode`,
 /// fire-and-forget like the TUI's own call) so the next new session restores
 /// it via `last_agent_mode` instead of silently falling back to "build".
+///
+/// Stashing it locally is not enough on its own — `send_message`/`steer`
+/// only attach `agentMode` to the NEXT outgoing message, so picking a mode
+/// without typing anything (or switching mid-turn without steering text)
+/// left a running loop's permission checks on its old mode, even though the
+/// composer's pill already showed the new one. `session.setAgentMode`
+/// applies it to the session and the active loop immediately.
 pub(crate) fn set_agent_mode(inner: &Inner, session_id: &str, mode: &str) {
     if let Ok(mut modes) = inner.agent_modes.lock() {
         modes.insert(session_id.to_string(), mode.to_string());
     }
     let _ = call(inner, "config.setLastAgentMode", json!({ "mode": mode }));
+    let _ = call(
+        inner,
+        "session.setAgentMode",
+        json!({ "sessionId": session_id, "agentMode": mode }),
+    );
 }
 
 pub(crate) fn agent_mode(inner: &Inner, session_id: &str) -> Option<String> {

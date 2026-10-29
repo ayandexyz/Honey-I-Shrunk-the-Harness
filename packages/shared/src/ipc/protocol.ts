@@ -829,6 +829,16 @@ export const METHODS = {
     params: {} as { sessionId: string; effort: import("../types.js").EffortLevel },
     result: {} as { effort: import("../types.js").EffortLevel },
   },
+  // A bare mode switch — no accompanying message, unlike session.send's
+  // agentMode/session.send(streamingBehavior:"steer"). Without this, picking
+  // a new mode while idle (or mid-turn without steering any text) only ever
+  // reached core on the NEXT message, so desktop's mode pill could show
+  // "Danger" while a running turn's tool calls still prompted under the mode
+  // the turn actually started with.
+  "session.setAgentMode": {
+    params: {} as { sessionId: string; agentMode: string },
+    result: {} as { agentMode: string },
+  },
   // Bookmark/unbookmark a session (desktop's pin, jcode's `/save <label>`).
   // A non-empty `label` also becomes the title; `title` is set on the result
   // only when that happened, so a caller knows to refresh its display title.
@@ -981,6 +991,7 @@ export const REQUIRED_PARAMS: Record<
   "session.archive": { sessionId: "string" },
   "session.rename": { sessionId: "string" },
   "session.setReasoningEffort": { sessionId: "string", effort: "string" },
+  "session.setAgentMode": { sessionId: "string", agentMode: "string" },
   "session.setSaved": { sessionId: "string", saved: "boolean" },
   "session.sendSystemReminder": { sessionId: "string", reminder: "string" },
   "session.delete": { sessionId: "string" },

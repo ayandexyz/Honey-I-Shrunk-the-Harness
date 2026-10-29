@@ -1959,6 +1959,29 @@ export const methodHandlers: Record<
     return { effort };
   },
 
+  // A bare mode switch, no steered message attached — desktop's mode pill
+  // used to only stash the new mode client-side until the next session.send,
+  // so switching mid-turn (or picking a mode before typing anything) left a
+  // running loop's permission checks on its old mode. Applies to both the
+  // session (future turns) and the active loop (this turn's remaining tool
+  // calls), same as session.send's steer branch does when a mode rides along
+  // with actual text.
+  "session.setAgentMode": async (
+    params: Record<string, unknown>,
+  ): Promise<{ agentMode: AgentMode }> => {
+    const { sessionId, agentMode } = params as {
+      sessionId: string;
+      agentMode: AgentMode;
+    };
+    const session = getSession(sessionId);
+    if (!session) {
+      throw new Error(`Session not found: ${sessionId}`);
+    }
+    (session as unknown as Record<string, unknown>).agentMode = agentMode;
+    activeLoops.get(sessionId)?.setAgentMode(agentMode);
+    return { agentMode };
+  },
+
   "session.setSaved": async (
     params: Record<string, unknown>,
   ): Promise<{ title?: string }> => {
