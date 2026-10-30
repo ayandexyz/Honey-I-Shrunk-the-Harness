@@ -65,8 +65,12 @@ export function lastNDays(entries: DailyUsage[], days: number): DailyUsage[] {
   return entries.filter((e) => e.date >= cutoffDay);
 }
 
+// "Writes bill at ~1.25x" was only ever true at the 1h cache TTL's expense:
+// FREECODE_CACHE_TTL=1h doubles it to ~2x (docs/caching-architecture.md
+// §1.7) — stated as a range rather than naming the active knob here, since
+// this is a static string with no access to which TTL any given write used.
 const CACHE_NOTE =
-  "Cache reads bill at roughly a tenth of fresh input, so a high rate is a cheap session. Writes bill at ~1.25x — a rate bought by constant rewriting is not a win.";
+  "Cache reads bill at roughly a tenth of fresh input, so a high rate is a cheap session. Writes bill at ~1.25x (5m) or ~2x (FREECODE_CACHE_TTL=1h) — a rate bought by constant rewriting is not a win.";
 
 function row(label: string, totals: UsageTotals): string | undefined {
   const rate = cacheHitRate(totals.inputTokens, totals.cacheReadTokens);
