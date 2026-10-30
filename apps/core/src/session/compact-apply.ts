@@ -70,6 +70,33 @@ export async function applyCompaction(opts: {
   const preserveRecentTurns =
     opts.preserveRecentTurns ?? DEFAULT_COMPACTION_CONFIG.preserveRecentTurns;
 
+  // Check the real, provider-facing transcript for room to drop BEFORE paying
+  // for a MemoryService summary. MemoryService tracks its own much smaller
+  // shadow transcript (bounded per-call stubs, not the real tool output), so
+  // it can keep finding a sliver to summarize — and report compacted:true —
+  // long after the real session store has nothing left outside the last
+  // `preserveRecentTurns` user turns (e.g. one long tool-heavy turn with no
+  // new user message to advance the boundary). That false "compacted:true"
+  // still busts the prompt cache and bills a real summarizer call for zero
+  // actual reduction — confirmed as the cause of a 2026-10-30 session that
+  // burned ~19.8M tokens of a subscription window in under an hour on 10
+  // such no-op firings (see TODO.md). Skip the summary call entirely when
+  // the store wouldn't shrink.
+  const stored = await opts.store.getMessages(opts.sessionId, opts.projectPath);
+  const preserve = keepLastNUserTurns(stored, preserveRecentTurns);
+  if (preserve.length >= stored.length) {
+    return {
+      compacted: false,
+      reason: "nothing to compact",
+      tokensBefore: 0,
+      tokensAfter: 0,
+      messagesBefore: stored.length,
+      messagesAfter: stored.length,
+      compactedMessageIds: [],
+      preservedMessageIds: preserve.map((message) => message.id),
+    };
+  }
+
   const result = await opts.memory.compact(opts.compactOptions);
   if (!result.success || !result.summary) {
     return {
@@ -86,15 +113,7 @@ export async function applyCompaction(opts: {
     };
   }
 
-  const stored = await opts.store.getMessages(opts.sessionId, opts.projectPath);
-  const preserve = keepLastNUserTurns(stored, preserveRecentTurns);
-  if (preserve.length < stored.length) {
-    await opts.store.replaceMessages(
-      opts.sessionId,
-      preserve,
-      opts.projectPath,
-    );
-  }
+  await opts.store.replaceMessages(opts.sessionId, preserve, opts.projectPath);
 
   markAllReadsCompacted(opts.sessionId);
   const preservedIds = new Set(preserve.map((message) => message.id));

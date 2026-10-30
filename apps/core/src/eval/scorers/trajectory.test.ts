@@ -1,7 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { scoreTrajectory } from "./trajectory.js";
-import type { Trace, ToolSpan, ModelSpan } from "../../rollout/trace.js";
+import type {
+  CompactionSpan,
+  Trace,
+  ToolSpan,
+  ModelSpan,
+} from "../../rollout/trace.js";
 import type { EvalCase, RunRecord } from "../types.js";
 
 function tool(name: string, args?: Record<string, unknown>): ToolSpan {
@@ -35,6 +40,7 @@ function run(
   toolSpans: ToolSpan[],
   modelSpans = [modelSpan()],
   compactions = 0,
+  compactionSpans: CompactionSpan[] = [],
 ): RunRecord {
   toolSpans = toolSpans.map((s, i) => ({ ...s, callSeq: i }));
   const trace: Trace = {
@@ -52,9 +58,19 @@ function run(
     hung: false,
     inFlight: false,
     compactions,
+    compactionSpans,
     compactedTokens: compactions * 1_000,
   };
   return { trace, prompt: "p", response: "r" };
+}
+
+function compactionSpan(over: Partial<CompactionSpan>): CompactionSpan {
+  return {
+    at: 0,
+    compactedMessageIds: [],
+    preservedMessageIds: [],
+    ...over,
+  };
 }
 
 const kase = (over: Partial<EvalCase>): EvalCase => ({
@@ -342,6 +358,42 @@ test("more compactions than expected still passes", () => {
   const score = scoreTrajectory(
     run([tool("edit")], [modelSpan()], 3),
     kase({ expectCompaction: 1, expectTool: "edit" }),
+  );
+  assert.equal(score.passed, true);
+});
+
+test("a compaction that removed 0 messages fails as infra, even with no expectCompaction (2026-10-30 regression)", () => {
+  const score = scoreTrajectory(
+    run(
+      [tool("edit")],
+      [modelSpan()],
+      1,
+      [compactionSpan({ messagesBefore: 108, messagesAfter: 108 })],
+    ),
+    kase({ expectTool: "edit" }),
+  );
+  assert.equal(score.passed, false);
+  assert.equal(score.infra, true);
+  assert.match(score.reason, /removed 0 of 108 messages/);
+});
+
+test("a compaction that actually shrank the transcript is not flagged", () => {
+  const score = scoreTrajectory(
+    run(
+      [tool("edit")],
+      [modelSpan()],
+      1,
+      [compactionSpan({ messagesBefore: 108, messagesAfter: 74 })],
+    ),
+    kase({ expectCompaction: 1, expectTool: "edit" }),
+  );
+  assert.equal(score.passed, true);
+});
+
+test("a compaction span with no message counts (legacy log) is not flagged", () => {
+  const score = scoreTrajectory(
+    run([tool("edit")], [modelSpan()], 1, [compactionSpan({})]),
+    kase({ expectTool: "edit" }),
   );
   assert.equal(score.passed, true);
 });

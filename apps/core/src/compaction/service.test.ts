@@ -162,3 +162,52 @@ test("a compaction that does not shrink the measured context holds instead of re
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a turn-count cooldown blocks a re-fire even when tokens have grown enough (jcode-style second line of defense)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "freecode-memory-"));
+  try {
+    const service = new MemoryService(`session-cooldown-${Date.now()}`, {
+      storage: new FileMemoryStorage(dir),
+      config: { autoCompactBufferTokens: 10_000, minTurnsBetweenCompactions: 5 },
+    });
+    service.addMessage("user", "make it faster");
+    for (let i = 0; i < 6; i++) service.addMessage("assistant", `tool turn ${i}`);
+
+    assert.equal(service.shouldCompact("MiniMax-M2", 196_608, 130_000), true);
+    const result = await service.compact();
+    assert.ok(result.compactedMessageIds.length > 0);
+
+    // Token growth alone would clear the BLOCKED_RETRY_GROWTH_TOKENS guard
+    // (well past +5,000), but the cooldown has not elapsed yet.
+    for (let i = 0; i < 4; i++) {
+      assert.equal(
+        service.shouldCompact("MiniMax-M2", 196_608, 500_000),
+        false,
+        `call ${i + 1} after the compaction must still be held by the cooldown`,
+      );
+    }
+    // The 5th call clears minTurnsBetweenCompactions=5.
+    assert.equal(service.shouldCompact("MiniMax-M2", 196_608, 500_000), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the cooldown never blocks a session's first compaction", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "freecode-memory-"));
+  try {
+    const service = new MemoryService(`session-first-${Date.now()}`, {
+      storage: new FileMemoryStorage(dir),
+      config: { autoCompactBufferTokens: 10_000, minTurnsBetweenCompactions: 10 },
+    });
+    service.addMessage("user", "make it faster");
+    for (let i = 0; i < 6; i++) service.addMessage("assistant", `tool turn ${i}`);
+
+    // A brand-new session must never be held back by a cooldown it hasn't
+    // earned yet — only a repeat within minTurnsBetweenCompactions of a
+    // PRIOR real compaction is blocked.
+    assert.equal(service.shouldCompact("MiniMax-M2", 196_608, 130_000), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -106,12 +106,79 @@ test("applyCompaction reports the exact persisted message boundary", async () =>
   );
 });
 
+test("applyCompaction skips the summarizer when the store has nothing to trim (2026-10-30 thrashing bug)", async () => {
+  // One long tool-heavy turn (no new user message) can leave the real store
+  // with no more than `preserveRecentTurns` user turns in it. MemoryService's
+  // own smaller shadow transcript can still find a sliver to summarize and
+  // report success — which used to make this report compacted:true, bust the
+  // prompt cache, and bill a real model call for a store that never shrank.
+  // 10 such no-op firings in one session burned ~19.8M tokens of a
+  // subscription window. Confirm the summarizer is never even called once
+  // the real store has nothing to drop.
+  const { applyCompaction } = await import("./compact-apply.js");
+  // Exactly `preserveRecentTurns` (2) real user turns, the second long and
+  // tool-heavy (a2, a3 = many loop iterations with no new user message) —
+  // keepLastNUserTurns has to keep all of it.
+  const stored = [
+    msg("user", "u1"),
+    msg("assistant", "a1"),
+    msg("user", "u2"),
+    msg("assistant", "a2"),
+    msg("assistant", "a3"),
+  ];
+  let compactCalls = 0;
+  let replaceCalls = 0;
+
+  const outcome = await applyCompaction({
+    memory: {
+      compact: async () => {
+        compactCalls++;
+        return {
+          success: true,
+          summary: { content: "a sliver the shadow transcript found" },
+          tokenCountBefore: 9_000,
+          tokenCountAfter: 8_600,
+        };
+      },
+    } as never,
+    store: {
+      getMessages: async () => stored,
+      replaceMessages: async () => {
+        replaceCalls++;
+      },
+    } as never,
+    sessionId: "s-thrash",
+    projectPath: "/p",
+    preserveRecentTurns: 2,
+  });
+
+  assert.equal(compactCalls, 0, "the paid summarizer call must not run");
+  assert.equal(replaceCalls, 0, "the store must not be rewritten");
+  assert.equal(outcome.compacted, false);
+  assert.equal(outcome.reason, "nothing to compact");
+  assert.equal(outcome.messagesBefore, stored.length);
+  assert.equal(outcome.messagesAfter, stored.length);
+  assert.deepEqual(outcome.compactedMessageIds, []);
+});
+
 test("compaction forgets which reads are in context, so the next read is real", async () => {
   // Long-task run 2026-10-12: 89 of 100 "unchanged — scroll up" stubs pointed
   // at a read that compaction had already summarised away.
   const { applyCompaction } = await import("./compact-apply.js");
   const { canDedup, getReadState } = await import("../tools/read-state.js");
   const shown = { mtimeMs: 1, size: 10, offset: 0, limit: 2000 };
+  // Enough real user turns that keepLastNUserTurns has room to drop some —
+  // otherwise applyCompaction now skips the summarizer before `summary` is
+  // even consulted (the 2026-10-30 thrashing fix), which this test isn't
+  // exercising.
+  const stored = [
+    msg("user", "u1"),
+    msg("assistant", "a1"),
+    msg("user", "u2"),
+    msg("assistant", "a2"),
+    msg("user", "u3"),
+    msg("assistant", "a3"),
+  ];
   const run = async (summary: string | undefined) => {
     const sessionId = `compact-reads-${summary ?? "none"}`;
     getReadState(sessionId).set("/p/a.ts", { ...shown, inContext: true });
@@ -125,11 +192,12 @@ test("compaction forgets which reads are in context, so the next read is real", 
         }),
       } as never,
       store: {
-        getMessages: async () => [],
+        getMessages: async () => stored,
         replaceMessages: async () => {},
       } as never,
       sessionId,
       projectPath: "/p",
+      preserveRecentTurns: 1,
     });
     return canDedup(getReadState(sessionId).get("/p/a.ts"), shown);
   };

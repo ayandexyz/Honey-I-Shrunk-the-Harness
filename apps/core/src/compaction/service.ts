@@ -51,6 +51,11 @@ export class MemoryService {
   // Last count shouldCompact() actually judged against — measured when the
   // provider reported one, estimated otherwise.
   private lastEffectiveTokenCount = 0;
+  // Calls to shouldCompact() since the last successful compaction (one call
+  // per turn in production). Starts at +Infinity so a session's first
+  // compaction, however early, is never blocked by this — only a repeat
+  // within minTurnsBetweenCompactions of a PRIOR compaction is.
+  private turnsSinceLastCompaction = Number.POSITIVE_INFINITY;
 
   constructor(sessionId: string, options: MemoryServiceOptions = {}) {
     this.config = { ...DEFAULT_COMPACTION_CONFIG, ...options.config };
@@ -141,6 +146,10 @@ export class MemoryService {
     // on — mixing a measured count with an estimated one would make the
     // retry guard compare 196K against 14.5K and never hold.
     this.lastEffectiveTokenCount = effectiveTokens;
+    this.turnsSinceLastCompaction++;
+    if (this.turnsSinceLastCompaction < this.config.minTurnsBetweenCompactions) {
+      return false;
+    }
     if (this.compactedAtTokenCount !== undefined) {
       if (effectiveTokens < this.compactedAtTokenCount) {
         this.compactedAtTokenCount = undefined; // it shrank; normal rule applies
@@ -235,6 +244,7 @@ export class MemoryService {
 
     this.blockedAtTokenCount = undefined;
     this.compactedAtTokenCount = this.lastEffectiveTokenCount || undefined;
+    this.turnsSinceLastCompaction = 0;
     this.state = {
       ...this.state,
       messages: selected.preserve,

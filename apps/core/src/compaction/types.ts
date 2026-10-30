@@ -42,6 +42,19 @@ export interface CompactionConfig {
    * not an instruction, and is summarized like anything else.
    */
   maxPreserveHeadTokens: number;
+  /**
+   * Cooldown, in `shouldCompact()` calls (one per turn), after a successful
+   * compaction before another is allowed to start — independent of token
+   * growth. Second line of defense alongside the real-store feasibility
+   * check in `session/compact-apply.ts` (2026-10-30 thrashing incident: 10
+   * no-op compactions fired within ~5 minutes, each busting the prompt
+   * cache for nothing). jcode's `min_turns_between_compactions` (default 10)
+   * is the model, but jcode only applies it to its predictive proactive/
+   * semantic triggers; freecode's trigger is reactive (fires once the
+   * measured/estimated tokens actually cross the threshold), so a long
+   * cooldown risks holding back a genuinely overflowing session. Kept small.
+   */
+  minTurnsBetweenCompactions: number;
 }
 
 export interface SelectionResult {
@@ -74,4 +87,9 @@ export const DEFAULT_COMPACTION_CONFIG: CompactionConfig = {
   maxPreserveRecentTokens: 8_000,
   maxToolOutputChars: 4_000,
   maxPreserveHeadTokens: 2_000,
+  // Small, deliberately: jcode's equivalent default is 10, but jcode only
+  // applies its cooldown to a predictive trigger that fires ahead of real
+  // need. freecode's trigger is reactive, so a long hold risks a genuinely
+  // overflowing session never getting to compact.
+  minTurnsBetweenCompactions: 2,
 };

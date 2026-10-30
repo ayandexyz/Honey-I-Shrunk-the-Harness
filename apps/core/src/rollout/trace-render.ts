@@ -280,6 +280,16 @@ export function renderTrace(trace: Trace, opts: RenderOptions = {}): string {
         `  compact  ${trace.compactions} run(s), ~${count(estimatedRemoved)} estimated transcript tokens removed`,
       ),
     );
+    // 2026-10-30: a compaction can report success while removing zero
+    // messages from the real transcript — a summarizer call and a cache
+    // bust for nothing. See session/compact-apply.ts.
+    if (trace.noopCompactions > 0) {
+      out.push(
+        yellow(
+          `  ⚠ ${trace.noopCompactions} of them removed 0 messages — cache busted for nothing`,
+        ),
+      );
+    }
   }
 
   const hung = trace.modelSpans.filter((s) => s.status === "hung");
@@ -307,6 +317,8 @@ export function renderTrace(trace: Trace, opts: RenderOptions = {}): string {
       cyan("a request is in flight") +
         dim(" — not a fault; still within budget."),
     );
+  } else if (trace.noopCompactions > 0) {
+    out.push(yellow(`no hangs, no model errors — but see the ⚠ above`));
   } else {
     out.push(green("no hangs, no model errors"));
   }

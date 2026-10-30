@@ -34,6 +34,27 @@ export function scoreTrajectory(run: RunRecord, kase: EvalCase): TrialScore {
     return kind === "provider" || kind === "stall" ? { ...score, infra: true } : score;
   }
 
+  // Regression detector for the 2026-10-30 thrashing bug: a compaction that
+  // reports success but removes zero messages from the real, provider-facing
+  // transcript still pays for a summarizer call and busts the prompt cache
+  // for nothing. Harness bug, not the model's — flagged infra so it doesn't
+  // read as an agent regression — but it must never pass silently again.
+  const noop = (run.trace.compactionSpans ?? []).find(
+    (span) =>
+      span.messagesBefore !== undefined &&
+      span.messagesBefore === span.messagesAfter,
+  );
+  if (noop) {
+    return {
+      ...fail(
+        `compaction reported success but removed 0 of ${noop.messagesBefore} messages ` +
+          `(provider request before=${noop.providerRequestTokensBefore ?? "unknown"} tokens) — ` +
+          `busted the prompt cache for nothing`,
+      ),
+      infra: true,
+    };
+  }
+
   for (const forbidden of kase.forbidTools ?? []) {
     if (fired.includes(forbidden)) return fail(`called forbidden ${forbidden}`);
   }

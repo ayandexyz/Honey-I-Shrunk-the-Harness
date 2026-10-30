@@ -219,6 +219,16 @@ export interface Trace {
    * cannot carry an expectation.
    */
   compactions: number;
+  /**
+   * Compactions that reported success but removed zero messages from the
+   * real, provider-facing transcript (`messagesBefore === messagesAfter`).
+   * Each one still paid for a summarizer call and busted the prompt cache
+   * for nothing — the 2026-10-30 thrashing bug (fixed in
+   * `session/compact-apply.ts`; this is the regression detector for it).
+   * Legacy logs without message counts can never register one, so this
+   * undercounts on old data rather than false-alarming.
+   */
+  noopCompactions: number;
   /** Sum of comparable local transcript estimates removed by compaction. */
   compactedEstimatedTranscriptTokens: number;
   /** @deprecated Alias retained for existing trace JSON consumers. */
@@ -499,6 +509,11 @@ export function buildTrace(
     redirects,
     redirectsSkipped,
     compactions,
+    noopCompactions: compactionSpans.filter(
+      (span) =>
+        span.messagesBefore !== undefined &&
+        span.messagesBefore === span.messagesAfter,
+    ).length,
     compactedEstimatedTranscriptTokens,
     compactedTokens: compactedEstimatedTranscriptTokens,
   };
