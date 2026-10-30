@@ -86,6 +86,36 @@ test("cache warming is included once and split from runtime agent cost", () => {
   });
 });
 
+test("a 1h-TTL cache write prices at 2x, end to end through the trace fold", () => {
+  // claude-sonnet-4-5: input=3 (2x=6), table cacheWrite=3.75 (the 5m price).
+  const trace = buildTrace("s1", [
+    event("model.request", 1000, {
+      turnId: "turn-0",
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      messageCount: 2,
+      toolCount: 0,
+      promptChars: 100,
+      streamed: false,
+    }),
+    event("model.response", 2000, {
+      turnId: "turn-0",
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      duration_ms: 1000,
+      inputTokens: 1_000_000,
+      outputTokens: 0,
+      cacheWriteTokens: 1_000_000,
+      cacheTtl: "1h",
+      toolCalls: [],
+      textChars: 0,
+      thinkingChars: 0,
+    }),
+  ]);
+  assert.equal(trace.modelSpans[0].cacheTtl, "1h");
+  assert.deepEqual(traceCost(trace), { usd: 6, partial: false });
+});
+
 test("the per-operation split sums to the whole and keeps unknowns visible", () => {
   const trace = buildTrace("s1", [
     aux("retrieval_judge", "succeeded"),

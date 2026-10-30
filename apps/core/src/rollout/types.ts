@@ -298,6 +298,15 @@ export interface ModelResponseEvent extends BaseEvent {
    * call rather than of whoever later reads the log (OAuth spec §5).
    */
   authMode?: "oauth";
+  /**
+   * The cache TTL this call actually requested, stamped when it was made
+   * (`providers/utils.ts effectiveCacheTtl`) — only recorded as "1h", the
+   * non-default case pricing needs to know about. Neither the installed nor
+   * the latest `@ai-sdk/anthropic` parses Anthropic's cache-write TTL split
+   * out of the response, so billing has no other way to tell a 2x 1h write
+   * from the table's 1.25x 5m price.
+   */
+  cacheTtl?: "1h";
   /** Names only — the args are already captured by function.call. */
   toolCalls: string[];
   textChars: number;

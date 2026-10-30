@@ -116,7 +116,11 @@ export function buildGenerateOptions(
   modelHandle: unknown,
   opts: ExecuteOptions,
 ): any {
-  const tools = buildToolsParam(opts.tools);
+  // The resolved model id, for the cache-TTL capability gate (utils.ts
+  // supportsLongCacheTtl) — opts.model is absent when the caller relies on
+  // the provider's own default.
+  const resolvedModel = opts.model ?? entry.defaultModel;
+  const tools = buildToolsParam(opts.tools, entry.id, resolvedModel);
   const generateOptions: any = {
     model: modelHandle,
     temperature: opts.temperature,
@@ -135,13 +139,19 @@ export function buildGenerateOptions(
       // never carry it (spec §0.1, tested).
       generateOptions.system = buildAnthropicSystemParam(
         withClaudeCodeIdentity(opts.system),
+        entry.id,
+        resolvedModel,
       );
     } else if (opts.system) {
-      generateOptions.system = buildAnthropicSystemParam(opts.system);
+      generateOptions.system = buildAnthropicSystemParam(
+        opts.system,
+        entry.id,
+        resolvedModel,
+      );
     }
     if (opts.messages) {
       const coreMessages = convertToCoreMessages(opts.messages);
-      applyMessageCaching(coreMessages);
+      applyMessageCaching(coreMessages, entry.id, resolvedModel);
       // After the anchors, on purpose: the tail changes every request, so it
       // must never carry a breakpoint — the write anchor has to land on the
       // last real message for the next request's read anchor to hit it. The

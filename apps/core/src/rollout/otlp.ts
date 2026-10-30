@@ -122,6 +122,7 @@ function modelSpanToOtlp(
         span.model,
         span,
         span.authMode,
+        span.cacheTtl,
       ),
       // Not part of the convention, but the fields that actually explain a
       // slow or hung call — which is the whole point of exporting this.

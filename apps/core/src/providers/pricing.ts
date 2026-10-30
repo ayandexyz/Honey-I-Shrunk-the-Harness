@@ -25,6 +25,7 @@ import {
   readCachedProviders,
   readCachedProvidersWrittenAt,
 } from "../models-dev.js";
+import type { CacheTtl } from "./utils.js";
 
 /**
  * The vintage of the BUILT-IN table only. Prefer `pricesAsOf()` for anything
@@ -226,6 +227,7 @@ export function priceUsd(
   model: string,
   usage: TokenCounts,
   authMode?: AuthModeAtCall,
+  cacheTtl?: CacheTtl,
 ): number | undefined {
   // Subscription inference has no per-token dollar price. `undefined`, not
   // $0 — a zero would poison cost rollups with fake savings, and nothing
@@ -250,9 +252,24 @@ export function priceUsd(
 
   let usd = (plainInput / MILLION) * price.input;
   usd += (cacheRead / MILLION) * (price.cacheRead ?? price.input);
-  usd += (cacheWrite / MILLION) * (price.cacheWrite ?? price.input);
+  usd += (cacheWrite / MILLION) * cacheWriteRate(price, cacheTtl);
   usd += ((usage.outputTokens ?? 0) / MILLION) * price.output;
   return usd;
+}
+
+/**
+ * Anthropic's 1-hour cache tier bills a write at 2x the base input rate, not
+ * the table's `cacheWrite` price (the 5-minute tier, usually ~1.25x input).
+ * `cacheTtl` is passed in rather than read from the response because neither
+ * the installed `@ai-sdk/anthropic` nor its latest release parses Anthropic's
+ * `cache_creation.ephemeral_1h_input_tokens` split — the SDK only ever
+ * surfaces one flat `cacheCreationInputTokens`. The call site already knows
+ * which TTL it requested (`effectiveCacheTtl`), so billing doesn't need the
+ * response to disclose anything the SDK can't give it.
+ */
+function cacheWriteRate(price: ModelPrice, cacheTtl?: CacheTtl): number {
+  if (cacheTtl === "1h") return price.input * 2;
+  return price.cacheWrite ?? price.input;
 }
 
 /**
@@ -264,13 +281,24 @@ export function priceUsd(
  */
 export function totalUsd(
   calls: Array<
-    { provider: string; model: string; authMode?: AuthModeAtCall } & TokenCounts
+    {
+      provider: string;
+      model: string;
+      authMode?: AuthModeAtCall;
+      cacheTtl?: CacheTtl;
+    } & TokenCounts
   >,
 ): { usd: number; partial: boolean } | undefined {
   let usd = 0;
   let priced = 0;
   for (const call of calls) {
-    const cost = priceUsd(call.provider, call.model, call, call.authMode);
+    const cost = priceUsd(
+      call.provider,
+      call.model,
+      call,
+      call.authMode,
+      call.cacheTtl,
+    );
     if (cost === undefined) continue;
     usd += cost;
     priced++;

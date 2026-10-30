@@ -81,6 +81,38 @@ test("a cache write costs more than plain input", () => {
   assert.equal(written, 3.75);
 });
 
+test("a 1h-TTL cache write bills at 2x input, not the table's 5m cacheWrite price", () => {
+  // sonnet-4-5: input=3, cacheWrite=3.75 (the 5m/1.25x price). Neither the
+  // installed nor the latest @ai-sdk/anthropic parses Anthropic's
+  // cache_creation 1h/5m split, so this has to come from the call site
+  // knowing which TTL it requested, not from usage.
+  const at1h = priceUsd(
+    "anthropic",
+    "claude-sonnet-4-5",
+    { inputTokens: 1_000_000, cacheWriteTokens: 1_000_000 },
+    undefined,
+    "1h",
+  );
+  assert.equal(at1h, 6); // 1,000,000 / 1e6 * (3 * 2)
+
+  const at5m = priceUsd(
+    "anthropic",
+    "claude-sonnet-4-5",
+    { inputTokens: 1_000_000, cacheWriteTokens: 1_000_000 },
+    undefined,
+    "5m",
+  );
+  assert.equal(at5m, 3.75);
+
+  // Omitted entirely defaults to the 5m table price, same as before this
+  // parameter existed.
+  const omitted = priceUsd("anthropic", "claude-sonnet-4-5", {
+    inputTokens: 1_000_000,
+    cacheWriteTokens: 1_000_000,
+  });
+  assert.equal(omitted, 3.75);
+});
+
 test("a read larger than the total cannot produce a negative bill", () => {
   const usd = priceUsd("anthropic", "claude-sonnet-4-5", {
     inputTokens: 1_000,

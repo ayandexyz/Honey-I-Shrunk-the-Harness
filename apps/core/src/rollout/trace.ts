@@ -57,6 +57,11 @@ export interface ModelSpan {
   cacheWriteTokens?: number;
   /** "oauth" when the call was billed to a subscription rather than a key. */
   authMode?: "oauth";
+  /**
+   * "1h" when this call's cache writes were billed at the 2x extended-TTL
+   * rate rather than the table's 5m price — see `ModelResponseEvent.cacheTtl`.
+   */
+  cacheTtl?: "1h";
   toolCalls: string[];
   errorKind?: "stall" | "abort" | "provider";
   error?: string;
@@ -310,6 +315,7 @@ export function buildTrace(
         span.cacheReadTokens = event.cacheReadTokens;
         span.cacheWriteTokens = event.cacheWriteTokens;
         span.authMode = event.authMode;
+        span.cacheTtl = event.cacheTtl;
         span.toolCalls = event.toolCalls;
         break;
       }

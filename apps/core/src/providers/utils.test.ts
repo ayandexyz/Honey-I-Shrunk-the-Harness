@@ -6,6 +6,9 @@ import {
   resolveModel,
   applyMessageCaching,
   getCacheTtl,
+  supportsLongCacheTtl,
+  effectiveCacheTtl,
+  LONG_CACHE_TTL_UNSUPPORTED,
 } from "./utils.js";
 import { PromptCompiler } from "../context/compiler.js";
 
@@ -322,4 +325,75 @@ test("ttl rides only on the provider keys verified to accept it", () => {
     assert.equal(opts.bedrock.cachePoint.ttl, undefined);
     assert.equal(opts.alibaba.cacheControl.ttl, undefined);
   });
+});
+
+test("effectiveCacheTtl narrows getCacheTtl() to providers that actually carry the field", () => {
+  withCacheTtl("1h", () => {
+    assert.equal(effectiveCacheTtl("anthropic", "claude-sonnet-4-5"), "1h");
+    assert.equal(effectiveCacheTtl("openrouter", "claude-sonnet-4-5"), "1h");
+    // minimax/zai speak @ai-sdk/anthropic for message/system SHAPE, but their
+    // providerOptions key is openaiCompatible — they never receive `ttl` on
+    // the wire, so billing must never apply the 2x rate to them either, even
+    // with the global knob on.
+    assert.equal(effectiveCacheTtl("minimax", "MiniMax-M3"), "5m");
+    assert.equal(effectiveCacheTtl("zai", "some-model"), "5m");
+  });
+  withCacheTtl(undefined, () => {
+    assert.equal(effectiveCacheTtl("anthropic", "claude-sonnet-4-5"), "5m");
+  });
+});
+
+test("effectiveCacheTtl respects the per-model denylist even when the provider rides ttl", () => {
+  LONG_CACHE_TTL_UNSUPPORTED.add("anthropic/some-legacy-model");
+  try {
+    withCacheTtl("1h", () => {
+      assert.equal(
+        effectiveCacheTtl("anthropic", "some-legacy-model"),
+        "5m",
+      );
+      assert.equal(
+        effectiveCacheTtl("anthropic", "claude-sonnet-4-5"),
+        "1h",
+      );
+    });
+  } finally {
+    LONG_CACHE_TTL_UNSUPPORTED.delete("anthropic/some-legacy-model");
+  }
+});
+
+test("supportsLongCacheTtl defaults to true, with no model a no-op", () => {
+  assert.equal(supportsLongCacheTtl("anthropic", "claude-sonnet-4-5"), true);
+  assert.equal(supportsLongCacheTtl("anthropic", undefined), true);
+});
+
+test("a model in LONG_CACHE_TTL_UNSUPPORTED never gets the ttl field, matched case-insensitively", () => {
+  LONG_CACHE_TTL_UNSUPPORTED.add("anthropic/some-legacy-model");
+  try {
+    assert.equal(
+      supportsLongCacheTtl("anthropic", "Some-Legacy-Model"),
+      false,
+    );
+    withCacheTtl("1h", () => {
+      const msgs: any[] = [
+        { role: "user", content: [{ type: "text", text: "hi" }] },
+      ];
+      applyMessageCaching(msgs as never, "anthropic", "some-legacy-model");
+      assert.deepEqual(
+        msgs[0].content[0].providerOptions.anthropic.cacheControl,
+        { type: "ephemeral" },
+      );
+
+      // A supported model on the same call is unaffected.
+      const msgs2: any[] = [
+        { role: "user", content: [{ type: "text", text: "hi" }] },
+      ];
+      applyMessageCaching(msgs2 as never, "anthropic", "claude-sonnet-4-5");
+      assert.deepEqual(
+        msgs2[0].content[0].providerOptions.anthropic.cacheControl,
+        { type: "ephemeral", ttl: "1h" },
+      );
+    });
+  } finally {
+    LONG_CACHE_TTL_UNSUPPORTED.delete("anthropic/some-legacy-model");
+  }
 });

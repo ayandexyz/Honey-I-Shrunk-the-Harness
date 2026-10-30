@@ -191,7 +191,7 @@ import {
 } from "../models-dev.js";
 import { getProvider, allowsAuxiliaryCalls } from "../providers/index.js";
 import type { ProviderId } from "../providers/index.js";
-import { isPlainObject } from "../providers/utils.js";
+import { isPlainObject, effectiveCacheTtl } from "../providers/utils.js";
 import { isTimeoutError } from "../providers/fetch-timeout.js";
 import {
   noteStaticPrefix,
@@ -3032,6 +3032,10 @@ export class AgentLoop {
             usage?.cacheWriteInputTokens ?? usage?.cacheCreationInputTokens,
           reasoningTokens: usage?.reasoningTokens,
           authMode: subscriptionAuth(provider),
+          cacheTtl:
+            effectiveCacheTtl(provider, resolvedModel) === "1h"
+              ? "1h"
+              : undefined,
           toolCalls: (toolCalls ?? []).map((t) => t.name),
           textChars: content.length,
           thinkingChars: thinking.length,
@@ -3079,6 +3083,10 @@ export class AgentLoop {
           result.usage?.cacheCreationInputTokens,
         reasoningTokens: result.usage?.reasoningTokens,
         authMode: subscriptionAuth(provider),
+        cacheTtl:
+          effectiveCacheTtl(provider, resolvedModel) === "1h"
+            ? "1h"
+            : undefined,
         toolCalls: (result.toolCalls ?? []).map((t) => t.name),
         textChars: result.content.length,
         thinkingChars: result.thinking?.length ?? 0,

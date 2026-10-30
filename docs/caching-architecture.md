@@ -306,6 +306,36 @@ it (MiniMax, Z.ai), so an unrecognised field there risks a 400 on the
 primary path to buy nothing; `bedrock`'s `cachePoint` has no TTL concept.
 **MiniMax's cache lifetime is therefore not controllable from here.**
 
+**Per-model capability gate — `supportsLongCacheTtl` (2026-10-31).**
+`utils.ts` keeps `LONG_CACHE_TTL_UNSUPPORTED`, a `provider/model` denylist
+(empty today — every model freecode has verified accepts the field) that
+`anthropicCacheControl` checks before ever sending `ttl`. `ttl` is a field a
+stricter Anthropic-compatible gateway could 400 on outright, unlike an
+unknown provider-options key, which the AI SDK just drops silently.
+Matches pi's `supportsLongCacheRetention` (`api/anthropic-messages.ts:229`,
+default `true`, override per model) — the documented escape hatch for the
+day a real exception shows up, not a hand-rolled guess at one.
+
+**Billing the 2x write rate — `effectiveCacheTtl` (2026-10-31).** Neither the
+installed `@ai-sdk/anthropic` nor its latest release (checked 3.0.80 and
+4.0.93) parses Anthropic's `cache_creation.ephemeral_1h_input_tokens` /
+`ephemeral_5m_input_tokens` split — the SDK only ever surfaces one flat
+`cacheCreationInputTokens`. Pi sees the split because it talks to
+Anthropic's Messages API directly, bypassing the AI SDK entirely. Rather
+than needing the response to disclose anything, `providers/utils.ts
+effectiveCacheTtl(provider, model)` resolves what TTL a call *actually
+used* — `getCacheTtl()` narrowed by `RIDES_CACHE_TTL` (`anthropic`,
+`openrouter` — the same two keys above; minimax/zai speak `@ai-sdk/anthropic`
+for message/system *shape* but read `openaiCompatible` for provider options,
+so `ttl` never reaches them regardless of the knob) and
+`supportsLongCacheTtl`. Stamped on `model.response` as `cacheTtl: "1h"` (the
+non-default case; `agent/loop.ts`'s two `recordModelResponse` call sites),
+carried on `ModelSpan`/`ProviderAttemptLedgerEntry`, and read by
+`pricing.ts priceUsd` to charge cache-write tokens at `price.input * 2`
+instead of the table's `cacheWrite` (5m) price. Before this, turning
+`FREECODE_CACHE_TTL=1h` on silently *undercounted* every cache-write dollar
+figure — the table's `cacheWrite` is always the 1.25x 5m price.
+
 ---
 
 ## Tier 2 — Agent-side cache

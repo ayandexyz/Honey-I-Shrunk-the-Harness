@@ -50,6 +50,8 @@ export interface ProviderAttemptLedgerEntry {
   model?: string;
   echoedModel?: string;
   authMode: "oauth" | "api-key";
+  /** "1h" when this attempt's cache writes billed at the 2x extended-TTL rate. */
+  cacheTtl?: "1h";
   /**
    * Vintage of the price source used **at fold time**. A ledger re-prices from
    * the recorded model/usage/authMode; it is not a receipt, so editing
@@ -221,6 +223,7 @@ function foldSession(
       entry.model = response.model;
       entry.echoedModel = response.echoedModel;
       entry.authMode = response.authMode ?? "api-key";
+      entry.cacheTtl = response.cacheTtl;
       entry.duration_ms = response.duration_ms;
       entry.completion = "succeeded";
       entry.usage = {
@@ -233,7 +236,13 @@ function foldSession(
       entry.usageStatus = usageStatus(entry.usage);
       entry.costUsd =
         entry.model && entry.usageStatus === "complete"
-          ? priceUsd(entry.provider, entry.model, entry.usage, entry.authMode)
+          ? priceUsd(
+              entry.provider,
+              entry.model,
+              entry.usage,
+              entry.authMode,
+              entry.cacheTtl,
+            )
           : undefined;
       continue;
     }

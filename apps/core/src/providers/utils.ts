@@ -18,6 +18,8 @@ import { logger } from "../utils/logger.js";
  */
 export function buildToolsParam(
   tools: ToolDef[] | undefined,
+  provider: string = "anthropic",
+  model?: string,
 ):
   | Record<
       string,
@@ -46,7 +48,7 @@ export function buildToolsParam(
   const lastTool = tools[tools.length - 1];
   if (lastTool) {
     result[lastTool.name].providerOptions = {
-      anthropic: { cacheControl: anthropicCacheControl() },
+      anthropic: { cacheControl: anthropicCacheControl(provider, model) },
     };
   }
   return result;
@@ -61,6 +63,8 @@ export function buildToolsParam(
  */
 export function buildAnthropicSystemParam(
   system: string | SystemBlock[],
+  provider: string = "anthropic",
+  model?: string,
 ):
   | string
   | Array<{ role: "system"; content: string; providerOptions?: unknown }> {
@@ -74,7 +78,7 @@ export function buildAnthropicSystemParam(
     } = { role: "system", content: block.text };
     if (block.cache) {
       part.providerOptions = {
-        anthropic: { cacheControl: anthropicCacheControl() },
+        anthropic: { cacheControl: anthropicCacheControl(provider, model) },
       };
     }
     return part;
@@ -138,16 +142,79 @@ export function getCacheTtl(): CacheTtl {
 }
 
 /**
+ * Providers whose requests actually carry `ttl` — the AI SDK's own zod
+ * schema for `anthropic`, OpenRouter's documented Anthropic `cache_control`
+ * passthrough for `openrouter`. Shared with `pricing.ts`: a cache write is
+ * only billable at the 2x 1h rate if the provider is one of these AND the
+ * call actually requested 1h (`effectiveCacheTtl` below) — anything else
+ * either never received the field (`cacheProviderOptions`) or, for a
+ * provider with its own unrelated cache-write pricing (OpenAI, Gemini),
+ * would be the wrong multiplier entirely.
+ */
+const RIDES_CACHE_TTL = new Set(["anthropic", "openrouter"]);
+
+/**
+ * The TTL actually in effect for a call to `provider`'s `model` — `getCacheTtl()`
+ * narrowed by both gates that can downgrade it to 5m for one call without
+ * changing the global knob: the provider not being one that carries `ttl`
+ * at all, and the model being in `LONG_CACHE_TTL_UNSUPPORTED`. Billing
+ * (`pricing.ts priceUsd`) and request-building (`anthropicCacheControl`
+ * below) both resolve through this so they can never disagree about which
+ * rate a given call was actually written at.
+ */
+export function effectiveCacheTtl(
+  provider: string,
+  model: string | undefined,
+): CacheTtl {
+  if (!RIDES_CACHE_TTL.has(provider)) return "5m";
+  if (!supportsLongCacheTtl(provider, model)) return "5m";
+  return getCacheTtl();
+}
+
+/**
+ * Models/gateways known NOT to accept Anthropic's extended (1h) cache TTL
+ * field, keyed `provider/model` exactly like `pricing.ts`'s rate table (and
+ * matched case-insensitively for the same reason: ids from config vary in
+ * casing). Empty today — every model freecode has verified accepts the
+ * field unconditionally sends it — but `ttl` is a field a stricter
+ * Anthropic-compatible gateway could 400 on outright, unlike an unknown
+ * provider-options key, which the AI SDK just drops silently. This is the
+ * documented escape hatch for the day one does, matching pi's
+ * `supportsLongCacheRetention` (default true, override per model;
+ * `api/anthropic-messages.ts:229`).
+ */
+// Exported so a test can add/remove a model without a reset helper — it's a
+// plain Set, same pattern as `pricing.ts`'s override file for the same
+// "exact only in the documented escape hatch" reason.
+export const LONG_CACHE_TTL_UNSUPPORTED = new Set<string>([]);
+
+/** Whether `provider`'s `model` is known to accept `cacheControl.ttl`. */
+export function supportsLongCacheTtl(
+  provider: string,
+  model: string | undefined,
+): boolean {
+  if (!model) return true;
+  return !LONG_CACHE_TTL_UNSUPPORTED.has(`${provider}/${model}`.toLowerCase());
+}
+
+/**
  * The `cacheControl` value for Anthropic-shaped providers.
  *
  * `ttl` is omitted entirely at 5m rather than sent explicitly. 5m is already
  * the server-side default, so omitting it keeps the request bytes identical to
  * what shipped before this knob existed — the default path cannot regress, and
- * there is no new field for a gateway to choke on.
+ * there is no new field for a gateway to choke on. Also omitted when the
+ * model is in `LONG_CACHE_TTL_UNSUPPORTED`, for the same "no new field"
+ * reason.
  */
-function anthropicCacheControl(): { type: "ephemeral"; ttl?: CacheTtl } {
+function anthropicCacheControl(
+  provider: string,
+  model: string | undefined,
+): { type: "ephemeral"; ttl?: CacheTtl } {
   const ttl = getCacheTtl();
-  return ttl === "1h" ? { type: "ephemeral", ttl } : { type: "ephemeral" };
+  return ttl === "1h" && supportsLongCacheTtl(provider, model)
+    ? { type: "ephemeral", ttl }
+    : { type: "ephemeral" };
 }
 
 /**
@@ -166,10 +233,13 @@ function anthropicCacheControl(): { type: "ephemeral"; ttl?: CacheTtl } {
  * unrecognised field there risks a 400 on the primary path to buy nothing,
  * and `bedrock`'s `cachePoint` has no TTL concept at all.
  */
-function cacheProviderOptions(): Record<string, unknown> {
+function cacheProviderOptions(
+  provider: string,
+  model: string | undefined,
+): Record<string, unknown> {
   return {
-    anthropic: { cacheControl: anthropicCacheControl() },
-    openrouter: { cacheControl: anthropicCacheControl() },
+    anthropic: { cacheControl: anthropicCacheControl(provider, model) },
+    openrouter: { cacheControl: anthropicCacheControl(provider, model) },
     openaiCompatible: { cache_control: { type: "ephemeral" } },
     alibaba: { cacheControl: { type: "ephemeral" } },
     bedrock: { cachePoint: { type: "default" } },
@@ -199,7 +269,11 @@ function cacheProviderOptions(): Record<string, unknown> {
  *
  * Mutates in place, matching the AI SDK message objects the callers just built.
  */
-export function applyMessageCaching(messages: ModelMessage[]): void {
+export function applyMessageCaching(
+  messages: ModelMessage[],
+  provider: string = "anthropic",
+  model?: string,
+): void {
   const anchors: ModelMessage[] = [];
 
   // Write anchor: the tail, so this request's full prefix is stored for next
@@ -226,7 +300,7 @@ export function applyMessageCaching(messages: ModelMessage[]): void {
   }
 
   // Resolved once so both anchors carry the same TTL, whatever the env says.
-  const providerOptions = cacheProviderOptions();
+  const providerOptions = cacheProviderOptions(provider, model);
 
   for (const msg of anchors) {
     const idx = messages.indexOf(msg);
