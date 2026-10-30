@@ -3,26 +3,16 @@
 ## Git Workflow
 
 - Work directly on `main`. Do not create feature branches or worktrees unless the user asks or isolation is genuinely required, and merge any such branch back into `main` promptly. The automatic release workflow only publishes from `main`, so work left on other branches never ships.
-- Always commit and push completed changes to `main`. Do this every time unless the user explicitly asks you not to.
+- Always commit completed changes. Do not push without the user's explicit go-ahead for that push — this repo has several remotes (`origin`, `newhome`, upstream mirrors); confirm which one before pushing.
 - Commit only the changes you made. Do not include unrelated or pre-existing modifications.
-- Use the user's configured Git identity. Never override it with `Jcode`, an invented agent email, `git -c user.*`, or `GIT_AUTHOR_*` / `GIT_COMMITTER_*` values. If identity is missing, resolve the user's established identity rather than inventing one.
-- Before committing, verify `git var GIT_AUTHOR_IDENT` and `git var GIT_COMMITTER_IDENT`. On this checkout the established identity is Jeremy Huang <94247773+1jehuang@users.noreply.github.com>.
-- Enable this repository's identity guard with `git config --local core.hooksPath .githooks`. Do not bypass these hooks. They reject agent identities both at commit time and before pushing, including commits created through plumbing commands.
+- Use the current checkout's actual configured Git identity (`git config user.name` / `user.email`, or `git var GIT_AUTHOR_IDENT` / `GIT_COMMITTER_IDENT` to see what a commit would carry). Never hardcode a specific person's name/email here — this file is shared across checkouts with different owners. Never override identity with `Jcode`, an invented agent email, `git -c user.*`, or `GIT_AUTHOR_*` / `GIT_COMMITTER_*` values.
+- Enable this repository's identity guard with `git config --local core.hooksPath .githooks`. Do not bypass these hooks. They reject the literal `jcode` identity (name or email) both at commit time and before pushing, including commits created through plumbing commands — they do not check for any specific person, so they work the same regardless of whose checkout this is.
 
-## Jcode Repository Ownership
+## Upstream Dependencies (Jcode SDK, Handterm)
 
-- This project also owns and maintains the adjacent Jcode SDK, harness API, and supporting crates in `/home/jeremy/jcode`.
-- New desktop functionality usually requires SDK changes. When desktop work requires an SDK, protocol, or shared-runtime change, make the correct change in the Jcode repository directly rather than adding a desktop-only workaround or asking the user to coordinate it.
-- Do not change the Jcode TUI unless the task explicitly requires it. Desktop features should normally be delivered through the SDK, not TUI changes.
-- Keep cross-repository behavior aligned and commit and push the changes in each affected repository.
-
-## Handterm Repository Ownership
-
-- This project also owns and maintains Handterm at <https://github.com/1jehuang/handterm>, including its reusable `handterm-common` terminal engine.
-- Reuse `handterm-common` for terminal emulation rather than copying its code or creating a separate desktop-only engine.
-- Fix shared terminal-engine bugs, protocol support, image handling, and core performance issues in the Handterm repository directly. Do not add desktop-only workarounds for shared engine problems or ask the user to coordinate upstream changes.
-- Keep GPUI rendering, desktop input and clipboard integration, shortcuts, panel behavior, and hot-reload host integration in Jcode Desktop.
-- Pin the Handterm dependency to a specific revision. Test and commit and push Handterm changes before updating Desktop to that revision, then verify the integration and commit and push the Desktop changes separately.
+- `apps/jcode` vendors a pinned snapshot of Jcode's SDK/harness-API/supporting crates (symlinked to the pinned source tree desktop builds against); `handterm-common` (terminal engine) is a pinned `git` dependency on `https://github.com/1jehuang/handterm` in `apps/desktop/Cargo.toml`. This checkout does not own or have write access to either upstream repository.
+- If a bug or needed change lives in one of these upstream crates rather than in desktop's own code, say so and ask the user how they want it handled (vendor a local workaround, wait for an upstream fix, or re-pin to a newer revision) rather than assuming you can push a fix upstream.
+- Keep GPUI rendering, desktop input/clipboard integration, shortcuts, panel behavior, and hot-reload host integration in Jcode Desktop's own crates.
 
 ## Visual Design
 
