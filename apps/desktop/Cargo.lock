@@ -4103,7 +4103,7 @@ dependencies = [
 
 [[package]]
 name = "jcode-desktop"
-version = "0.6.5"
+version = "0.6.10"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -4627,6 +4627,7 @@ name = "jcode-todo-policy"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "jcode-storage",
  "jcode-task-types",
  "serde",
  "serde_json",
