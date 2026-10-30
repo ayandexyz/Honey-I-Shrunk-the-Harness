@@ -380,6 +380,19 @@ impl Panel {
 
     pub(crate) fn set_context_limit(&mut self, limit: Option<u64>, cx: &mut Context<Self>) {
         self.context_limit = limit;
+        // `maybe_fetch_context_limit` marks the pair as requested before the
+        // reply lands, so the ring never flickers between models mid-flight.
+        // But `FetchContextLimit`'s `.ok().flatten()` collapses a genuine
+        // "unknown model" and a transient RPC failure into the same `None`
+        // here -- if we left the pair marked, a one-off failure (a race on
+        // attach, a dropped request) would permanently blank the ring for
+        // that model, since nothing else ever re-triggers the fetch for an
+        // unchanged (provider, model). Clearing the mark on `None` costs
+        // nothing for a genuinely unknown model (same empty state either
+        // way) and lets the next ModelInfo/RuntimeInfo event retry instead.
+        if limit.is_none() {
+            self.context_limit_for = None;
+        }
         cx.notify();
     }
 
