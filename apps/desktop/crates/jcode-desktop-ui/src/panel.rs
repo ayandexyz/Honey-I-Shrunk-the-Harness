@@ -481,6 +481,18 @@ pub struct Panel {
     /// (provider, model) last fetched or in flight, so a RuntimeInfo/ModelInfo
     /// event that repeats the same model doesn't re-request it.
     context_limit_for: Option<(String, String)>,
+    /// When the current turn started, for the composer's "Working 12s" label.
+    /// Set on `turn_started`/`running`, cleared once the turn settles.
+    turn_started_at: Option<Instant>,
+    /// Running session totals of input/cache-read tokens, from each
+    /// `TokenUsage` event (already per-request deltas, see
+    /// `freecode_events.rs`). Backs the composer's cache-hit readout
+    /// alongside `last_cache_hit_pct`.
+    session_input_tokens: u64,
+    session_cache_read_tokens: u64,
+    /// Cache-hit percentage of the single most recent model request
+    /// (`cache_read_input / input`), `None` before any usage is reported.
+    last_cache_hit_pct: Option<f32>,
     response_stats: response_stats::Tracker,
     pub items: Transcript,
     /// Streaming assistant text accumulates here until the turn ends.
@@ -960,6 +972,10 @@ impl Panel {
             context_tokens: usage_fixture.then_some(100_000),
             context_limit: None,
             context_limit_for: None,
+            turn_started_at: None,
+            session_input_tokens: 0,
+            session_cache_read_tokens: 0,
+            last_cache_hit_pct: None,
             response_stats: response_stats::Tracker::default(),
             items: demo_items(fixture.as_deref()).into(),
             streaming_text: if streaming_fixture {
@@ -2883,6 +2899,7 @@ impl Panel {
                     &mut self.accepted_users,
                     Instant::now(),
                 );
+                self.turn_started_at = Some(Instant::now());
             }
             ApiEvent::TextDelta { text, .. } => {
                 self.flush_reasoning();
@@ -3107,6 +3124,15 @@ impl Panel {
                         *cache_read_input,
                         *cache_creation_input,
                     ));
+                // `input` is already inclusive of cache reads/writes (core's
+                // invariant: nonCached + cacheRead + cacheWrite == input), so
+                // cache_read_input / input is this request's hit rate.
+                let read = cache_read_input.unwrap_or(0);
+                self.last_cache_hit_pct = (*input > 0)
+                    .then(|| (read as f32 / *input as f32 * 100.).clamp(0., 100.));
+                self.session_input_tokens = self.session_input_tokens.saturating_add(*input);
+                self.session_cache_read_tokens =
+                    self.session_cache_read_tokens.saturating_add(read);
             }
             ApiEvent::KvCacheMiss { .. } => {
                 if let Some(notice) = cache_miss::CacheMissNotice::from_event(event) {
@@ -3145,6 +3171,7 @@ impl Panel {
         }
         self.status = "idle".into();
         self.connection_phase.clear();
+        self.turn_started_at = None;
     }
 
     fn flush_streaming(&mut self) {

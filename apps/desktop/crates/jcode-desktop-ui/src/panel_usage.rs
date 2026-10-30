@@ -259,6 +259,18 @@ fn format_cost(usd: f64) -> String {
     }
 }
 
+/// "12s" / "3m 4s" / "1h 2m" for the composer's live "Working …" label.
+fn elapsed_label(elapsed: Duration) -> String {
+    let seconds = elapsed.as_secs();
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else if seconds < 3600 {
+        format!("{}m {}s", seconds / 60, seconds % 60)
+    } else {
+        format!("{}h {}m", seconds / 3600, seconds % 3600 / 60)
+    }
+}
+
 /// Activity-ledger source key for a per-token (API key) route, or `None` for
 /// subscription routes that show quota limits instead.
 fn metered_source_key(provider: Option<&str>, auth: Option<&str>) -> Option<String> {
@@ -408,6 +420,23 @@ impl Panel {
         )
     }
 
+    /// "97% cache" (last request) or "97%→91%" (last, then session, once
+    /// they diverge) for the composer's cache-hit pill. `None` before the
+    /// first `TokenUsage` event of the session.
+    pub(super) fn cache_hit_summary(&self) -> Option<String> {
+        let last = self.last_cache_hit_pct?;
+        if self.session_input_tokens == 0 {
+            return Some(format!("{last:.0}% cache"));
+        }
+        let session =
+            self.session_cache_read_tokens as f32 / self.session_input_tokens as f32 * 100.;
+        if (last - session).abs() < 1. {
+            Some(format!("{last:.0}% cache"))
+        } else {
+            Some(format!("{last:.0}%→{session:.0}% cache"))
+        }
+    }
+
     pub(super) fn render_usage_meters(&self) -> Option<gpui::Div> {
         if self.model.is_none() && self.provider.is_none() {
             return None;
@@ -421,6 +450,36 @@ impl Panel {
             .gap_2()
             .flex_nowrap()
             .overflow_hidden();
+        if let Some(elapsed) = self.turn_started_at.map(|at| at.elapsed()) {
+            row = row.child(
+                div()
+                    .id("panel-turn-elapsed")
+                    .debug_selector(|| "panel-turn-elapsed".into())
+                    .flex_none()
+                    .h(px(22.))
+                    .flex()
+                    .items_center()
+                    .text_color(theme.TEXT_DIM)
+                    .child(format!("Working {}", elapsed_label(elapsed))),
+            );
+        }
+        if let Some(pct) = self.cache_hit_summary() {
+            let detail = "Prompt-cache hit rate: last request, then the whole session. \
+                Higher is cheaper and faster — a cold cache resends the full prompt."
+                .to_string();
+            row = row.child(
+                div()
+                    .id("panel-cache-hit")
+                    .debug_selector(|| "panel-cache-hit".into())
+                    .flex_none()
+                    .h(px(22.))
+                    .flex()
+                    .items_center()
+                    .text_color(theme.TEXT_DIM)
+                    .tooltip(move |_, cx| cx.new(|_| MeterTooltip(detail.clone())).into())
+                    .child(pct),
+            );
+        }
         // Subscription quota lives in the method pill's hover card. Only
         // per-token spend stays inline.
         if let Some((cost, turns)) = self.session_api_cost() {
@@ -509,6 +568,48 @@ mod tests {
                     );
                     assert_eq!(panel.context_tokens, Some(expected));
                 }
+            });
+            workspace
+        });
+        vcx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn cache_hit_pill_shows_last_then_session_once_they_diverge(cx: &mut gpui::TestAppContext) {
+        let (_, vcx) = cx.add_window_view(|_, cx| {
+            let mut workspace =
+                crate::workspace::Workspace::for_test(crate::learning::Coach::new(), cx);
+            workspace.push_test_panel("cache-session", cx);
+            workspace.test_panel(0).unwrap().update(cx, |panel, cx| {
+                assert_eq!(panel.cache_hit_summary(), None);
+                // First request: fully cold, 0% hit.
+                panel.apply(
+                    &ApiEvent::TokenUsage {
+                        session_id: "cache-session".into(),
+                        input: 10_000,
+                        output: 100,
+                        cache_read_input: Some(0),
+                        cache_creation_input: Some(0),
+                    },
+                    cx,
+                );
+                assert_eq!(panel.cache_hit_summary().as_deref(), Some("0% cache"));
+                // Second request: fully warm, 100% of its own input is a cache
+                // read — session average (10/11k) still trails behind it.
+                panel.apply(
+                    &ApiEvent::TokenUsage {
+                        session_id: "cache-session".into(),
+                        input: 1_000,
+                        output: 50,
+                        cache_read_input: Some(1_000),
+                        cache_creation_input: Some(0),
+                    },
+                    cx,
+                );
+                assert_eq!(
+                    panel.cache_hit_summary().as_deref(),
+                    Some("100%→9% cache")
+                );
             });
             workspace
         });
