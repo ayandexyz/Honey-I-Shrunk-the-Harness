@@ -5,6 +5,16 @@
 //! cannot update themselves (a .deb in /usr/bin, a root-owned extraction) are
 //! adopted: the first update installs a managed copy, and launching the system
 //! copy redirects to the newest managed version while it is newer.
+//!
+//! `~/.local/bin/honey` — the desktop entry's `Exec=` target and the plain
+//! PATH command — is a second, separate symlink some installs created
+//! pointing at a *version-specific* `honey` wrapper script inside the
+//! managed root, rather than at `honey-desktop`. Earlier versions of this
+//! module only ever switched `honey-desktop`, so that update appeared to
+//! succeed while the entry point users actually launch stayed pinned to
+//! whichever version first created it. `activate` now also repoints it to a
+//! flat, same-directory symlink at `honey-desktop` instead — which
+//! is already kept current above, so there is nothing further to track.
 use anyhow::{Context, Result, ensure};
 use semver::Version;
 use std::{
@@ -26,6 +36,7 @@ const KEEP_OLDER: usize = 2;
 pub(crate) struct Managed {
     pub root: PathBuf,
     launcher: PathBuf,
+    secondary_launcher: PathBuf,
     kind: InstallKind,
 }
 
@@ -35,6 +46,10 @@ fn root_of(home: &Path) -> PathBuf {
 
 fn launcher_of(home: &Path) -> PathBuf {
     home.join(".local/bin/honey-desktop")
+}
+
+fn secondary_launcher_of(home: &Path) -> PathBuf {
+    home.join(".local/bin/honey")
 }
 
 /// Owned by this user and not writable by anyone else. Group write is allowed
@@ -118,6 +133,7 @@ impl Managed {
         Ok(Some(Self {
             root,
             launcher: launcher_of(home),
+            secondary_launcher: secondary_launcher_of(home),
             kind: InstallKind::Managed,
         }))
     }
@@ -133,6 +149,7 @@ impl Managed {
         Ok(Self {
             root,
             launcher: launcher_of(&home),
+            secondary_launcher: secondary_launcher_of(&home),
             kind: InstallKind::System,
         })
     }
@@ -160,23 +177,46 @@ impl Managed {
         Ok(self.root.join(newest.to_string()).join(EXECUTABLE))
     }
 
-    /// The launcher is ours to switch when it is absent or already managed.
-    fn owns_launcher(&self) -> bool {
-        match fs::symlink_metadata(&self.launcher) {
+    /// `path` is ours to switch when it is absent, or when it is a symlink
+    /// resolving (lexically — the target may already be pruned) under `root`,
+    /// which only something this updater created ever does.
+    fn owns(path: &Path, root: &Path) -> bool {
+        match fs::symlink_metadata(path) {
             Err(error) => error.kind() == std::io::ErrorKind::NotFound,
             Ok(metadata) => {
                 metadata.file_type().is_symlink()
-                    && fs::read_link(&self.launcher).is_ok_and(|target| {
-                        let target = self
-                            .launcher
+                    && fs::read_link(path).is_ok_and(|target| {
+                        let target = path
                             .parent()
                             .map(|parent| parent.join(&target))
                             .unwrap_or(target);
-                        // Compare lexically: the target may already be pruned.
-                        normalize(&target).starts_with(&self.root)
+                        normalize(&target).starts_with(root)
                     })
             }
         }
+    }
+
+    fn owns_launcher(&self) -> bool {
+        Self::owns(&self.launcher, &self.root)
+    }
+
+    /// `honey`'s existing target may be the version-specific wrapper script
+    /// (under `self.root`) or, once fixed, `self.launcher` itself — both are
+    /// ours; a user's own `honey` is neither and is left alone exactly like
+    /// `owns_launcher` leaves a foreign `honey-desktop` alone.
+    fn owns_secondary_launcher(&self) -> bool {
+        Self::owns(&self.secondary_launcher, &self.root)
+            || fs::symlink_metadata(&self.secondary_launcher).is_ok_and(|metadata| {
+                metadata.file_type().is_symlink()
+                    && fs::read_link(&self.secondary_launcher).is_ok_and(|target| {
+                        let target = self
+                            .secondary_launcher
+                            .parent()
+                            .map(|parent| parent.join(&target))
+                            .unwrap_or(target);
+                        normalize(&target) == self.launcher
+                    })
+            })
     }
 
     pub fn activate(&self, staged: &Path, version: &Version) -> Result<()> {
@@ -208,22 +248,33 @@ impl Managed {
         if self.owns_launcher() {
             // A launcher is a convenience. The version directory is complete
             // and redirects already find it, so a failure here is not fatal.
-            if let Err(error) = self.switch_launcher(&destination) {
+            if let Err(error) = Self::switch(&self.launcher, destination.join(EXECUTABLE)) {
                 eprintln!("honey-desktop update: could not update the launcher: {error:#}");
+            }
+        }
+        if self.owns_secondary_launcher() {
+            // Flat and relative, so it never needs touching again: it always
+            // resolves to whatever `self.launcher` currently points to.
+            if let Err(error) = Self::switch(&self.secondary_launcher, PathBuf::from(EXECUTABLE))
+            {
+                eprintln!("honey-desktop update: could not update the honey launcher: {error:#}");
             }
         }
         Ok(())
     }
 
-    fn switch_launcher(&self, destination: &Path) -> Result<()> {
-        let bin = self.launcher.parent().context("Launcher has no directory")?;
+    /// Atomically repoints the symlink at `link` to `destination`, via a
+    /// rename within `link`'s own directory (so it can never race a reader
+    /// into seeing a half-written target).
+    fn switch(link: &Path, destination: PathBuf) -> Result<()> {
+        let bin = link.parent().context("Launcher has no directory")?;
         ensure_directory(bin)?;
         let switch = tempfile::Builder::new()
             .prefix(".jcode-desktop-switch-")
             .tempdir_in(bin)?;
-        let link = switch.path().join("launcher");
-        symlink(destination.join(EXECUTABLE), &link)?;
-        fs::rename(&link, &self.launcher)?;
+        let staged = switch.path().join("launcher");
+        symlink(destination, &staged)?;
+        fs::rename(&staged, link)?;
         File::open(bin)?.sync_all()?;
         Ok(())
     }
@@ -358,6 +409,73 @@ mod tests {
         assert!(matches!(again, crate::Outcome::Installed { fresh: false, .. }));
         assert_eq!(redirect_target(home.path(), &executable, &Version::parse("0.5.0").unwrap()), Some(new.clone()));
         assert_eq!(redirect_target(home.path(), &new, &Version::parse("0.6.0").unwrap()), None);
+    }
+
+    #[test]
+    fn an_update_fixes_the_stale_honey_entry_point_too() {
+        // Reproduces the real 2026-10-30 bug: honey-desktop was switched
+        // correctly on every update, but honey -- what the desktop icon and
+        // the PATH command actually launch -- was a version-specific wrapper
+        // script this module never touched, so it stayed pinned to whatever
+        // version first created it.
+        let home = home();
+        let executable = install_version(home.path(), "0.5.0", "old desktop");
+        symlink(
+            "../opt/honey/0.5.0/honey-desktop",
+            launcher_of(home.path()),
+        )
+        .unwrap();
+        let honey = secondary_launcher_of(home.path());
+        fs::write(
+            root_of(home.path()).join("0.5.0/honey"),
+            "#!/bin/sh\nexec \"$(dirname \"$(readlink -f \"$0\")\")/honey-desktop\" \"$@\"\n",
+        )
+        .unwrap();
+        symlink("../opt/honey/0.5.0/honey", &honey).unwrap();
+
+        update(home.path(), &executable, "0.5.0", "0.6.0").unwrap().unwrap();
+
+        // Flat and relative: it now resolves beside itself, not into a
+        // version directory, so no future update needs to touch it again.
+        assert_eq!(fs::read_link(&honey).unwrap(), PathBuf::from(EXECUTABLE));
+        assert_eq!(
+            fs::canonicalize(&honey).unwrap(),
+            fs::canonicalize(launcher_of(home.path())).unwrap(),
+        );
+    }
+
+    #[test]
+    fn a_fixed_honey_entry_point_needs_no_further_updates() {
+        let home = home();
+        let executable = install_version(home.path(), "0.5.0", "old desktop");
+        symlink(
+            "../opt/honey/0.5.0/honey-desktop",
+            launcher_of(home.path()),
+        )
+        .unwrap();
+        let honey = secondary_launcher_of(home.path());
+        symlink(EXECUTABLE, &honey).unwrap();
+
+        update(home.path(), &executable, "0.5.0", "0.6.0").unwrap().unwrap();
+
+        assert_eq!(fs::read_link(&honey).unwrap(), PathBuf::from(EXECUTABLE));
+    }
+
+    #[test]
+    fn a_users_own_honey_script_is_left_alone() {
+        let home = home();
+        let executable = install_version(home.path(), "0.5.0", "old desktop");
+        symlink(
+            "../opt/honey/0.5.0/honey-desktop",
+            launcher_of(home.path()),
+        )
+        .unwrap();
+        let honey = secondary_launcher_of(home.path());
+        fs::write(&honey, "#!/bin/sh\nexec my-own-wrapper\n").unwrap();
+
+        update(home.path(), &executable, "0.5.0", "0.6.0").unwrap().unwrap();
+
+        assert_eq!(fs::read_to_string(&honey).unwrap(), "#!/bin/sh\nexec my-own-wrapper\n");
     }
 
     #[test]
