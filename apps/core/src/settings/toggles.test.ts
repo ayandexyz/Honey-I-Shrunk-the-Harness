@@ -24,7 +24,7 @@ test("defaults come from each setting's own reader", () => {
   assert.equal(view("memory.autoRecall").value, "on");
   assert.equal(view("memory.retrievalJudge").value, "off");
   assert.equal(view("checkpoints.enabled").value, "on");
-  assert.equal(view("cache.warming").value, "off");
+  assert.equal(view("cache.warming").value, "idle");
   assert.equal(view("signals.autoPoke.enabled").value, "off");
   assert.equal(view("memory.autoRecall").locked, undefined);
 });

@@ -112,8 +112,8 @@ function debugSegment(label: string, text: string): void {
 export type CacheTtl = "5m" | "1h";
 
 /**
- * How long a cache entry survives between turns. `FREECODE_CACHE_TTL=1h`
- * opts into Anthropic's extended cache; anything else keeps the 5m default.
+ * How long a cache entry survives between turns. Defaults to Anthropic's
+ * extended 1h cache; `FREECODE_CACHE_TTL=5m` opts back into the base TTL.
  *
  * The trade is a write-rate increase (1.25x -> 2x base) against far fewer cold
  * writes. Per-turn writes are small — Anthropic bills cache creation for the
@@ -121,24 +121,26 @@ export type CacheTtl = "5m" | "1h";
  * how often the whole context gets re-written from cold. At 5m that is every
  * pause longer than a coffee refill; one such gap per hour already makes 1h
  * cheaper (2x once beats 1.25x twice), and an interactive session with a human
- * reading diffs in the loop has many.
+ * reading diffs in the loop has many — the common case this project is
+ * actually used for.
  *
- * Left off by default because the reverse case is real: a fast unattended run
- * with no gaps pays the 2x write rate for a durability it never uses. Sessions
- * differ too much to guess, so this is a knob rather than a new default.
+ * The reverse case is real: a fast unattended run with no gaps (an eval or
+ * agent-bench trial loop, `freecode night`) pays the 2x write rate for a
+ * durability it never uses. Those call sites should set
+ * `FREECODE_CACHE_TTL=5m` explicitly rather than rely on this default.
  *
  * Read per call — matching `getCompactTarget()` in compaction/tokens.ts — so a
  * long-lived daemon and the tests can both change it without a module reload.
  */
 export function getCacheTtl(): CacheTtl {
   const raw = process.env.FREECODE_CACHE_TTL;
-  if (raw === undefined || raw === "") return "5m";
+  if (raw === undefined || raw === "") return "1h";
   if (raw === "5m" || raw === "1h") return raw;
   logger.warn(
     `FREECODE_CACHE_TTL="${raw}" is not a supported value (expected "5m" or ` +
-      `"1h"); falling back to "5m".`,
+      `"1h"); falling back to "1h".`,
   );
-  return "5m";
+  return "1h";
 }
 
 /**

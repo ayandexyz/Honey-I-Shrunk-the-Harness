@@ -1,4 +1,4 @@
-import test from "node:test";
+import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import {
   CacheWarmer,
@@ -14,6 +14,22 @@ import type { AIProvider, ExecuteOptions, ExecuteResult } from "./types.js";
 
 // Sonnet-class rate card: $3 in, $15 out, 0.1x read, 1.25x write.
 const price = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
+
+// CacheWarmer reads the real, ambient getCacheTtl() internally for its
+// scheduling delay (see cache-warmer.ts's `warmingDelayMs(TTL_MS[getCacheTtl()])`) —
+// `rig()`'s `getMode` fake only controls on/off/streaming, not the TTL. Every
+// timing assertion below (270_000ms = 90% of 5m, MAX_IDLE_WARMING_AGE_MS's
+// ~5-6 replays, etc.) is written against the 5m schedule, so pin it for this
+// suite regardless of getCacheTtl()'s ambient default (utils.ts).
+let prevCacheTtl: string | undefined;
+before(() => {
+  prevCacheTtl = process.env.FREECODE_CACHE_TTL;
+  process.env.FREECODE_CACHE_TTL = "5m";
+});
+after(() => {
+  if (prevCacheTtl === undefined) delete process.env.FREECODE_CACHE_TTL;
+  else process.env.FREECODE_CACHE_TTL = prevCacheTtl;
+});
 
 test("delay is 90% of the TTL with a ten-second floor of margin", () => {
   assert.equal(warmingDelayMs(5 * 60_000), 270_000);
@@ -51,17 +67,17 @@ test("economics: unknown price or empty prompt never warms", () => {
   assert.equal(decideWarm(price, 0, "idle").action, "stop");
 });
 
-test("mode: env beats settings, unknown values fall back to off", () => {
+test("mode: env beats settings, unknown values fall back to the idle default", () => {
   assert.equal(
-    resolveCacheWarmingMode(undefined, { FREECODE_CACHE_WARMING: "idle" }),
-    "idle",
+    resolveCacheWarmingMode(undefined, { FREECODE_CACHE_WARMING: "off" }),
+    "off",
   );
   assert.equal(
     resolveCacheWarmingMode(undefined, {
       FREECODE_CACHE_WARMING: "bogus",
       HOME: "/nonexistent",
     }),
-    "off",
+    "idle",
   );
 });
 

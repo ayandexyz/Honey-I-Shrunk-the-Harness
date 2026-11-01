@@ -83,8 +83,8 @@ left out.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `FREECODE_CACHE_TTL` | `5m` | `1h` asks Anthropic for the extended cache: writes cost 2× instead of 1.25×, far fewer cold starts after a pause. The TUI's idle warning follows it. |
-| `FREECODE_CACHE_WARMING` | `off` | `idle` or `streaming` re-sends the last request with 1 output token before the cache expires, when the expected saving is ≥ $0.05. |
+| `FREECODE_CACHE_TTL` | `1h` | Anthropic's extended cache; writes cost 2× instead of 1.25×, far fewer cold starts after a pause — the common case for an interactive session. `5m` opts back into the base TTL; unattended/gap-free runs (eval, agent-bench, `freecode night`) should set this explicitly. The TUI's idle warning follows it. |
+| `FREECODE_CACHE_WARMING` | `idle` | Re-sends the last request with 1 output token before the cache expires, when the expected saving is ≥ $0.05. `streaming` warms only while a run is active. `off` disables it — set this for unattended/gap-free runs. |
 | `FREECODE_CACHE_MISS_NOTICES` | on | `0` mutes the "unexplained cache miss" notices; the accounting still runs. |
 | `FREECODE_DEBUG_CACHE` | off | `1` logs a fingerprint of every cacheable prompt segment, to find what broke a prefix. |
 

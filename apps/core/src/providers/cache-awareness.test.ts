@@ -8,25 +8,42 @@ import {
 
 const FIVE_MIN = 5 * 60 * 1000;
 
+/** Runs `fn` with FREECODE_CACHE_TTL set to `value` (or unset), then restores. */
+function withCacheTtl(value: string | undefined, fn: () => void): void {
+  const prev = process.env.FREECODE_CACHE_TTL;
+  if (value === undefined) delete process.env.FREECODE_CACHE_TTL;
+  else process.env.FREECODE_CACHE_TTL = value;
+  try {
+    fn();
+  } finally {
+    if (prev === undefined) delete process.env.FREECODE_CACHE_TTL;
+    else process.env.FREECODE_CACHE_TTL = prev;
+  }
+}
+
 test("first send never warns (nothing cached yet)", () => {
   disposeCacheAwareness("s1");
   assert.equal(noteSendAndCheckCold("s1", "anthropic", 0), null);
 });
 
 test("warns when the gap exceeds the 5-min TTL", () => {
-  disposeCacheAwareness("s2");
-  noteSendAndCheckCold("s2", "anthropic", 0);
-  const warn = noteSendAndCheckCold("s2", "anthropic", FIVE_MIN + 1000);
-  assert.match(warn ?? "", /cold/i);
+  withCacheTtl("5m", () => {
+    disposeCacheAwareness("s2");
+    noteSendAndCheckCold("s2", "anthropic", 0);
+    const warn = noteSendAndCheckCold("s2", "anthropic", FIVE_MIN + 1000);
+    assert.match(warn ?? "", /cold/i);
+  });
 });
 
 test("gap just under TTL stays warm, over TTL goes cold", () => {
-  disposeCacheAwareness("s3");
-  noteSendAndCheckCold("s3", "anthropic", 0);
-  assert.equal(noteSendAndCheckCold("s3", "anthropic", FIVE_MIN - 1), null); // warm
-  // last send was at FIVE_MIN-1; now jump well past TTL
-  const warn = noteSendAndCheckCold("s3", "anthropic", FIVE_MIN - 1 + FIVE_MIN + 5000);
-  assert.match(warn ?? "", /cold/i);
+  withCacheTtl("5m", () => {
+    disposeCacheAwareness("s3");
+    noteSendAndCheckCold("s3", "anthropic", 0);
+    assert.equal(noteSendAndCheckCold("s3", "anthropic", FIVE_MIN - 1), null); // warm
+    // last send was at FIVE_MIN-1; now jump well past TTL
+    const warn = noteSendAndCheckCold("s3", "anthropic", FIVE_MIN - 1 + FIVE_MIN + 5000);
+    assert.match(warn ?? "", /cold/i);
+  });
 });
 
 test("non-caching providers never warn", () => {
@@ -75,8 +92,10 @@ test("the cold line follows FREECODE_CACHE_TTL", () => {
 });
 
 test("the 5m warning points at the 1h knob", () => {
-  disposeCacheAwareness("ttl3");
-  noteSendAndCheckCold("ttl3", "anthropic", 0);
-  const warn = noteSendAndCheckCold("ttl3", "anthropic", 10 * FIVE_MIN);
-  assert.match(warn ?? "", /FREECODE_CACHE_TTL=1h/);
+  withCacheTtl("5m", () => {
+    disposeCacheAwareness("ttl3");
+    noteSendAndCheckCold("ttl3", "anthropic", 0);
+    const warn = noteSendAndCheckCold("ttl3", "anthropic", 10 * FIVE_MIN);
+    assert.match(warn ?? "", /FREECODE_CACHE_TTL=1h/);
+  });
 });

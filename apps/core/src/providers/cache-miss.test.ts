@@ -219,16 +219,26 @@ test("a model switch is attributed, never alarmed, and never held", () => {
 });
 
 test("a gap past the Anthropic TTL is attributed as expired", () => {
-  const s = session();
-  const on = { provider: "anthropic", model: "m" };
-  const t0 = Date.now();
-  checkCacheUsage(s, { ...warm(0, 10_000, 10_000), ...on }, t0);
-  const later = t0 + 6 * 60_000;
-  assert.equal(
-    checkCacheUsage(s, { ...warm(0, 10_000, 10_000), ...on }, later),
-    undefined,
-  );
-  assert.equal(getCacheStats(s)!.misses[0].reason, "expired");
+  // This gap (6 min) is written against the 5m TTL; getCacheTtl() defaults
+  // to 1h (utils.ts), so pin it explicitly rather than rely on the ambient
+  // default.
+  const prevCacheTtl = process.env.FREECODE_CACHE_TTL;
+  process.env.FREECODE_CACHE_TTL = "5m";
+  try {
+    const s = session();
+    const on = { provider: "anthropic", model: "m" };
+    const t0 = Date.now();
+    checkCacheUsage(s, { ...warm(0, 10_000, 10_000), ...on }, t0);
+    const later = t0 + 6 * 60_000;
+    assert.equal(
+      checkCacheUsage(s, { ...warm(0, 10_000, 10_000), ...on }, later),
+      undefined,
+    );
+    assert.equal(getCacheStats(s)!.misses[0].reason, "expired");
+  } finally {
+    if (prevCacheTtl === undefined) delete process.env.FREECODE_CACHE_TTL;
+    else process.env.FREECODE_CACHE_TTL = prevCacheTtl;
+  }
 });
 
 test("a documented miss is attributed to its journal entry", () => {

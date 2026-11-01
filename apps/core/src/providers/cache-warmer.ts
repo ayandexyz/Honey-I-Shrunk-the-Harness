@@ -20,8 +20,12 @@
 // AgentLoop per turn, and a warm scheduled by one turn must be cancelled by
 // the next turn's first real request.
 //
-// Off by default until the rollout fold shows the saving (`cache.warm`
-// events + the D2 detector can tell a warm from a real turn).
+// Defaults to "idle" — an interactive session with a human reading/thinking
+// between turns is the common case here, and that is exactly the gap this
+// warms through. `cache.warm` events + the D2 detector can still tell a warm
+// from a real turn, for whoever wants to fold the rollout and check. An
+// unattended, gap-free run (eval/agent-bench trials, `freecode night`) should
+// set FREECODE_CACHE_WARMING=off explicitly rather than rely on this default.
 //   settings.json  { "cache": { "warming": "off" | "streaming" | "idle" } }
 //   env            FREECODE_CACHE_WARMING=off|streaming|idle  (beats the file)
 // "streaming" warms only while the run is active (between tool calls that
@@ -147,7 +151,7 @@ export function resolveCacheWarmingMode(
     const m = readMode(f);
     if (m) return m;
   }
-  return "off";
+  return "idle";
 }
 
 // --- the warmer -------------------------------------------------------------

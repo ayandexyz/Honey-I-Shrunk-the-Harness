@@ -240,41 +240,48 @@ function withCacheTtl(value: string | undefined, fn: () => void): void {
   }
 }
 
-test("getCacheTtl defaults to 5m and rejects unusable values", () => {
-  withCacheTtl(undefined, () => assert.equal(getCacheTtl(), "5m"));
-  withCacheTtl("", () => assert.equal(getCacheTtl(), "5m"));
+test("getCacheTtl defaults to 1h and rejects unusable values", () => {
+  withCacheTtl(undefined, () => assert.equal(getCacheTtl(), "1h"));
+  withCacheTtl("", () => assert.equal(getCacheTtl(), "1h"));
   withCacheTtl("1h", () => assert.equal(getCacheTtl(), "1h"));
   withCacheTtl("5m", () => assert.equal(getCacheTtl(), "5m"));
-  // An unusable value must not reach the wire as a literal.
-  withCacheTtl("60m", () => assert.equal(getCacheTtl(), "5m"));
-  withCacheTtl("1hour", () => assert.equal(getCacheTtl(), "5m"));
+  // An unusable value must not reach the wire as a literal; it falls back to
+  // the default, not silently to the other valid value.
+  withCacheTtl("60m", () => assert.equal(getCacheTtl(), "1h"));
+  withCacheTtl("1hour", () => assert.equal(getCacheTtl(), "1h"));
 });
 
-test("the default path sends no ttl field at all", () => {
+test("the default path sends ttl: 1h", () => {
   withCacheTtl(undefined, () => {
-    // 5m is already the server-side default, so omitting it keeps the request
-    // bytes identical to what shipped before the knob existed. If this starts
-    // failing, the default path has changed and existing caches will miss.
+    // 1h is the in-app default (getCacheTtl()), so the default path now
+    // carries an explicit ttl rather than omitting the field. If this starts
+    // failing, the default path has changed again.
     const msgs: any[] = [
       { role: "user", content: [{ type: "text", text: "hi" }] },
     ];
     applyMessageCaching(msgs as never);
     const opts = msgs[0].content[0].providerOptions;
-    assert.deepEqual(opts.anthropic.cacheControl, { type: "ephemeral" });
-    assert.deepEqual(opts.openrouter.cacheControl, { type: "ephemeral" });
+    assert.deepEqual(opts.anthropic.cacheControl, {
+      type: "ephemeral",
+      ttl: "1h",
+    });
+    assert.deepEqual(opts.openrouter.cacheControl, {
+      type: "ephemeral",
+      ttl: "1h",
+    });
 
     const tools = buildToolsParam([
       { name: "read", description: "d", parameters: {} },
     ] as never);
     assert.deepEqual(
       (tools!.read.providerOptions as any).anthropic.cacheControl,
-      { type: "ephemeral" },
+      { type: "ephemeral", ttl: "1h" },
     );
 
     const system = buildAnthropicSystemParam([{ text: "s", cache: true }]);
     assert.deepEqual(
       ((system as any[])[0].providerOptions as any).anthropic.cacheControl,
-      { type: "ephemeral" },
+      { type: "ephemeral", ttl: "1h" },
     );
   });
 });
@@ -339,7 +346,7 @@ test("effectiveCacheTtl narrows getCacheTtl() to providers that actually carry t
     assert.equal(effectiveCacheTtl("zai", "some-model"), "5m");
   });
   withCacheTtl(undefined, () => {
-    assert.equal(effectiveCacheTtl("anthropic", "claude-sonnet-4-5"), "5m");
+    assert.equal(effectiveCacheTtl("anthropic", "claude-sonnet-4-5"), "1h");
   });
 });
 
