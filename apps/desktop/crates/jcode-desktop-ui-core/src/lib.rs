@@ -15,6 +15,7 @@ pub mod animation_clock;
 pub mod config;
 pub mod image_cache;
 pub mod omarchy;
+pub mod omarchy_theme;
 pub mod prompt_background;
 pub mod pulse_text;
 pub mod render_stats;

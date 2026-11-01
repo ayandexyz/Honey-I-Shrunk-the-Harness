@@ -4234,6 +4234,7 @@ dependencies = [
 name = "jcode-desktop-ui-core"
 version = "0.6.5"
 dependencies = [
+ "dirs 5.0.1",
  "gpui",
  "image",
  "jcode-desktop-api",
@@ -4241,6 +4242,7 @@ dependencies = [
  "jcode-desktop-model",
  "jcode-desktop-motion",
  "serde",
+ "serde_json",
  "tempfile",
  "toml 0.8.23",
  "unicode-segmentation",

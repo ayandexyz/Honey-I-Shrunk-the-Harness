@@ -5,7 +5,7 @@ mod palettes;
 use gpui::{Hsla, Rgba, rgb, rgba};
 use std::sync::{
     Mutex, OnceLock,
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicPtr, AtomicUsize, Ordering},
 };
 
 #[derive(Clone)]
@@ -130,6 +130,9 @@ impl Theme {
             }
             *transition = None;
         }
+        if target == ThemePreset::OmarchySystem.index() {
+            return omarchy_live_theme();
+        }
         &themes()[target]
     }
 
@@ -137,7 +140,11 @@ impl Theme {
     /// trigger repeated diagram layout and path tessellation while fading UI.
     pub fn selected() -> &'static Self {
         let _ = themes();
-        &themes()[ACTIVE_THEME.load(Ordering::Relaxed)]
+        let target = ACTIVE_THEME.load(Ordering::Relaxed);
+        if target == ThemePreset::OmarchySystem.index() {
+            return omarchy_live_theme();
+        }
+        &themes()[target]
     }
 
     pub fn active_preset() -> ThemePreset {
@@ -165,6 +172,9 @@ impl Theme {
     /// Settled palette for a preset, for swatch previews that should not
     /// depend on the active theme.
     pub fn preview(preset: ThemePreset) -> &'static Self {
+        if preset == ThemePreset::OmarchySystem {
+            return omarchy_live_theme();
+        }
         &themes()[preset.index()]
     }
 
@@ -379,10 +389,11 @@ pub enum ThemePreset {
     #[default]
     PureBlack,
     Glass,
+    OmarchySystem,
 }
 
 impl ThemePreset {
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 19] = [
         Self::WarmNeutral,
         Self::WarmStudio,
         Self::NeutralDark,
@@ -401,6 +412,7 @@ impl ThemePreset {
         Self::DarkNeutral,
         Self::PureBlack,
         Self::Glass,
+        Self::OmarchySystem,
     ];
     pub const fn id(self) -> &'static str {
         match self {
@@ -422,6 +434,7 @@ impl ThemePreset {
             Self::DarkNeutral => "dark-neutral",
             Self::PureBlack => "pure-black",
             Self::Glass => "glass",
+            Self::OmarchySystem => "omarchy-system",
         }
     }
     pub const fn label(self) -> &'static str {
@@ -444,6 +457,7 @@ impl ThemePreset {
             Self::DarkNeutral => "Dark Neutral",
             Self::PureBlack => "Pure Black",
             Self::Glass => "Glass",
+            Self::OmarchySystem => "Omarchy System",
         }
     }
     const fn index(self) -> usize {
@@ -466,6 +480,7 @@ impl ThemePreset {
             Self::DarkNeutral => 15,
             Self::PureBlack => 16,
             Self::Glass => 17,
+            Self::OmarchySystem => 18,
         }
     }
     pub fn from_id(value: &str) -> Self {
@@ -594,6 +609,233 @@ fn interpolate(from: &Theme, to: &Theme, amount: f32) -> Theme {
     result
 }
 
+/// Nudge `raised` away from `panel` until they clear the pane-focus test's
+/// minimum 10/255 per-channel delta, mixing toward the opposite brightness
+/// extreme — the same direction every hand-tuned palette already steps its
+/// raised chrome away from its panel. A no-op once the two already differ
+/// enough (covers the common case where Omarchy's `panelAlt` is already a
+/// visibly distinct step from `panel`).
+fn ensure_pane_step(panel: Rgba, raised: Rgba) -> Rgba {
+    let channel_diff =
+        |a: Rgba, b: Rgba| (a.r - b.r).abs().max((a.g - b.g).abs()).max((a.b - b.b).abs());
+    if channel_diff(panel, raised) >= 10.0 / 255.0 {
+        return raised;
+    }
+    let brightness = panel.r * 0.3 + panel.g * 0.59 + panel.b * 0.11;
+    let target = if brightness > 0.5 { 0.0 } else { 1.0 };
+    let mix = |amount: f32| Rgba {
+        r: raised.r + (target - raised.r) * amount,
+        g: raised.g + (target - raised.g) * amount,
+        b: raised.b + (target - raised.b) * amount,
+        a: raised.a,
+    };
+    let mut amount = 0.0;
+    let mut result = raised;
+    while channel_diff(panel, result) < 10.0 / 255.0 && amount < 1.0 {
+        amount += 0.02;
+        result = mix(amount);
+    }
+    result
+}
+
+/// Like `palettes::readable_code_color`, but with a caller-chosen contrast
+/// target instead of a hardcoded 4.5. The workspace-label background blends
+/// 5% of this very color back into itself (see `workspace_accent`), so
+/// solving it exactly at 4.5 leaves a result that promptly drifts back under
+/// 4.5 once that self-blend and 8-bit quantization are applied. Asking for a
+/// small margin above 4.5 here absorbs that drift instead of chasing exact
+/// boundary precision through a feedback loop.
+fn legible_with_margin(color: Rgba, background: Rgba, target_contrast: f32) -> Rgba {
+    let luminance = |c: Rgba| {
+        let channel = |v: f32| {
+            if v <= 0.04045 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * channel(c.r) + 0.7152 * channel(c.g) + 0.0722 * channel(c.b)
+    };
+    let contrast = |fg: Rgba, bg: Rgba| {
+        let (fg_l, bg_l) = (luminance(fg), luminance(bg));
+        (fg_l.max(bg_l) + 0.05) / (fg_l.min(bg_l) + 0.05)
+    };
+    if contrast(color, background) >= target_contrast {
+        return color;
+    }
+    let target = if luminance(background) > 0.179 { 0.0 } else { 1.0 };
+    let mix = |amount: f32| Rgba {
+        r: color.r + (target - color.r) * amount,
+        g: color.g + (target - color.g) * amount,
+        b: color.b + (target - color.b) * amount,
+        a: color.a,
+    };
+    let (mut low, mut high) = (0.0, 1.0);
+    for _ in 0..30 {
+        let middle = (low + high) / 2.0;
+        if contrast(mix(middle), background) >= target_contrast {
+            high = middle;
+        } else {
+            low = middle;
+        }
+    }
+    mix(high)
+}
+
+/// Last-built live Omarchy theme, so switching Omarchy's system theme (or
+/// editing `pi.json`) is picked up without an app restart — the way Chrome,
+/// VS Code, and terminal emulators already do on Omarchy. Boxes are leaked
+/// deliberately rather than freed on each swap: a reader may be mid-borrow of
+/// the previous `&'static Theme` (GPUI reads it in all sorts of places with
+/// no obvious lifetime to hang a lock off), and Omarchy theme switches are a
+/// rare, human-triggered event, not a hot path, so the bounded leak is a
+/// better trade than unsound frees or cloning `Theme` out of every accessor.
+static OMARCHY_LIVE: AtomicPtr<Theme> = AtomicPtr::new(std::ptr::null_mut());
+static OMARCHY_LIVE_MTIME: Mutex<Option<std::time::SystemTime>> = Mutex::new(None);
+
+fn omarchy_live_theme() -> &'static Theme {
+    let ptr = OMARCHY_LIVE.load(Ordering::Acquire);
+    if !ptr.is_null() {
+        return unsafe { &*ptr };
+    }
+    // Not primed yet (no watch tick has run). Build once; if another thread
+    // raced us here, drop our build and use whichever one actually landed.
+    let built = Box::into_raw(Box::new(omarchy_system_theme()));
+    match OMARCHY_LIVE.compare_exchange(std::ptr::null_mut(), built, Ordering::AcqRel, Ordering::Acquire) {
+        Ok(_) => unsafe { &*built },
+        Err(winner) => {
+            unsafe { drop(Box::from_raw(built)) };
+            unsafe { &*winner }
+        }
+    }
+}
+
+/// Re-read `pi.json`'s modification time and, if it changed, rebuild the
+/// live Omarchy theme and swap it in. Returns whether anything changed, so
+/// a caller (a periodic GPUI housekeeping task) only redraws when it must.
+/// Cheap when nothing changed: a single `stat()`, no JSON parse.
+pub fn refresh_omarchy_theme_if_changed() -> bool {
+    let Some(path) = crate::omarchy_theme::OmarchyTheme::theme_path() else {
+        return false;
+    };
+    let Ok(modified) = std::fs::metadata(&path).and_then(|m| m.modified()) else {
+        return false;
+    };
+    let mut last = OMARCHY_LIVE_MTIME.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if *last == Some(modified) {
+        return false;
+    }
+    *last = Some(modified);
+    drop(last);
+
+    let built = Box::into_raw(Box::new(omarchy_system_theme()));
+    OMARCHY_LIVE.store(built, Ordering::Release);
+    true
+}
+
+/// Generate a theme from the active Omarchy system theme, or fall back to PureBlack.
+///
+/// Builds a full `Palette` from Omarchy's colors and derives every semantic
+/// role through the same `.theme()` every built-in palette uses, rather than
+/// hand-patching a subset of fields onto `pure_black()`. The latter left any
+/// field this function didn't explicitly name (INPUT_BG, TOOL_BG,
+/// INLINE_CODE_BG, MINIMAP_*, CURSOR, USER_ACCENT, AI_ACCENT, …) pinned to
+/// pure_black's near-black values even once the rest of the app had switched
+/// to a light Omarchy palette.
+///
+/// Unlike the built-in palettes, Omarchy's colors are community-authored and
+/// not guaranteed to clear this app's AA contrast bar (`theme::tests` enforce
+/// 4.5:1 for every preset, including this one). `legible()` nudges each role
+/// that lands in a foreground/text position toward the readable end — same
+/// technique as `apply_code_colors`' `readable_code_color` — against both
+/// panel surfaces before the rest of the theme is derived from it, so colors
+/// that reuse it (e.g. LINK/CURSOR from accent) inherit the fix rather than
+/// drifting apart from it.
+fn omarchy_system_theme() -> Theme {
+    use crate::omarchy_theme::OmarchyTheme;
+
+    let Some(omarchy) = OmarchyTheme::load() else {
+        return palettes::pure_black();
+    };
+
+    // "#rrggbb" -> u32, defaulting to black on anything unparsable so a bad
+    // pi.json value degrades to a dark surface instead of panicking.
+    let hex = |value: &str| -> u32 { u32::from_str_radix(value.trim_start_matches('#'), 16).unwrap_or(0) };
+    let to_hex = |c: Rgba| -> u32 {
+        let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u32;
+        (byte(c.r) << 16) | (byte(c.g) << 8) | byte(c.b)
+    };
+
+    let panel = rgb_c(hex(&omarchy.panel_bg));
+    let raised = ensure_pane_step(panel, rgb_c(hex(&omarchy.header_bg)));
+
+    let legible = |value: &str| -> u32 {
+        let mut color = rgb_c(hex(value));
+        color = palettes::readable_code_color(color, panel);
+        color = palettes::readable_code_color(color, raised);
+        to_hex(color)
+    };
+
+    let mut theme = palettes::Palette {
+        bg: hex(&omarchy.background),
+        panel: to_hex(panel),
+        raised: to_hex(raised),
+        border: hex(&omarchy.panel_border),
+        text: legible(&omarchy.text),
+        muted: legible(&omarchy.text_dim),
+        accent: legible(&omarchy.accent),
+        secondary: legible(&omarchy.code_type),
+        keyword: hex(&omarchy.code_keyword),
+        string: hex(&omarchy.code_string),
+        number: hex(&omarchy.code_number),
+        error: legible(&omarchy.error),
+        ok: legible(&omarchy.success),
+        warn: legible(&omarchy.warning),
+    }
+    .theme();
+
+    // Refine with values pi.json states explicitly, where that's more
+    // specific than what the generic derivation above would produce.
+    // (CODE_KEYWORD/STRING/COMMENT/NUMBER/TYPE/FUNCTION are intentionally
+    // left to the derivation above: `apply_code_colors`, run over every
+    // preset in `raw_themes()`, overwrites them uniformly from CODE_BG's
+    // luminance regardless of what a palette sets here.)
+    theme.ACCENT_DIM = rgb_c(hex(&omarchy.accent_dim));
+    theme.SELECTION = rgb_c(hex(&omarchy.selection_bg));
+    theme.ERROR_BG = rgb_c(hex(&omarchy.error_bg));
+    theme.TEXT_FAINT = rgb_c(legible(&omarchy.text_muted));
+    theme.CODE_BG = rgb_c(hex(&omarchy.code_bg));
+    theme.CODE_BORDER = rgb_c(hex(&omarchy.code_border));
+
+    // CODE_TEXT/CODE_BG share pi.json's "panelAlt" key with HEADER_BG, but
+    // CODE_BG is taken from the raw value above while HEADER_BG may have
+    // been nudged by `ensure_pane_step` — check CODE_TEXT against both
+    // code surfaces explicitly rather than assuming they stayed identical.
+    theme.CODE_TEXT = palettes::readable_code_color(theme.CODE_TEXT, theme.CODE_BG);
+    theme.CODE_TEXT = palettes::readable_code_color(theme.CODE_TEXT, theme.INLINE_CODE_BG);
+
+    // TEXT_DIM/TEXT_USER are also checked against backgrounds derived after
+    // `.theme()` returns, which `legible()` above can't see: the tinted
+    // prompt-card paper (a light blend of USER_BG), and the workspace-label
+    // backing (HEADER_BG lightly blended with TEXT_DIM itself, per
+    // `workspace_accent`). The second is self-referential — the background
+    // moves as TEXT_DIM does — so settle it with fixed-point passes against
+    // a small contrast margin (see `legible_with_margin`) rather than an
+    // exact 4.5 target, which would stay stuck right at the boundary.
+    let prompt_bg = theme.prompt_background(0);
+    theme.TEXT_DIM = palettes::readable_code_color(theme.TEXT_DIM, prompt_bg);
+    for _ in 0..3 {
+        let workspace_bg = theme.HEADER_BG.blend(theme.TEXT_DIM.opacity(0.05));
+        theme.TEXT_DIM = legible_with_margin(theme.TEXT_DIM, workspace_bg, 4.6);
+    }
+    theme.REASONING = theme.TEXT_DIM;
+    theme.TOOL_TEXT = theme.TEXT_DIM;
+    theme.CODE_GUTTER = theme.TEXT_DIM;
+    theme.TEXT_USER = palettes::readable_code_color(theme.TEXT_USER, prompt_bg);
+
+    theme
+}
+
 /// Built-in palettes before user configuration.
 fn raw_themes() -> [Theme; ThemePreset::ALL.len()] {
     let warm = Theme::defaults();
@@ -686,6 +928,7 @@ fn raw_themes() -> [Theme; ThemePreset::ALL.len()] {
         palettes::dark_neutral(),
         palettes::pure_black(),
         palettes::glass(),
+        omarchy_system_theme(),
     ]
     .map(|mut theme| {
         palettes::apply_code_colors(&mut theme);
@@ -697,8 +940,16 @@ fn themes() -> &'static [Theme; ThemePreset::ALL.len()] {
     static THEMES: OnceLock<[Theme; ThemePreset::ALL.len()]> = OnceLock::new();
     THEMES.get_or_init(|| {
         let result = raw_themes().map(Theme::configured);
+        
+        // Auto-select OmarchySystem theme when running on Omarchy
+        let theme_id = if crate::omarchy::detected() {
+            "omarchy-system".to_string()
+        } else {
+            crate::config::get().appearance.theme.clone()
+        };
+        
         ACTIVE_THEME.store(
-            ThemePreset::from_id(&crate::config::get().appearance.theme).index(),
+            ThemePreset::from_id(&theme_id).index(),
             Ordering::Relaxed,
         );
         result

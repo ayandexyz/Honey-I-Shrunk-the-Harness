@@ -3,20 +3,20 @@
 use super::{Theme, platform_font, rgb_c, rgba_c};
 
 pub(super) struct Palette {
-    bg: u32,
-    panel: u32,
-    raised: u32,
-    border: u32,
-    text: u32,
-    muted: u32,
-    accent: u32,
-    secondary: u32,
-    keyword: u32,
-    string: u32,
-    number: u32,
-    error: u32,
-    ok: u32,
-    warn: u32,
+    pub(super) bg: u32,
+    pub(super) panel: u32,
+    pub(super) raised: u32,
+    pub(super) border: u32,
+    pub(super) text: u32,
+    pub(super) muted: u32,
+    pub(super) accent: u32,
+    pub(super) secondary: u32,
+    pub(super) keyword: u32,
+    pub(super) string: u32,
+    pub(super) number: u32,
+    pub(super) error: u32,
+    pub(super) ok: u32,
+    pub(super) warn: u32,
 }
 
 impl Palette {
@@ -306,7 +306,7 @@ fn relative_luminance(color: gpui::Rgba) -> f32 {
 
 /// Keep the original VS Code hue unless the preset's tinted paper needs more
 /// contrast. Find the smallest blend toward black/white that reaches AA.
-fn readable_code_color(color: gpui::Rgba, background: gpui::Rgba) -> gpui::Rgba {
+pub(super) fn readable_code_color(color: gpui::Rgba, background: gpui::Rgba) -> gpui::Rgba {
     let background_luminance = relative_luminance(background);
     let contrast = |foreground| {
         let foreground_luminance = relative_luminance(foreground);

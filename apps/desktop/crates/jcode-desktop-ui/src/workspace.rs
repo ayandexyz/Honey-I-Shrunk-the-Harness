@@ -1011,6 +1011,15 @@ impl Workspace {
                         .spawn(async { crate::memory::trim() })
                         .detach();
                 }
+                // Switching Omarchy's system theme (or editing pi.json) should
+                // reach the app the same way it reaches Chrome, VS Code, and
+                // terminal emulators on Omarchy: without a restart. Gated on
+                // `detected()` so non-Omarchy machines skip even the stat().
+                if crate::omarchy::detected() && crate::theme::refresh_omarchy_theme_if_changed() {
+                    if this.update(cx, |_, cx| cx.notify()).is_err() {
+                        break;
+                    }
+                }
                 let update_state = updates::current();
                 let release_state = updates::release_status();
                 let check_visible = updates::user_check_visible();
@@ -15838,6 +15847,7 @@ mod tests {
             "theme-preset-15",
             "theme-preset-16",
             "theme-preset-17",
+            "theme-preset-18",
         ];
         assert_eq!(selectors.len(), ThemePreset::ALL.len());
         for (selector, preset) in selectors.into_iter().zip(ThemePreset::ALL) {
