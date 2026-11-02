@@ -38,7 +38,11 @@ impl Workspace {
                 self.workspace_live_document(source, false, &arg, window, cx)
             }
             WorkspaceCommand::Machines(host) => {
-                if let Some(host) = host {
+                if !remotes::ENABLE_REMOTE_MACHINES {
+                    // SSH remotes and Jcode Cloud have no freecode backing.
+                    self.status = "SSH/cloud machines are not available.".into();
+                    cx.notify();
+                } else if let Some(host) = host {
                     self.connect_machine((host != "local").then_some(host), cx);
                 } else {
                     self.open_machines(window, cx);

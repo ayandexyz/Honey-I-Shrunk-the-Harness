@@ -1,7 +1,18 @@
-//! The Jcode account pill pinned to the bottom of the sidebar.
+//! The freecode provider status pill pinned to the bottom of the sidebar.
 //!
-//! It names the signed-in Jcode account (not an AI provider login) with its
-//! plan. Clicking it opens the in-app account menu, or sign-in when signed out.
+//! Names the provider/model freecode currently has configured (`config.get`
+//! via `Command::AuthStatus` — Phase 5 of the jcode-sdk shim contract:
+//! freecode has no account or subscription of its own, so there is nothing
+//! here to sign into or manage from this app). Status-only: provider auth
+//! is set up with `freecode auth login` / `freecode config` in a terminal.
+//!
+//! `JcodeAccount`/`show_email` below are a separate, still-live concern:
+//! Jcode's own optional cloud-sync account and its billing menu
+//! (`sidebar_account_menu.rs`), reached only from
+//! `workspace_account_sign_in.rs`'s independent sign-in flow now that this
+//! pill no longer opens that menu itself. Not Phase 5's scope — freecode has
+//! no equivalent of Jcode's subscription/billing, so there is nothing to
+//! replace here, only to leave alone.
 use super::*;
 use jcode_base::provider_catalog::load_env_value_from_env_or_config;
 use jcode_base::subscription_catalog as subscription;
@@ -9,8 +20,8 @@ use std::cell::RefCell;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Whether the sidebar may show the account email. Off by default so a
-/// streamed or shared screen never reveals it.
+/// Whether the sidebar may show the Jcode account email. Off by default so
+/// a streamed or shared screen never reveals it.
 fn show_email_flag() -> &'static AtomicBool {
     static FLAG: OnceLock<AtomicBool> = OnceLock::new();
     FLAG.get_or_init(|| AtomicBool::new(crate::config::get().workspace.show_account_email))
@@ -20,7 +31,8 @@ pub(super) fn show_email() -> bool {
     show_email_flag().load(Ordering::Relaxed)
 }
 
-/// The locally saved Jcode account. Only non-secret metadata is kept here.
+/// The locally saved Jcode account (cloud-sync/billing, not an AI provider
+/// login). Only non-secret metadata is kept here.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct JcodeAccount {
     pub signed_in: bool,
@@ -75,45 +87,61 @@ impl JcodeAccount {
     pub(super) fn invalidate() {
         CACHE.with(|cache| *cache.borrow_mut() = None);
     }
+}
 
-    fn title(&self, show_email: bool) -> String {
-        match (&self.email, self.signed_in) {
-            (Some(email), true) if show_email => email.clone(),
-            (_, true) => "Honey account".into(),
-            _ => "Sign in to Honey".into(),
+/// (provider, model, auth method) as last reported by `Command::AuthStatus`.
+/// `provider: None` means freecode has nothing configured yet.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(super) struct AuthStatus {
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    /// `"oauth"` or `"api_key"`.
+    pub auth_method: Option<String>,
+}
+
+impl AuthStatus {
+    fn title(&self) -> String {
+        match &self.provider {
+            Some(provider) => format!("Signed in via {provider}"),
+            None => "No provider configured".into(),
         }
     }
 
     fn detail(&self) -> String {
-        match (self.signed_in, self.plan) {
-            (true, Some(plan)) => format!("{plan} plan"),
-            (true, None) => "Signed in".into(),
-            (false, _) => "Not signed in".into(),
+        match (&self.provider, &self.model, &self.auth_method) {
+            (Some(_), Some(model), Some(method)) => {
+                let method = if method == "oauth" { "OAuth" } else { "API key" };
+                format!("{model} · {method}")
+            }
+            (Some(_), Some(model), None) => model.clone(),
+            (Some(_), None, _) => "Signed in".into(),
+            (None, _, _) => "Run `freecode auth login` to sign in".into(),
         }
     }
 
-    fn initial(&self, show_email: bool) -> String {
-        self.email
+    fn initial(&self) -> String {
+        self.provider
             .as_deref()
-            .filter(|_| self.signed_in && show_email)
-            .and_then(|email| email.chars().next())
+            .and_then(|provider| provider.chars().next())
             .map(|c| c.to_uppercase().to_string())
-            .unwrap_or_else(|| "J".into())
+            .unwrap_or_else(|| "F".into())
     }
 }
 
 impl Workspace {
     pub(super) fn render_sidebar_account(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let theme = Theme::global();
-        let account = JcodeAccount::current();
-        let signed_in = account.signed_in;
-        let show_email = show_email();
+        let status = self.freecode_auth.clone().unwrap_or_default();
+        let signed_in = status.provider.is_some();
         let ink = if signed_in {
             theme.TEXT
         } else {
             theme.TEXT_DIM
         };
-        let menu_open = signed_in && self.account_menu.open;
+        // Gated on the menu's own open flag, not freecode's signed-in state:
+        // `workspace_account_sign_in.rs`'s separate, optional Jcode
+        // cloud-sync sign-in still opens this same menu independently.
+        let menu_open = self.account_menu.open;
 
         div()
             .id("sidebar-account-area")
@@ -140,37 +168,16 @@ impl Workspace {
                     .gap_2()
                     .rounded_full()
                     .cursor_pointer()
-                    .bg(if menu_open {
-                        theme.HEADER_BG
-                    } else {
-                        theme.INLINE_CODE_BG
-                    })
+                    .bg(theme.INLINE_CODE_BG)
                     .hover(|el| el.bg(theme.HEADER_BG))
                     .on_mouse_down(
                         gpui::MouseButton::Left,
-                        cx.listener(move |this, _, window, cx| {
-                            if signed_in {
-                                this.toggle_account_menu(cx);
-                                return;
-                            }
-                            // Email sign-in is paused, so reuse the Jcode
-                            // provider login the Accounts page already runs.
-                            let source = this
-                                .slots
-                                .get(this.active)
-                                .filter(|slot| !slot.closing)
-                                .map(|slot| slot.panel.entity_id());
-                            match source {
-                                Some(source) => this.open_accounts(
-                                    &OpenAccounts {
-                                        source,
-                                        login_command: Some("/login jcode".into()),
-                                    },
-                                    window,
-                                    cx,
-                                ),
-                                None => this.open_account_sign_in(window, cx),
-                            }
+                        cx.listener(|this, _, _, cx| {
+                            // freecode has no in-app sign-in or account menu
+                            // (no subscription, no billing) — point at the CLI.
+                            this.status = "Run `freecode auth login` in a terminal to sign in."
+                                .into();
+                            cx.notify();
                         }),
                     )
                     .child(
@@ -189,7 +196,7 @@ impl Workspace {
                             })
                             .text_size(px(11.0))
                             .text_color(ink)
-                            .child(account.initial(show_email)),
+                            .child(status.initial()),
                     )
                     .child(
                         div()
@@ -204,7 +211,7 @@ impl Workspace {
                                     .text_size(px(11.0))
                                     .line_height(px(14.0))
                                     .text_color(ink)
-                                    .child(account.title(show_email)),
+                                    .child(status.title()),
                             )
                             .child(
                                 div()
@@ -213,14 +220,16 @@ impl Workspace {
                                     .text_size(px(9.0))
                                     .line_height(px(12.0))
                                     .text_color(theme.TEXT_DIM)
-                                    .child(account.detail()),
+                                    .child(status.detail()),
                             ),
                     ),
             )
             .into_any_element()
     }
 
-    /// Settings row: reveal the account email in the sidebar. Off by default.
+    /// Settings row: reveal the Jcode account email in the sidebar's Jcode
+    /// billing menu. Off by default. Unrelated to the freecode status pill
+    /// above, which never shows an email.
     pub(super) fn render_account_email_setting(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let theme = Theme::global();
         let enabled = show_email();
@@ -264,45 +273,37 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
-    use super::JcodeAccount;
+    use super::{AuthStatus, JcodeAccount};
 
     #[test]
-    fn signed_in_account_names_email_and_plan() {
+    fn signed_in_jcode_account_names_email_and_plan() {
         let account = JcodeAccount {
             signed_in: true,
             email: Some("ada@example.com".into()),
             plan: Some("Pro"),
         };
-        assert_eq!(account.title(true), "ada@example.com");
-        assert_eq!(account.detail(), "Pro plan");
-        assert_eq!(account.initial(true), "A");
+        assert_eq!(account.email, Some("ada@example.com".into()));
+        assert_eq!(account.plan, Some("Pro"));
+        assert!(account.signed_in);
     }
 
     #[test]
-    fn hidden_email_never_reaches_the_pill() {
-        let account = JcodeAccount {
-            signed_in: true,
-            email: Some("ada@example.com".into()),
-            plan: Some("Pro"),
+    fn configured_provider_names_provider_and_model() {
+        let status = AuthStatus {
+            provider: Some("anthropic".into()),
+            model: Some("claude-sonnet-5".into()),
+            auth_method: Some("oauth".into()),
         };
-        assert_eq!(account.title(false), "Honey account");
-        assert_eq!(account.initial(false), "J");
-        assert!(
-            !crate::config::DesktopConfig::default()
-                .workspace
-                .show_account_email
-        );
+        assert_eq!(status.title(), "Signed in via anthropic");
+        assert_eq!(status.detail(), "claude-sonnet-5 · OAuth");
+        assert_eq!(status.initial(), "A");
     }
 
     #[test]
-    fn signed_out_account_invites_sign_in() {
-        let account = JcodeAccount {
-            signed_in: false,
-            email: Some("stale@example.com".into()),
-            plan: None,
-        };
-        assert_eq!(account.title(true), "Sign in to Honey");
-        assert_eq!(account.detail(), "Not signed in");
-        assert_eq!(account.initial(true), "J");
+    fn unconfigured_provider_invites_cli_login() {
+        let status = AuthStatus::default();
+        assert_eq!(status.title(), "No provider configured");
+        assert_eq!(status.detail(), "Run `freecode auth login` to sign in");
+        assert_eq!(status.initial(), "F");
     }
 }

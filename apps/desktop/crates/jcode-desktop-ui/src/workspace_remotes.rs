@@ -1,6 +1,12 @@
 //! Machine selection is a workspace preference, not a mutation of existing panels.
 use super::*;
 
+/// Phase 5 of the jcode-sdk shim contract: SSH remotes and Jcode Cloud have
+/// no freecode backing (nothing in `apps/core` serves either), so every
+/// affordance that reaches them is gated behind this single flag rather than
+/// deleted — flip back to `true` if freecode ever grows an equivalent.
+pub(crate) const ENABLE_REMOTE_MACHINES: bool = false;
+
 /// Reserved managed destination, never an SSH alias or the personal AWS alpha.
 pub(super) const MANAGED_CLOUD_HOST: &str = "jcode-cloud";
 pub(super) const MANAGED_CLOUD_STARTING: &str = "Checking your Jcode Cloud machine…";
@@ -890,36 +896,38 @@ impl Workspace {
                             this.set_default_machine(None, cx);
                         })),
                     )
-                    .child(
-                        button(
-                            "machine-destination-cloud",
-                            include_bytes!("../../../assets/icons/machine-cloud.svg"),
-                            "Cloud · Use Jcode Cloud for new sessions".into(),
-                            host.is_some_and(managed_destination),
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            cx.stop_propagation();
-                            this.set_default_machine(Some(MANAGED_CLOUD_HOST.into()), cx);
-                        })),
-                    )
-                    .child(
-                        button(
-                            "machines-picker-button",
-                            include_bytes!("../../../assets/icons/ssh.svg"),
-                            match host.filter(|host| !managed_destination(host)) {
-                                Some(host) => format!("SSH · {host} · Choose a remote host"),
-                                None => "SSH · Choose a remote host".into(),
-                            },
-                            host.is_some_and(|host| !managed_destination(host)),
-                        )
-                        .on_mouse_down(
-                            gpui::MouseButton::Left,
-                            cx.listener(|this, _, window, cx| {
+                    .when(ENABLE_REMOTE_MACHINES, |el| {
+                        el.child(
+                            button(
+                                "machine-destination-cloud",
+                                include_bytes!("../../../assets/icons/machine-cloud.svg"),
+                                "Cloud · Use Jcode Cloud for new sessions".into(),
+                                host.is_some_and(managed_destination),
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
                                 cx.stop_propagation();
-                                this.open_machines(window, cx);
-                            }),
-                        ),
-                    )
+                                this.set_default_machine(Some(MANAGED_CLOUD_HOST.into()), cx);
+                            })),
+                        )
+                        .child(
+                            button(
+                                "machines-picker-button",
+                                include_bytes!("../../../assets/icons/ssh.svg"),
+                                match host.filter(|host| !managed_destination(host)) {
+                                    Some(host) => format!("SSH · {host} · Choose a remote host"),
+                                    None => "SSH · Choose a remote host".into(),
+                                },
+                                host.is_some_and(|host| !managed_destination(host)),
+                            )
+                            .on_mouse_down(
+                                gpui::MouseButton::Left,
+                                cx.listener(|this, _, window, cx| {
+                                    cx.stop_propagation();
+                                    this.open_machines(window, cx);
+                                }),
+                            ),
+                        )
+                    })
                     .child(self.render_default_directory_button(cx)),
             )
             .when(self.remotes.failed, |el| {

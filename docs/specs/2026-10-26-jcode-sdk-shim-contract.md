@@ -248,13 +248,58 @@ never comes from upstream is this `jcode-sdk` shim.
      after the real session is created and connected — an upstream UI-layer
      artifact (the placeholder worker never resolves against any real
      backend, freecode included), harmless to the real session's own stream.
-5. **DEFERRED 2026-10-26 (user decision: get the desktop running first).**
-   Decide + implement the SSH/managed-cloud/accounts gap (stub vs. hide).
-   Until then their UI stays visible and every action fails with the shim's
-   "not supported by freecode yet" error. Recommendation on record: hide SSH
-   remotes and managed cloud (nothing in freecode backs them); replace the
-   "Sign in to Jcode" footer and login picker with freecode's own provider
-   and auth state (`freecode auth login`).
+5. **✅ COMPLETE 2026-11-03 — SSH/managed-cloud hidden, sidebar pill replaced
+   with freecode's own auth state**, per the recorded recommendation.
+   - **Shim**: `JcodeClient::auth_status()` (`apps/desktop-shim/jcode-sdk/src/client.rs`)
+     — a sessionless `(provider, model, auth_method)` read, reusing the
+     `current()` helper `get_runtime_info`/`model_info_event` already call
+     per-session (made `pub(crate)`). No new core IPC needed — `config.get`
+     already reports this globally.
+   - **Harness bridge**: `Command::AuthStatus` / `Update::AuthStatus`
+     (`harness.rs`), a one-shot detached-thread fetch mirroring
+     `PeekHistory`'s pattern (`auth_status_detached`, local-only — the pill
+     names this desktop's own provider, never a remote host's). Polled on
+     the existing session-refresh housekeeping cadence, no new timer.
+   - **Sidebar pill** (`sidebar_account.rs`): now shows "Signed in via
+     `<provider>` · `<model>` · OAuth/API key" or "No provider configured /
+     Run `freecode auth login` to sign in", with an `F` fallback avatar.
+     Click no longer opens Jcode's login/billing flow — freecode has no
+     subscription or in-app sign-in, so the pill is status-only and points
+     at the CLI. **`JcodeAccount`/`show_email`/`render_account_email_setting`
+     are kept, unmodified in behavior** — they still back Jcode's own
+     optional cloud-sync account menu (`sidebar_account_menu.rs`), reached
+     only from `workspace_account_sign_in.rs`'s independent sign-in flow
+     now that this pill no longer opens that menu itself; `menu_open` in
+     `render_sidebar_account` is gated on `self.account_menu.open` alone
+     (dropped the old `jcode_signed_in &&` term, now meaningless here).
+   - **SSH + managed cloud** (`workspace_remotes.rs`): single
+     `pub(crate) const ENABLE_REMOTE_MACHINES: bool = false` gate — hides
+     the switcher's cloud/SSH buttons (`render_machine_switcher`) and
+     refuses `/ssh` with a status message
+     (`workspace_commands.rs::WorkspaceCommand::Machines`) instead of
+     opening the picker or connecting. `show_machines`/`connect_machine`/
+     `render_machines` themselves are untouched (not deleted) so flipping
+     the flag back to `true` restores the feature with no further edits —
+     chosen over deletion since this is upstream-vendored UI and the goal
+     is a small, reversible diff for future `git subtree pull`s.
+   - **Tests**: harness + shim unit tests pass unchanged. UI crate's full
+     `cargo test -p jcode-desktop-ui --lib` matches the pre-change baseline
+     (26 pre-existing unrelated failures — Jcode's own login/accounts/flow
+     tests against the already-empty `AuthClient::providers()`, one flaky
+     timestamp test — identical before and after) plus 4
+     `workspace_remote_tests.rs` cases that asserted the now-hidden
+     `machines-picker-button`; gated with the same
+     `!remotes::ENABLE_REMOTE_MACHINES → return` pattern as the production
+     code rather than deleted, for the same reversibility reason.
+   - **Verified live**: real `cargo build -p jcode-desktop` binary
+     (`honey-desktop`), rendered via the repo's own offline-fixture
+     screenshot tooling (`scripts/screenshot.py`, private Xvfb — never the
+     user's live installed app) — sidebar pill reads "No provider
+     configured / Run `freecode auth login` t…", and the machine switcher
+     shows only the local "This computer" icon, no cloud/SSH icons.
+   - **Not done**: no in-app way to configure a freecode provider (the
+     pill is read-only, points at the CLI) — matches the recorded decision,
+     not a gap.
 6. **IN PROGRESS** — fix UI fallout file by file.
    - **Jcode's on-disk state (Phase 1 finding 4), fixed without upstream
      edits**: every reader honours `JCODE_HOME` — the harness's

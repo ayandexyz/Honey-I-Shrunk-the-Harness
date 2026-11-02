@@ -791,6 +791,10 @@ pub struct Workspace {
     show_beta_notice: bool,
     account_sign_in: account_sign_in::State,
     account_menu: account_menu::State,
+    /// freecode's configured provider/model/auth method for the sidebar
+    /// pill, refreshed on `housekeeping`'s cadence via `Command::AuthStatus`.
+    /// `None` until the first reply arrives.
+    freecode_auth: Option<sidebar_account::AuthStatus>,
     compact_sidebar_open: bool,
     compact_sidebar_motion: responsive::VisibilityMotion,
     last_canvas_width: Option<f32>,
@@ -1051,6 +1055,7 @@ impl Workspace {
                 let accounts = accounts_feed.latest();
                 if last_session_refresh.elapsed() >= next_session_refresh {
                     housekeeping_bridge.send(Command::RefreshSessions);
+                    housekeeping_bridge.send(Command::AuthStatus);
                     last_session_refresh = Instant::now();
                     next_session_refresh = session_refresh_interval;
                 }
@@ -1138,6 +1143,7 @@ impl Workspace {
             show_beta_notice: snapshot.is_none() && !single_panel,
             account_sign_in: account_sign_in::State::startup(),
             account_menu: account_menu::State::startup(),
+            freecode_auth: None,
             show_minimap: false,
             layout_mode: crate::config::get().appearance.layout_mode,
             folder_frame: Default::default(),
@@ -1527,6 +1533,7 @@ impl Workspace {
             show_beta_notice: false,
             account_sign_in: account_sign_in::State::default(),
             account_menu: account_menu::State::default(),
+            freecode_auth: None,
             show_sidebar: true,
             sidebar_custom_width: SIDEBAR_WIDTH,
             sidebar_resizing: false,
@@ -2721,6 +2728,16 @@ impl Workspace {
             }
             Update::PeekHistory { session_id, result } => {
                 self.apply_resume_preview(session_id, result, cx);
+            }
+            Update::AuthStatus { result } => {
+                if let Ok((provider, model, auth_method)) = result {
+                    self.freecode_auth = Some(sidebar_account::AuthStatus {
+                        provider,
+                        model,
+                        auth_method,
+                    });
+                    cx.notify();
+                }
             }
             Update::EffortSettled {
                 session_id,

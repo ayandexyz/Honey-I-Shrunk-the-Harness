@@ -187,6 +187,13 @@ pub enum Update {
         session_id: String,
         limit: Option<u64>,
     },
+    /// Reply to `Command::AuthStatus`: freecode's configured
+    /// (provider, model, auth_method), for the sidebar status pill. No
+    /// session is attached or watched — same one-shot shape as
+    /// `PeekHistory`.
+    AuthStatus {
+        result: Result<(Option<String>, Option<String>, Option<String>), String>,
+    },
 }
 
 /// Commands flowing from the UI into the bridge.
@@ -194,6 +201,10 @@ pub enum Command {
     /// Final UI handle dropped. Stop workers, including their SSH transports.
     Shutdown,
     RefreshSessions,
+    /// Read freecode's current provider/model/auth status for the sidebar
+    /// pill. Always local — the pill names this desktop's own configured
+    /// provider, not a remote host's. Answered with `Update::AuthStatus`.
+    AuthStatus,
     RefreshRuntime {
         session_id: String,
     },
@@ -1148,6 +1159,13 @@ fn run_with_transports(
                     .spawn(move || peek_history_detached(session_id, updates, transports))
                     .expect("spawn peek worker");
             }
+            Command::AuthStatus => {
+                let updates = updates.clone();
+                std::thread::Builder::new()
+                    .name("jcode-bridge-auth".into())
+                    .spawn(move || auth_status_detached(updates))
+                    .expect("spawn auth status worker");
+            }
             Command::AckTodoFollowUp {
                 session_id,
                 effects,
@@ -2049,6 +2067,17 @@ fn peek_history_detached(
             .map_err(|error| error.to_string())
     })();
     let _ = updates.send(Update::PeekHistory { session_id, result });
+}
+
+/// Read freecode's configured provider/model/auth method for the sidebar
+/// pill — a bare `auth_status()` call on a throwaway local client handle
+/// (the shim shares one core process, so this is cheap). Always local: the
+/// pill shows this desktop's own configured provider, never a remote host's.
+fn auth_status_detached(updates: UpdateSender) {
+    let result = connect("auth-status")
+        .map_err(|error| error.to_string())
+        .and_then(|client| client.auth_status().map_err(|error| error.to_string()));
+    let _ = updates.send(Update::AuthStatus { result });
 }
 
 /// One session's dedicated API connection, including an adopted client's reconnect.

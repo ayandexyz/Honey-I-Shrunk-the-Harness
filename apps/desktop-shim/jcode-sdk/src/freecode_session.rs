@@ -618,8 +618,10 @@ pub(crate) fn auth_logout(provider: &str) -> Result<(Value, String)> {
     Ok((json!({ "provider": provider, "output": trimmed }), message))
 }
 
-/// (provider, model, auth method) from `config.get`.
-fn current(inner: &Inner) -> Result<(Option<String>, Option<String>, Option<String>)> {
+/// (provider, model, auth method) from `config.get`. `pub(crate)` so
+/// `JcodeClient::auth_status` (no session needed) can reuse it directly,
+/// the same read `runtime_info`/`model_info_event` already do per-session.
+pub(crate) fn current(inner: &Inner) -> Result<(Option<String>, Option<String>, Option<String>)> {
     let config = call(inner, "config.get", json!({}))?;
     let get = |key: &str| {
         config

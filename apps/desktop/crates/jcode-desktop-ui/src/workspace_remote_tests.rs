@@ -39,6 +39,13 @@ fn click(cx: &mut gpui::VisualTestContext, selector: &'static str) {
 fn sidebar_destination_icons_choose_defaults_without_starting_sessions(
     cx: &mut gpui::TestAppContext,
 ) {
+    // Phase 5 of the jcode-sdk shim contract hides the cloud/SSH switcher
+    // buttons (`remotes::ENABLE_REMOTE_MACHINES`) — nothing in freecode
+    // backs either. Skip rather than delete, so this resumes enforcing the
+    // icon layout automatically if the flag ever flips back on.
+    if !remotes::ENABLE_REMOTE_MACHINES {
+        return;
+    }
     let (bridge, commands) = harness::spawn_recording();
     let (workspace, vcx) = cx.add_window_view(|_, cx| {
         let mut w = Workspace::for_test(learning::Coach::new(), cx);
@@ -113,6 +120,10 @@ fn settings_machine_entry_opens_the_connectable_picker(cx: &mut gpui::TestAppCon
 
 #[gpui::test]
 fn machines_picker_connect_default_shortcuts_and_local_override(cx: &mut gpui::TestAppContext) {
+    // See sidebar_destination_icons_choose_defaults_without_starting_sessions.
+    if !remotes::ENABLE_REMOTE_MACHINES {
+        return;
+    }
     cx.update(crate::bind_workspace_keys);
     let (bridge, commands) = harness::spawn_recording();
     let (workspace, vcx) = cx.add_window_view(|_, cx| {
@@ -423,6 +434,10 @@ fn explicit_folder_and_help_stay_local_with_a_remote_default(cx: &mut gpui::Test
 
 #[gpui::test]
 fn machines_input_validates_and_connects_without_changing_default(cx: &mut gpui::TestAppContext) {
+    // See sidebar_destination_icons_choose_defaults_without_starting_sessions.
+    if !remotes::ENABLE_REMOTE_MACHINES {
+        return;
+    }
     cx.update(crate::input::bind_keys);
     let (bridge, commands) = harness::spawn_recording();
     let (workspace, vcx) = cx.add_window_view(|_, cx| {
@@ -620,6 +635,10 @@ fn remote_history_never_becomes_a_local_pinned_folder() {
 
 #[gpui::test]
 fn machines_panel_preserves_sidebar_reuses_tabs_and_restores_input(cx: &mut gpui::TestAppContext) {
+    // See sidebar_destination_icons_choose_defaults_without_starting_sessions.
+    if !remotes::ENABLE_REMOTE_MACHINES {
+        return;
+    }
     cx.update(crate::bind_workspace_keys);
     cx.update(crate::input::bind_keys);
     let (bridge, commands) = harness::spawn_recording();

@@ -808,6 +808,13 @@ impl JcodeClient {
         crate::freecode_session::runtime_info(&self.inner, session_id)
     }
 
+    /// freecode addition: (provider, model, auth method) without a session —
+    /// Phase 5's sidebar auth-status pill needs this before any panel/session
+    /// exists. Same `config.get` read `get_runtime_info` does per-session.
+    pub fn auth_status(&self) -> Result<(Option<String>, Option<String>, Option<String>)> {
+        crate::freecode_session::current(&self.inner)
+    }
+
     /// Persist an API key in freecode's config store and let the model
     /// picker and account list pick it up on their next refresh.
     pub fn set_api_key(&self, provider: &str, api_key: &str) -> Result<()> {
