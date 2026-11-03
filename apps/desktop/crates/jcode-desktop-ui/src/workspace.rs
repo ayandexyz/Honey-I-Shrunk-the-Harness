@@ -5871,6 +5871,7 @@ impl Workspace {
                         key: sidebar_collections::key(&id),
                         label: name,
                         location: None,
+                        favicons: Vec::new(),
                     },
                     sidebar_session_directory(&session),
                 ),

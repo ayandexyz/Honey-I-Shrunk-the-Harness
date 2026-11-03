@@ -121,6 +121,7 @@ mod tests {
                 key: key.into(),
                 label: label.into(),
                 location: None,
+                favicons: Vec::new(),
             },
             0,
             1,

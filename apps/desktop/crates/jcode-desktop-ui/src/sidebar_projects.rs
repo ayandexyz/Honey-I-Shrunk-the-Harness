@@ -2,6 +2,7 @@
 //! spawned in, or its working directory outside Git. Grouping is presentation
 //! only. It never closes, moves, or reorders panels.
 use super::*;
+use std::sync::Arc;
 
 #[path = "sidebar_project_dock.rs"]
 mod dock;
@@ -15,6 +16,97 @@ pub(super) struct Project {
     pub label: String,
     /// Full location shown in the header tooltip.
     pub location: Option<String>,
+    /// Favicons found anywhere under the project root (one per directory that
+    /// has one, root first), most to show as a small overlapping stack.
+    /// Decoded once and cached by `State::favicon` — never re-walked or
+    /// re-read on every repaint.
+    pub favicons: Vec<Arc<gpui::Image>>,
+}
+
+/// Favicon filenames, matched case-insensitively, in this preference order
+/// when a single directory somehow has more than one.
+const FAVICON_NAMES: &[(&str, gpui::ImageFormat)] = &[
+    ("favicon.svg", gpui::ImageFormat::Svg),
+    ("favicon.ico", gpui::ImageFormat::Ico),
+    ("favicon.png", gpui::ImageFormat::Png),
+];
+
+/// Directories a favicon never lives in, that would otherwise dominate the
+/// scan (dependency trees, build output).
+const FAVICON_SKIP_DIRS: &[&str] = &[
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    ".next",
+    "vendor",
+    ".venv",
+    "__pycache__",
+    ".cache",
+    ".turbo",
+];
+
+const FAVICON_MAX_DEPTH: usize = 6;
+const FAVICON_MAX_VISITED_DIRS: usize = 2000;
+const FAVICON_MAX_MATCHES: usize = 3;
+
+/// Finds and decodes every favicon under a project root — not just the root
+/// itself, so a monorepo package's own `favicon.*` (anywhere, any depth) is
+/// found too. Runs once per root (cached by `State::favicon`), so the walk
+/// and decode cost is paid once per session, not on every sidebar repaint.
+///
+/// Breadth-first, so the root's own favicon (and `public/`) surfaces before
+/// a deeply nested one, and so the caps below bite the least useful part of
+/// a huge tree first.
+///
+/// ponytail: a bounded scan (depth + visited-directory caps), not a
+/// `.gitignore`-aware walker. If a real monorepo's favicon sits past the
+/// visited-dir cap, pull in the `ignore` crate instead of widening these
+/// constants.
+fn find_favicons(root: &Path) -> Vec<Arc<gpui::Image>> {
+    let mut matches = Vec::new();
+    let mut visited = 0usize;
+    let mut queue = std::collections::VecDeque::from([(root.to_path_buf(), 0usize)]);
+    while let Some((dir, depth)) = queue.pop_front() {
+        if visited >= FAVICON_MAX_VISITED_DIRS || matches.len() >= FAVICON_MAX_MATCHES {
+            break;
+        }
+        visited += 1;
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut subdirs = Vec::new();
+        let mut by_name: HashMap<&'static str, PathBuf> = HashMap::new();
+        for entry in entries.flatten() {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+            if file_type.is_dir() {
+                if depth < FAVICON_MAX_DEPTH
+                    && !name.starts_with('.')
+                    && !FAVICON_SKIP_DIRS.contains(&name.as_str())
+                {
+                    subdirs.push(path);
+                }
+                continue;
+            }
+            if let Some((candidate, _)) = FAVICON_NAMES.iter().find(|(c, _)| **c == name) {
+                by_name.entry(candidate).or_insert(path);
+            }
+        }
+        let found = FAVICON_NAMES
+            .iter()
+            .find_map(|(name, format)| by_name.get(name).map(|path| (path.clone(), *format)));
+        if let Some((path, format)) = found
+            && let Ok(bytes) = std::fs::read(path)
+        {
+            matches.push(crate::image_cache::encoded(format, bytes));
+        }
+        queue.extend(subdirs.into_iter().map(|path| (path, depth + 1)));
+    }
+    matches
 }
 
 /// One Git checkout inside a project: the main working tree or a linked
@@ -39,6 +131,9 @@ pub(super) struct State {
     /// directory, never on every hover repaint.
     roots: HashMap<String, Option<PathBuf>>,
     checkouts: HashMap<String, (Option<Checkout>, Instant)>,
+    /// Project root to resolved favicons. A project's icons do not move
+    /// mid-session, so this is resolved once and never expires.
+    favicons: HashMap<String, Vec<Arc<gpui::Image>>>,
 }
 
 impl State {
@@ -91,6 +186,13 @@ impl State {
             .clone()
     }
 
+    fn favicon(&mut self, root: &str) -> Vec<Arc<gpui::Image>> {
+        self.favicons
+            .entry(root.to_owned())
+            .or_insert_with(|| find_favicons(Path::new(root)))
+            .clone()
+    }
+
     /// The session's project and, when it differs, its directory inside it.
     pub(super) fn project(
         &mut self,
@@ -111,6 +213,8 @@ impl State {
                     key: format!("ssh://{host}{}", directory.unwrap_or_default()),
                     label,
                     location: sidebar_session_directory(session),
+                    // A remote session never probes the local filesystem.
+                    favicons: Vec::new(),
                 },
                 None,
             );
@@ -121,6 +225,7 @@ impl State {
                     key: OTHER.into(),
                     label: "No directory".into(),
                     location: None,
+                    favicons: Vec::new(),
                 },
                 None,
             );
@@ -135,15 +240,47 @@ impl State {
             // A linked worktree lives outside the main checkout.
             Err(_) => sidebar_session_directory(session),
         };
+        let favicons = self.favicon(&root_text);
         (
             Project {
                 label: path_label(&root_text),
                 location: Some(compact_working_dir(&root_text)),
+                favicons,
                 key: root_text,
             },
             subdirectory,
         )
     }
+}
+
+/// Renders one favicon as a plain rounded glyph, or several as a small
+/// overlapping stack (root first, underneath), each ringed so it reads apart
+/// from its neighbor against the header's background. Returned as flat
+/// siblings — not wrapped in their own flex row — so they take up real width
+/// in the header's own flex layout instead of painting on top of the label.
+fn favicon_stack(favicons: &[Arc<gpui::Image>], theme: &Theme) -> Vec<gpui::AnyElement> {
+    favicons
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(index, favicon)| {
+            let mut icon = div()
+                .size(px(13.0))
+                .flex_none()
+                .rounded_full()
+                .overflow_hidden()
+                .bg(theme.TOOL_BG)
+                .child(
+                    gpui::img(crate::image_cache::source(favicon))
+                        .size_full()
+                        .rounded_full(),
+                );
+            if index > 0 {
+                icon = icon.ml(px(-5.0)).border_1().border_color(theme.PANEL_BG);
+            }
+            icon.into_any_element()
+        })
+        .collect()
 }
 
 fn path_label(path: &str) -> String {
@@ -284,6 +421,7 @@ impl Workspace {
                     .text_color(theme.TEXT_DIM)
                     .child(if collapsed { "›" } else { "⌄" }),
             )
+            .children(favicon_stack(&project.favicons, &theme))
             .child(
                 div()
                     .flex_shrink(1.0)
@@ -474,6 +612,63 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn favicon_resolves_from_the_project_root_and_caches_the_decode() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        std::fs::write(
+            root.join("favicon.svg"),
+            br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"/>"#,
+        )
+        .unwrap();
+        let mut state = State::default();
+        let found = state.favicon(&root.to_string_lossy());
+        assert_eq!(found.len(), 1);
+
+        // A second lookup must not re-walk or re-read: deleting the file
+        // should not change the cached result.
+        std::fs::remove_file(root.join("favicon.svg")).unwrap();
+        let cached = state.favicon(&root.to_string_lossy());
+        assert!(Arc::ptr_eq(&found[0], &cached[0]));
+
+        let other = tempfile::tempdir().unwrap();
+        assert!(state.favicon(&other.path().to_string_lossy()).is_empty());
+    }
+
+    #[test]
+    fn favicon_finds_a_monorepo_packages_icon_anywhere_under_the_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        // No favicon at the repo root — only the "apps/desktop" package has
+        // one, several directories deep.
+        std::fs::create_dir_all(root.join("apps/desktop/public")).unwrap();
+        std::fs::write(
+            root.join("apps/desktop/public/favicon.ico"),
+            b"not a real ico, content identity is all this test checks",
+        )
+        .unwrap();
+        // A heavy dependency tree sitting next to it must not be walked.
+        std::fs::create_dir_all(root.join("node_modules/some-package")).unwrap();
+        std::fs::write(root.join("node_modules/some-package/favicon.png"), b"").unwrap();
+
+        let mut state = State::default();
+        let found = state.favicon(&root.to_string_lossy());
+        assert_eq!(found.len(), 1);
+    }
+
+    #[test]
+    fn favicon_shows_one_per_package_up_to_the_cap() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        for app in ["desktop", "web", "docs", "mobile"] {
+            let dir = root.join("apps").join(app);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("favicon.svg"), b"<svg/>").unwrap();
+        }
+        let mut state = State::default();
+        assert_eq!(state.favicon(&root.to_string_lossy()).len(), FAVICON_MAX_MATCHES);
+    }
 
     #[test]
     fn repositories_group_subdirectories_and_linked_worktrees() {
