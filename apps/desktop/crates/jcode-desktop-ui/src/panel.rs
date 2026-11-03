@@ -84,6 +84,9 @@ use scroll_motion::WheelGlide;
 mod cache_miss;
 #[path = "panel_composer.rs"]
 mod composer;
+
+#[path = "turn_change_modal.rs"]
+pub(crate) mod turn_change_modal;
 // freecode: approve/deny card for runtime permission requests.
 #[path = "panel_permission_card.rs"]
 mod permission_card;
@@ -291,6 +294,11 @@ pub enum Item {
     Stopped(stop_reason::StopNotice),
     /// Daemon-reported KV (prompt) cache miss for a provider request.
     CacheMiss(cache_miss::CacheMissNotice),
+    /// Files touched between this turn's start and end, from a git status
+    /// diff rather than which tool ran — so it also covers edits made
+    /// outside freecode's own tools (a background `bash` invoking an
+    /// external formatter, for instance). Empty-diff turns push nothing.
+    TurnChanges(turn_change_modal::TurnChangeSummary),
     /// An applet instance placed in this transcript that is not anchored to
     /// a tool call. Only ever a derived render row, never stored in `items`.
     #[serde(skip)]
@@ -484,6 +492,22 @@ pub struct Panel {
     /// When the current turn started, for the composer's "Working 12s" label.
     /// Set on `turn_started`/`running`, cleared once the turn settles.
     turn_started_at: Option<Instant>,
+    /// Git status snapshot taken at the turn's start, consumed (taken) once
+    /// `finish_response` compares it against the end-of-turn status to build
+    /// the "N changed files" summary. `None` means either no turn is open or
+    /// the summary for the last one has already been built. Paired with each
+    /// file's mtime at capture time: a file already dirty before the turn
+    /// (same status letters before and after) still needs to be caught if
+    /// this turn edited it again, which the status letters alone can't show.
+    turn_change_baseline: Option<(
+        Vec<jcode_desktop_model::git_status::GitFile>,
+        std::collections::HashMap<String, std::time::SystemTime>,
+    )>,
+    /// Bumped on every `MessageAccepted`, so a slow baseline fetch from a
+    /// turn that already ended (or restarted) is dropped instead of applied.
+    turn_change_token: usize,
+    /// The open "N changed files" summary's file list and diff viewer.
+    pub(crate) turn_change_modal: Option<turn_change_modal::State>,
     /// Running session totals of input/cache-read tokens, from each
     /// `TokenUsage` event (already per-request deltas, see
     /// `freecode_events.rs`). Backs the composer's cache-hit readout
@@ -973,6 +997,9 @@ impl Panel {
             context_limit: None,
             context_limit_for: None,
             turn_started_at: None,
+            turn_change_baseline: None,
+            turn_change_token: 0,
+            turn_change_modal: None,
             session_input_tokens: 0,
             session_cache_read_tokens: 0,
             last_cache_hit_pct: None,
@@ -1977,7 +2004,7 @@ impl Panel {
                                 }
                                 this.prompt_queue.paused = true;
                                 this.sound_events.cancel();
-                                this.record_stop(stop_reason::StopNotice::cancel_requested());
+                                this.record_stop(stop_reason::StopNotice::cancel_requested(), cx);
                                 handled = true;
                             }
                             cx.notify();
@@ -2081,7 +2108,7 @@ impl Panel {
             self.bridge.send(Command::Cancel {
                 session_id: self.session_id.clone(),
             });
-            self.record_stop(stop_reason::StopNotice::cancel_requested());
+            self.record_stop(stop_reason::StopNotice::cancel_requested(), cx);
             self.items.push(Item::Assistant("Stopped the active workflow. Queued prompts are preserved and paused, and no continuation was submitted.".into()));
             cx.notify();
             return true;
@@ -2172,7 +2199,7 @@ impl Panel {
                     self.bridge.send(Command::Cancel {
                         session_id: self.session_id.clone(),
                     });
-                    self.record_stop(stop_reason::StopNotice::cancel_requested());
+                    self.record_stop(stop_reason::StopNotice::cancel_requested(), cx);
                 }
                 "/cls" | "/clear-view" => {
                     self.startup_layout = None;
@@ -2900,6 +2927,7 @@ impl Panel {
                     Instant::now(),
                 );
                 self.turn_started_at = Some(Instant::now());
+                self.capture_turn_change_baseline(cx);
             }
             ApiEvent::TextDelta { text, .. } => {
                 self.flush_reasoning();
@@ -3009,8 +3037,8 @@ impl Panel {
                 }
             }
             ApiEvent::TurnDone { .. } => {
-                self.reconcile_reconnect_response();
-                self.finish_response();
+                self.reconcile_reconnect_response(cx);
+                self.finish_response(cx);
             }
             ApiEvent::TurnStopped {
                 reason,
@@ -3018,11 +3046,14 @@ impl Panel {
                 provider_stop_reason,
                 ..
             } => {
-                self.record_stop(stop_reason::StopNotice::from_event(
-                    reason,
-                    message,
-                    provider_stop_reason.as_deref(),
-                ));
+                self.record_stop(
+                    stop_reason::StopNotice::from_event(
+                        reason,
+                        message,
+                        provider_stop_reason.as_deref(),
+                    ),
+                    cx,
+                );
             }
             ApiEvent::SessionStatus { status, .. }
                 if status == "attached" || (status == "connected" && self.activity_active()) =>
@@ -3035,7 +3066,7 @@ impl Panel {
                     // New runtimes send a richer event before their legacy status.
                     if !matches!(self.items.last(), Some(Item::Stopped(notice)) if !notice.provisional)
                     {
-                        self.record_stop(notice);
+                        self.record_stop(notice, cx);
                     }
                     cx.notify();
                     return;
@@ -3046,8 +3077,8 @@ impl Panel {
                     status.clone()
                 };
                 if matches!(status.as_str(), "idle" | "cancelled" | "canceled") {
-                    self.reconcile_reconnect_response();
-                    self.finish_response();
+                    self.reconcile_reconnect_response(cx);
+                    self.finish_response(cx);
                 }
             }
             ApiEvent::ConnectionPhase { phase, .. } => {
@@ -3146,7 +3177,7 @@ impl Panel {
                 self.title = display_title.clone().into();
             }
             ApiEvent::Error { message, .. } => {
-                self.finish_response();
+                self.finish_response(cx);
                 if !matches!(self.items.last(), Some(Item::Stopped(notice)) if notice.detail == *message)
                 {
                     self.items.push(Item::Error(message.clone()));
@@ -3162,7 +3193,7 @@ impl Panel {
     }
 
     /// Settle partial output and stop activity without waiting for a later idle event.
-    fn finish_response(&mut self) {
+    fn finish_response(&mut self, cx: &mut Context<Self>) {
         self.transcript_measurements.dirty = true;
         self.flush_reasoning();
         self.flush_streaming();
@@ -3172,6 +3203,9 @@ impl Panel {
         self.status = "idle".into();
         self.connection_phase.clear();
         self.turn_started_at = None;
+        if let Some(baseline) = self.turn_change_baseline.take() {
+            self.spawn_turn_change_summary(baseline, cx);
+        }
     }
 
     fn flush_streaming(&mut self) {
@@ -3352,7 +3386,7 @@ impl Panel {
         if self.preview_state.is_none() {
             crate::sounds::play(crate::sounds::Cue::Error, cx);
         }
-        self.finish_response();
+        self.finish_response(cx);
         self.items.push(Item::Error(message));
         self.status = "idle".into();
         self.connection_phase.clear();
@@ -3775,6 +3809,7 @@ impl Panel {
             }
             Item::Stopped(notice) => self.render_stop_notice(index, notice, window, cx),
             Item::CacheMiss(notice) => self.render_cache_miss_notice(index, notice, window, cx),
+            Item::TurnChanges(summary) => self.render_turn_change_row(index, summary, cx),
             Item::ResponseStats(stats) => stats.render(index).into_any_element(),
             Item::User(text) if jcode_sdk::todo::is_auto_poke_message(text) => {
                 self.render_auto_poke_notice(index, text, window, cx)
@@ -5469,6 +5504,7 @@ impl Render for Panel {
             .children(self.render_image_preview(window, cx))
             .children(self.render_diff_review(cx))
             .children(self.render_login_picker(window, cx))
+            .children(self.render_turn_change_modal(cx))
             .into_any_element();
 
         // Inline mode retains the existing chat layout and event ancestry.
@@ -5583,6 +5619,7 @@ fn role_of(item: &Item) -> Option<&'static str> {
         | Item::Stopped(_)
         | Item::CacheMiss(_)
         | Item::Applet(_)
+        | Item::TurnChanges(_)
         | Item::Error(_) => None,
     }
 }

@@ -96,7 +96,7 @@ fn reconnect_notice_tests_confirmed_replaces_across_stats_and_survives_provision
             "Specific runtime failure",
             Some("provider_detail"),
         );
-        panel.record_stop(confirmed.clone());
+        panel.record_stop(confirmed.clone(), cx);
         assert_eq!(notices(panel), vec![&confirmed]);
         let footers = footer_count(panel);
         replay_processing_and_usage(panel, cx);

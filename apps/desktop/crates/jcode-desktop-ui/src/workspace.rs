@@ -62,6 +62,8 @@ mod sidebar_gesture;
 mod sidebar_projects;
 #[path = "sidebar_selection.rs"]
 mod sidebar_selection;
+#[path = "sidebar_source_control.rs"]
+mod sidebar_source_control;
 #[path = "sidebar_swarm.rs"]
 mod sidebar_swarm;
 #[path = "sidebar_worktrees.rs"]
@@ -193,6 +195,7 @@ actions!(
         ToggleHints,
         ToggleShowcase,
         ToggleSidebar,
+        ToggleSourceControl,
         ToggleVoice,
         BeginVoiceHold,
         EndVoiceHold,
@@ -787,6 +790,8 @@ pub struct Workspace {
     show_sidebar: bool,
     sidebar_custom_width: f32,
     sidebar_resizing: bool,
+    show_source_control: bool,
+    source_control: sidebar_source_control::State,
     // Launch-only chrome. Reload snapshots must never re-open the notice.
     show_beta_notice: bool,
     account_sign_in: account_sign_in::State,
@@ -1149,6 +1154,8 @@ impl Workspace {
             folder_frame: Default::default(),
             sidebar_custom_width: SIDEBAR_WIDTH,
             sidebar_resizing: false,
+            show_source_control: false,
+            source_control: Default::default(),
             show_sidebar: sidebar_enabled(&launch.args, crate::config::get().workspace.sidebar),
             compact_sidebar_open: false,
             compact_sidebar_motion: responsive::VisibilityMotion::default(),
@@ -1537,6 +1544,8 @@ impl Workspace {
             show_sidebar: true,
             sidebar_custom_width: SIDEBAR_WIDTH,
             sidebar_resizing: false,
+            show_source_control: false,
+            source_control: Default::default(),
             show_minimap: false,
             layout_mode: crate::config::LayoutMode::FolderTabs,
             folder_frame: Default::default(),
@@ -9159,6 +9168,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::move_panel_to_last))
             .on_action(cx.listener(Self::open_change_review))
             .on_action(cx.listener(Self::close_change_review))
+            .on_action(cx.listener(Self::toggle_source_control))
             .on_action(cx.listener(Self::new_panel))
             .on_action(cx.listener(Self::new_panel_in_pinned_directory))
             .on_action(cx.listener(Self::fork_panel))
@@ -9253,7 +9263,10 @@ impl Render for Workspace {
                                         el.child(self.render_showcase_cue(cue, window))
                                     }),
                             ),
-                    ),
+                    )
+                    .when(self.show_source_control, |root| {
+                        root.child(self.render_source_control(cx))
+                    }),
             )
             .when(
                 compact && self.show_sidebar && self.compact_sidebar_open,

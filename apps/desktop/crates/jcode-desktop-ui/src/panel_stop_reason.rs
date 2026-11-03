@@ -82,7 +82,7 @@ fn connection_lost_detail(reason: &str) -> String {
 }
 
 impl Panel {
-    pub(super) fn record_stop(&mut self, notice: StopNotice) {
+    pub(super) fn record_stop(&mut self, notice: StopNotice, cx: &mut Context<Self>) {
         self.pause_queue_for_stop();
         self.sound_events.cancel();
         // Reconnect can replay processing and usage without delivering new
@@ -99,7 +99,7 @@ impl Panel {
         if replayed_stop {
             self.response_stats.finish();
         }
-        self.finish_response();
+        self.finish_response(cx);
         // Settle tool spinners without claiming the underlying command completed
         // successfully. Detached background tasks remain independent.
         for item in self
@@ -143,7 +143,7 @@ impl Panel {
                 failure: false,
                 provisional: true,
                 raw: Some(reason.to_owned()),
-            });
+            }, cx);
         }
         self.status = format!("lost: {}", crate::friendly_error::summarize(reason));
         cx.notify();

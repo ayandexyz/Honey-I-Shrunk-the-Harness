@@ -525,6 +525,7 @@ impl DiffView {
                                 div()
                                     .min_w_0()
                                     .flex_1()
+                                    .truncate()
                                     .font_family(theme.FONT_MONO)
                                     .text_color(theme.TEXT)
                                     .child(file.path.clone()),

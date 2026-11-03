@@ -220,7 +220,7 @@ mod tests {
                 );
                 panel.apply(&event(json!({"ev":"reasoning_done"})), cx);
                 let snapshot = panel.transcript_snapshot();
-                panel.finish_response();
+                panel.finish_response(cx);
                 panel.restore_transcript(snapshot);
                 assert!(panel.activity_active());
                 assert_eq!(panel.status_line(), "Thinking");

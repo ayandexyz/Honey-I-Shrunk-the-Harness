@@ -124,6 +124,12 @@ fn fingerprint(item: &Item, prompt_expanded: bool, tool_expanded: bool) -> u64 {
             notice.failure.hash(&mut state);
         }
         Item::CacheMiss(notice) => notice.text().hash(&mut state),
+        Item::TurnChanges(summary) => {
+            summary.directory.hash(&mut state);
+            summary.files.len().hash(&mut state);
+            summary.additions.hash(&mut state);
+            summary.deletions.hash(&mut state);
+        }
         Item::Image(_) | Item::ResponseStats(_) | Item::Todos(_) => {}
         Item::Applet(instance) => instance.hash(&mut state),
     }
@@ -255,7 +261,11 @@ pub(super) fn segments_with_display(
         }
         Item::CacheMiss(notice) => push(format!("{index}-kv-cache-miss"), notice.text()),
         // Pinned todos and non-text chrome are outside the transcript document.
-        Item::Todos(_) | Item::Image(_) | Item::ResponseStats(_) | Item::Applet(_) => {}
+        Item::Todos(_)
+        | Item::Image(_)
+        | Item::ResponseStats(_)
+        | Item::Applet(_)
+        | Item::TurnChanges(_) => {}
     }
     result
 }

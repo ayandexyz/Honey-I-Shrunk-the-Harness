@@ -200,7 +200,7 @@ impl Panel {
             .cloned();
     }
 
-    pub(super) fn reconcile_reconnect_response(&mut self) {
+    pub(super) fn reconcile_reconnect_response(&mut self, cx: &mut Context<Self>) {
         if let Some(response) = self.reconnect_response.take() {
             // Do not flush a different live suffix and append an older stored
             // segment after it. Only equal/extended text can reconcile a stream.
@@ -208,7 +208,7 @@ impl Panel {
             {
                 self.recover_response(&response.content);
                 if let Some(stats) = response.response_stats {
-                    self.finish_response();
+                    self.finish_response(cx);
                     let mut restored: response_stats::ResponseStats = stats.into();
                     if let Some(Item::ResponseStats(existing)) = self.items.last_mut() {
                         restored.duration_secs = restored.duration_secs.or(existing.duration_secs);
