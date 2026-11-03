@@ -8,6 +8,7 @@ pub mod command_workflows;
 pub mod diff;
 pub mod diff_model;
 pub mod friendly_error;
+pub mod git_status;
 pub mod learning;
 pub mod pdf_render;
 pub mod platform_dirs;
