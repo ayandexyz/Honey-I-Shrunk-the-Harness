@@ -16,6 +16,7 @@ mod diff_view;
 mod effort;
 mod example_prompts;
 mod fps_counter;
+mod git_ops;
 mod html_preview;
 mod inline_image;
 mod input;
@@ -106,8 +107,8 @@ use workspace::{
     FocusRight, FocusUp, ForkPanel, MaximizeWidth, MovePanelDown, MovePanelLeft, MovePanelRight,
     MovePanelToFirst, MovePanelToLast, MovePanelUp, NewHelpSession, NewPanel,
     NewPanelInPinnedDirectory, NewTerminal, OpenFolder, OpenGmail, OpenOrchestration, OpenTodoist,
-    Quit, ToggleHints, ToggleOverview, ToggleShowcase, ToggleSidebar, WidthPreset1, WidthPreset2,
-    WidthPreset3, WidthPreset4, Workspace,
+    Quit, ToggleHints, ToggleOverview, ToggleShowcase, ToggleSidebar, ToggleSourceControl,
+    WidthPreset1, WidthPreset2, WidthPreset3, WidthPreset4, Workspace,
 };
 
 /// The workspace keymap. Extracted so tests can dispatch through exactly the
@@ -208,6 +209,7 @@ pub fn bind_workspace_keys(cx: &mut App) {
         KeyBinding::new("ctrl-shift-n", NewPanel, None),
         KeyBinding::new("ctrl-t", NewPanel, None),
         KeyBinding::new("ctrl-o", OpenFolder, None),
+        KeyBinding::new("ctrl-shift-g", ToggleSourceControl, None),
     ]);
 
     // GPUI names the native macOS Command modifier `cmd`. Keep these explicit
