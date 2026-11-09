@@ -74,6 +74,16 @@ export function resolveVersion(): string {
   }
 }
 
+/**
+ * `--settings` takes a settings file or an inline JSON document. A path is
+ * resolved here, against the directory freecode was launched from, because
+ * the backend may run from a different one.
+ */
+export function launchSettingsValue(value: string, cwd: string): string {
+  const trimmed = value.trim();
+  return trimmed.startsWith("{") ? trimmed : path.resolve(cwd, trimmed);
+}
+
 export function createCli(extraCommands: CommandModule[] = []) {
   // Print logo before yargs to avoid Unicode/formatting corruption
   if (process.argv.includes("--help") || process.argv.includes("-h")) {
@@ -87,6 +97,20 @@ export function createCli(extraCommands: CommandModule[] = []) {
       alias: "help",
       describe: "show help",
       type: "boolean",
+    })
+    .option("settings", {
+      describe:
+        "extra hooks for this process: a settings.json path or inline JSON",
+      type: "string",
+      global: true,
+    })
+    .middleware((argv) => {
+      if (typeof argv.settings === "string" && argv.settings.trim() !== "") {
+        process.env.FREECODE_SETTINGS = launchSettingsValue(
+          argv.settings,
+          process.cwd(),
+        );
+      }
     })
     .version(resolveVersion())
     .alias("v", "version")
