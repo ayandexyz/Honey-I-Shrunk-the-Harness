@@ -163,7 +163,6 @@ import {
   getPruneState,
   type PruneCandidate,
 } from "./prune-state.js";
-import { applySystemPromptHookRewrite } from "./apply-system-hook.js";
 import { getFrozenSessionContext } from "../context/session-context.js";
 import { ensureWatching } from "../context/tree-watcher.js";
 import { MemoryService } from "../compaction/index.js";
@@ -995,6 +994,31 @@ export class AgentLoop {
         BusEvents.sessionCreated(this.state.sessionId, input.projectPath);
       }
 
+      // UserPromptSubmit — once per prompt a person wrote. Harness-written
+      // prompts (task notifications, context) and a subagent's brief are not
+      // one. A hook may rewrite the prompt, add context, or refuse it before
+      // anything is stored or sent.
+      let prompt = input.prompt;
+      let promptContext: string | undefined;
+      if (!input.synthetic && !input.role) {
+        const submitted = await this.hooks.runUserPromptSubmit(prompt, {
+          sessionId: this.state.sessionId,
+          turnCount: this.state.turnCount,
+          cwd: this.state.projectPath,
+        });
+        if (submitted.blocked) {
+          return await this.fail(
+            "Prompt blocked by a UserPromptSubmit hook",
+            submitted.blockReason,
+            { kind: "hook_blocked", reason: submitted.blockReason },
+          );
+        }
+        if (typeof submitted.modifiedPrompt === "string") {
+          prompt = submitted.modifiedPrompt;
+        }
+        promptContext = submitted.additionalContext;
+      }
+
       // Construct and push the new user message to history and store.
       // Attached images ride along as image parts, but only where the model can
       // actually see them — a text-only model rejects image content outright.
@@ -1029,8 +1053,8 @@ export class AgentLoop {
         // An image-only prompt carries no text. Providers reject empty text
         // blocks, so omit the part rather than send a blank one.
         parts: [
-          ...(input.prompt
-            ? [{ type: "text" as const, content: input.prompt }]
+          ...(prompt
+            ? [{ type: "text" as const, content: prompt }]
             : []),
           ...imageParts,
         ],
@@ -1041,14 +1065,15 @@ export class AgentLoop {
       // is persisted under — that id is what session.tree lists and what
       // session.rewind targets, so the two must be the same id, not two
       // randomUUIDs (spec 2026-09-23-checkpoints-rewind §4.1).
-      await this.captureCheckpoint(initialUserMessage.id, input.prompt);
+      await this.captureCheckpoint(initialUserMessage.id, prompt);
       await this.appendUserMessage(
-        input.prompt,
+        prompt,
         imageParts,
         input.synthetic ? { synthetic: input.synthetic } : {},
         initialUserMessage.id,
       );
-      this.memory.addMessage("user", input.prompt);
+      this.memory.addMessage("user", prompt);
+      if (promptContext) await this.appendContextMessage(promptContext);
 
       let totalInputTokens = 0;
       let totalOutputTokens = 0;
@@ -1128,7 +1153,7 @@ export class AgentLoop {
           // default (D8); fails closed and costs nothing when it does.
           const spent = await this.maybeRedirect(
             healthAction,
-            input.prompt,
+            prompt,
             input.provider,
             input.model,
           );
@@ -2294,34 +2319,7 @@ export class AgentLoop {
       } else {
         this.memoryInRequest = false;
       }
-      const blocks = [...systemBlocks, ...sessionBlocks];
-
-      // UserPromptSubmit Hook — can modify the joined system before send.
-      // Must not collapse static + session into one cache:true blob. The
-      // ephemeral tail (todos/memory/reminders) is deliberately NOT part of
-      // what the hook sees: it is per-request message content now, not system
-      // prompt. See apply-system-hook.ts.
-      const joinedSystem = blocks.map((b) => b.text).join("\n\n");
-      const hookResult = await this.hooks.runUserPromptSubmit(joinedSystem, {
-        sessionId: this.state.sessionId,
-        turnCount: this.state.turnCount,
-        cwd: this.state.projectPath,
-      });
-      const finalSystemBlocks = applySystemPromptHookRewrite(
-        systemBlocks,
-        sessionBlocks,
-        hookResult.modifiedPrompt,
-      );
-      // A hook that rewrites the system prompt changes the first cache
-      // breakpoint, so everything after it is re-written. Legitimate, but only
-      // if it says so — otherwise D2 reports it as an unexplained bust.
-      if (hookResult.modifiedPrompt) {
-        recordInvalidation(
-          this.state.sessionId,
-          "system prompt hook",
-          "a UserPromptSubmit hook rewrote the system prompt",
-        );
-      }
+      const finalSystemBlocks = [...systemBlocks, ...sessionBlocks];
 
       // The threshold check is a prediction, and predictions miss: one turn can
       // add more than the buffer covers, or the session may have been resumed

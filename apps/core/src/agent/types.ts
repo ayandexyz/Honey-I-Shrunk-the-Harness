@@ -365,6 +365,8 @@ export type LoopFailure =
   | { kind: "turn_cap" }
   | { kind: "timeout" }
   | { kind: "stuck"; reason?: string }
+  /** A UserPromptSubmit hook refused the prompt before the model saw it. */
+  | { kind: "hook_blocked"; reason?: string }
   | { kind: "provider"; message: string };
 
 export interface LoopResult {

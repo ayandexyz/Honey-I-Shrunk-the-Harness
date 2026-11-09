@@ -31,7 +31,10 @@ import { runSessionStartHooks } from "./SessionStart.js";
 import { runStopHooks } from "./Stop.js";
 import { runPreCompactHooks } from "./PreCompact.js";
 import { runPostCompactHooks } from "./PostCompact.js";
-import { runUserPromptSubmitHooks } from "./UserPromptSubmit.js";
+import {
+  runUserPromptSubmitHooks,
+  type UserPromptSubmitResult,
+} from "./UserPromptSubmit.js";
 import { runSubagentStartHooks } from "./SubagentStart.js";
 import { runSubagentStopHooks } from "./SubagentStop.js";
 import { runTurnStartHooks } from "./TurnStart.js";
@@ -115,10 +118,7 @@ export interface HookRuntime {
   runUserPromptSubmit(
     prompt: string,
     ctx: HookContext,
-  ): Promise<{
-    modifiedPrompt?: string;
-    additionalContext?: string;
-  }>;
+  ): Promise<UserPromptSubmitResult>;
 
   // Subagent hooks
   runSubagentStart(
@@ -279,10 +279,7 @@ export function createHookRuntime(): HookRuntime {
     async runUserPromptSubmit(
       prompt: string,
       ctx: HookContext,
-    ): Promise<{
-      modifiedPrompt?: string;
-      additionalContext?: string;
-    }> {
+    ): Promise<UserPromptSubmitResult> {
       return runUserPromptSubmitHooks(prompt, ctx);
     },
 
