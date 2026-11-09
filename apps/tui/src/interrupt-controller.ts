@@ -86,7 +86,7 @@ export class InterruptController {
 
   // Runs the same shutdown + resume-hint sequence as a confirmed double
   // Ctrl+C, without needing the double-press to have actually landed. A
-  // supervising process (e.g. agent-board) that drives this TUI over a PTY
+  // supervising process (a board, a test harness) that drives this TUI over a PTY
   // sends Ctrl+C twice and then SIGTERM as a fallback; if the first Ctrl+C
   // got consumed by an in-flight turn (isTurnActive() cancel) instead of
   // arming exit, the second one only arms it and the resume hint never
