@@ -44,20 +44,103 @@ The hooks system provides a way to intercept, modify, and respond to events duri
                                    └──────────────┘
 ```
 
-## 10 Hook Event Types
+## Hook Event Types
 
-| Event               | Purpose                                    | Can Block | Can Modify |
-| ------------------- | ------------------------------------------ | --------- | ---------- |
-| `SessionStart`      | Initialize session state                   | No        | Yes        |
-| `UserPromptSubmit`  | Modify prompt before sending to model      | No        | Yes        |
-| `PreToolUse`        | Validate/modify tool call before execution | Yes       | Yes        |
-| `PermissionRequest` | Request user approval for risky operations | Yes       | Yes        |
-| `PostToolUse`       | Process tool results, inject context       | No        | Yes        |
-| `PreCompact`        | Inspect/modify context before compaction   | Yes       | No         |
-| `PostCompact`       | Verify/log compaction results              | No        | Yes        |
-| `SubagentStart`     | Initialize subagent context                | No        | Yes        |
-| `SubagentStop`      | Collect results from subagent              | No        | Yes        |
-| `Stop`              | Cleanup on agent termination               | No        | No         |
+| Event                | Purpose                                              | Can Block | Can Modify |
+| -------------------- | ---------------------------------------------------- | --------- | ---------- |
+| `SessionStart`       | Session's first prompt                               | No        | Yes        |
+| `UserPromptSubmit`   | Once per prompt a person wrote, before it is stored  | Yes       | Yes        |
+| `PreToolUse`         | Validate/modify tool call before execution           | Yes       | Yes        |
+| `PermissionRequest`  | A tool call the rules would ask about                | Yes       | Yes        |
+| `PostToolUse`        | Process tool results, inject context                 | No        | Yes        |
+| `PostToolUseFailure` | A tool call failed                                   | No        | No         |
+| `Notification`       | A person is needed (typed, see below)                | No        | No         |
+| `PreCompact`         | Inspect/modify context before compaction             | Yes       | No         |
+| `PostCompact`        | Verify/log compaction results                        | No        | Yes        |
+| `SubagentStart`      | Initialize subagent context                          | No        | Yes        |
+| `SubagentStop`       | Collect results from subagent                        | No        | Yes        |
+| `TurnStart`/`TurnEnd`| Per model turn                                       | No        | No         |
+| `Stop`               | The run for one prompt ended                         | No        | No         |
+| `SessionEnd`         | The session ended, whatever ended it                 | No        | No         |
+
+`UserPromptSubmit` skips harness-written prompts (task notifications, context)
+and subagent briefs. A block refuses the prompt before anything is stored or
+sent; `modifiedOutput` replaces the prompt; context is added as a context
+message after it.
+
+## Hooks for other programs
+
+FreeCode has no code for any particular supervisor — a board, a notifier, a CI
+wrapper. Such a program drives FreeCode through settings.json hooks alone, the
+same contract Claude Code offers, so a tool written for Claude Code's hooks
+works here unchanged.
+
+**Scopes**, lowest priority first:
+
+1. user — `~/.freecode/settings.json`
+2. project — `.freecode/settings.json`
+3. launch — `freecode --settings <file | inline JSON>` (any command; it is
+   carried to the backend as `FREECODE_SETTINGS`)
+
+Every scope's hooks run. A hook replaces another scope's only when both carry
+the same explicit `name`.
+
+**Entry shapes** — flat (`{ "name", "command", ... }`) or Claude Code's nested
+`{ "matcher", "hooks": [ ... ] }`. Each handler is `type: "command"` (default)
+or `type: "http"`:
+
+```json
+{
+  "hooks": {
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:7000/hooks/s1",
+            "headers": { "X-Launch": "$LAUNCH_ID" },
+            "allowedEnvVars": ["LAUNCH_ID"],
+            "timeout": 600
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+`timeout` is seconds. A header interpolates `$NAME` / `${NAME}` only for names
+in `allowedEnvVars`; any other reads as empty.
+
+**Input** — every external hook gets one JSON document: on stdin for a command,
+as the request body for http. Claude Code's field names:
+
+| Field | Events |
+|---|---|
+| `session_id`, `hook_event_name`, `cwd` | all |
+| `agent_id`, `agent_type` | inside a subagent |
+| `tool_name`, `tool_input`, `tool_use_id` | `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PostToolUseFailure` |
+| `tool_response` / `error` | `PostToolUse` / `PostToolUseFailure` |
+| `prompt` | `UserPromptSubmit` |
+| `message`, `notification_type` | `Notification` |
+| `source` | `SessionStart` (`startup`) |
+| `reason` | `SessionEnd`: `clear` (another session took over the process) or `other` (exit) |
+| `stop_hook_active` | `Stop` |
+| the event's own fields, snake_cased | everything else |
+
+`notification_type` is `permission_prompt` (a permission dialog is showing) or
+`question` (the `question` tool is waiting; `message` is the question). A
+Notification matcher selects by type.
+
+**Output** — command stdout on exit `0`, or an http `2xx` body. FreeCode's JSON
+(`block`, `reason`, `modifiedInput`, `modifiedOutput`, `context`,
+`permissionDecision`) and Claude Code's (`decision: "block"`,
+`continue: false` + `stopReason`, and `hookSpecificOutput` with
+`permissionDecision`, `permissionDecisionReason`, `updatedInput`,
+`additionalContext`, or a PermissionRequest `decision: {behavior, updatedInput,
+message}`) are both read. An http hook that answers non-`2xx`, cannot be
+reached, or times out is a non-blocking error: only an explicit decision
+blocks.
 
 ## Usage
 
@@ -124,6 +207,9 @@ registerHook("PreToolUse", "block-dangerous", {
   timeout: 5000,
 });
 ```
+
+The event document (see "Hooks for other programs") is written to the
+command's stdin.
 
 **Environment Variables Passed:**
 
@@ -343,9 +429,13 @@ src/hooks/
 ├── runtime.ts               # HookRuntime interface + implementation
 ├── registry.ts              # Hook registration + matching
 ├── types.ts                 # Type definitions
+├── payload.ts               # The JSON document external hooks receive
+├── output.ts                # Reading a hook's reply (FreeCode + Claude Code shapes)
+├── settings.ts              # settings.json scopes: user, project, launch
 ├── executors/
 │   ├── index.ts             # Coordinator - executes hooks
-│   ├── command.ts           # Shell command execution
+│   ├── command.ts           # Shell command execution (document on stdin)
+│   ├── http.ts              # POST the document to a URL
 │   └── callback.ts          # Callback function execution
 ├── PreToolUse.ts            # Pre-tool hooks
 ├── PostToolUse.ts           # Post-tool hooks
@@ -356,5 +446,7 @@ src/hooks/
 ├── UserPromptSubmit.ts      # User prompt hooks
 ├── SubagentStart.ts         # Subagent start hooks
 ├── SubagentStop.ts          # Subagent stop hooks
-└── Stop.ts                  # Stop hooks
+├── Stop.ts                  # Stop hooks
+├── Notification.ts          # Typed notifications (permission_prompt, question)
+└── SessionEnd.ts            # Session end hooks
 ```
