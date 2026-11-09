@@ -46,3 +46,54 @@ test("no answers field at all still falls through to the normal ask", async () =
   assert.equal(res.success, false);
   assert.ok(!res.success && res.error.includes("No frontend connected"), res.success ? "" : res.error);
 });
+
+test("asking a person raises a question notification first", async () => {
+  const { registerHook, unregisterAllHooks } = await import("../hooks/registry.js");
+  unregisterAllHooks("settings");
+  const seen: Array<Record<string, unknown>> = [];
+  registerHook("Notification", "spy", {
+    type: "callback",
+    callback: async (input) => {
+      seen.push(input.toolInput);
+      return { action: "continue" };
+    },
+  });
+  try {
+    await QuestionTool.execute(
+      {
+        questions: [
+          ...questions,
+          { question: "A second question?", options: [{ label: "Yes" }] },
+        ],
+      },
+      { ...ctx, sessionId: "s1" },
+    );
+    assert.deepEqual(seen, [
+      { message: "Which approach do you want? (+1 more)", notificationType: "question" },
+    ]);
+  } finally {
+    unregisterAllHooks("settings");
+  }
+});
+
+test("pre-filled answers raise no notification", async () => {
+  const { registerHook, unregisterAllHooks } = await import("../hooks/registry.js");
+  unregisterAllHooks("settings");
+  let fired = false;
+  registerHook("Notification", "spy", {
+    type: "callback",
+    callback: async () => {
+      fired = true;
+      return { action: "continue" };
+    },
+  });
+  try {
+    await QuestionTool.execute(
+      { questions, answers: { "Which approach do you want?": "Option A" } },
+      ctx,
+    );
+    assert.equal(fired, false);
+  } finally {
+    unregisterAllHooks("settings");
+  }
+});

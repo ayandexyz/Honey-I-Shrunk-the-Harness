@@ -3580,6 +3580,7 @@ export class AgentLoop {
           await this.hooks.runNotification(
             `Permission needed: ${toolCall.tool}${evaluation.matchedRule ? ` — ${evaluation.matchedRule}` : ""}`,
             hookContext,
+            "permission_prompt",
           );
           const outcome = this.permissionSettings
             ? await promptForPermission({

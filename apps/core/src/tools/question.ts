@@ -7,6 +7,7 @@ import type { ToolContext } from "./types.js";
 import type { Tool, ToolExecutionResult, JsonSchema } from "./tool.types.js";
 import { buildTool } from "./factory.js";
 import { askQuestion } from "../bus/index.js";
+import { runNotificationHooks } from "../hooks/Notification.js";
 
 interface QuestionOption {
   label: string;
@@ -297,6 +298,19 @@ async function executeQuestion(
 
   const formatted = formatQuestions({ questions });
 
+  // Whoever supervises this session (a board, a desktop notifier) learns a
+  // person is now needed. A failing hook must never stop the question.
+  await runNotificationHooks(
+    questionSummary(questions),
+    {
+      sessionId: ctx.sessionId ?? "",
+      turnCount: 0,
+      cwd: ctx.cwd,
+      toolUseId: ctx.toolCallId,
+    },
+    "question",
+  ).catch(() => {});
+
   try {
     const answers = await askQuestion(requestId, questions, ctx.sessionId);
 
@@ -322,6 +336,11 @@ async function executeQuestion(
       error: `Question was not answered: ${error instanceof Error ? error.message : "Unknown error"}. You can continue without this information or ask again.`,
     };
   }
+}
+
+function questionSummary(questions: Question[]): string {
+  const first = questions[0]?.question ?? "";
+  return questions.length > 1 ? `${first} (+${questions.length - 1} more)` : first;
 }
 
 // =============================================================================

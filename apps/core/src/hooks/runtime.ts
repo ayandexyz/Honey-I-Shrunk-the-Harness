@@ -146,7 +146,11 @@ export interface HookRuntime {
   }>;
 
   // Notification hook
-  runNotification(message: string, ctx: HookContext): Promise<void>;
+  runNotification(
+    message: string,
+    ctx: HookContext,
+    notificationType?: string,
+  ): Promise<void>;
 
   // Utility
   getHooksForEvent(event: HookEventName): ReturnType<typeof getHooksForEvent>;
@@ -335,8 +339,12 @@ export function createHookRuntime(): HookRuntime {
     // Notification Hook - Called when agent needs user attention
     // Can: alert the user (desktop notification, sound, etc.)
     // =========================================================================
-    async runNotification(message: string, ctx: HookContext): Promise<void> {
-      return runNotificationHooks(message, ctx);
+    async runNotification(
+      message: string,
+      ctx: HookContext,
+      notificationType?: string,
+    ): Promise<void> {
+      return runNotificationHooks(message, ctx, notificationType);
     },
 
     // =========================================================================

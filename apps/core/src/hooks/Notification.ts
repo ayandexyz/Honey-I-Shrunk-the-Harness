@@ -3,7 +3,7 @@
 // =============================================================================
 
 import type { HookContext } from "./types.js";
-import { getHooksForEvent } from "./registry.js";
+import { getMatchingHooks } from "./registry.js";
 import { executeHooks } from "./executors/index.js";
 
 // =============================================================================
@@ -13,17 +13,19 @@ import { executeHooks } from "./executors/index.js";
 export async function runNotificationHooks(
   message: string,
   ctx: HookContext,
+  notificationType?: string,
 ): Promise<void> {
-  const hooks = getHooksForEvent("Notification");
+  // The type stands in for the tool name, so a matcher selects notifications
+  // by type the way Claude Code's Notification matchers do.
+  const input = {
+    toolName: notificationType ?? "Notification",
+    toolInput: notificationType ? { message, notificationType } : { message },
+  };
 
+  const hooks = getMatchingHooks("Notification", input, ctx);
   if (hooks.length === 0) {
     return;
   }
-
-  const input = {
-    toolName: "Notification",
-    toolInput: { message },
-  };
 
   await executeHooks(hooks, input, ctx);
 }
