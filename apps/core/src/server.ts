@@ -643,6 +643,7 @@ async function endSessionOnce(
   const info = getSession(sessionId);
   await endSession(sessionId, {
     reason,
+    cwd: info?.projectPath || undefined,
     also: () => messageQueues.delete(sessionId),
     flush:
       options.flush && info

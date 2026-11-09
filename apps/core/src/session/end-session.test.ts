@@ -161,3 +161,28 @@ test("exit reports memory work that outlives its drain budget", async () => {
   assert.ok(Date.now() - startedAt < 40, "the configured budget bounds exit");
   await slow;
 });
+
+test("ending a session runs SessionEnd hooks once, in Claude Code's reason vocabulary", async () => {
+  const { registerHook, unregisterAllHooks } = await import("../hooks/registry.js");
+  resetEndedSessions();
+  unregisterAllHooks("settings");
+  const seen: Array<{ reason: unknown; cwd: unknown }> = [];
+  registerHook("SessionEnd", "spy", {
+    type: "callback",
+    callback: async (input, context) => {
+      seen.push({ reason: input.toolInput.reason, cwd: context.cwd });
+      return { action: "continue" };
+    },
+  });
+  try {
+    await endSession("end-hook-exit", { reason: "exit", cwd: "/repo" });
+    await endSession("end-hook-exit", { reason: "exit", cwd: "/repo" });
+    await endSession("end-hook-switch", { reason: "switch", cwd: "/repo" });
+    assert.deepEqual(seen, [
+      { reason: "other", cwd: "/repo" },
+      { reason: "clear", cwd: "/repo" },
+    ]);
+  } finally {
+    unregisterAllHooks("settings");
+  }
+});

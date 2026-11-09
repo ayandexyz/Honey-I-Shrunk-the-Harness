@@ -13,6 +13,10 @@
 // =============================================================================
 
 import { disposeSessionMemory } from "../memory/index.js";
+import {
+  runSessionEndHooks,
+  type SessionEndHookReason,
+} from "../hooks/SessionEnd.js";
 import { disposeAgentsForRoot } from "../agent/registry/index.js";
 import {
   clearLedger,
@@ -55,6 +59,12 @@ const EXIT_FLUSH_BUDGET_MS = envInt("FREECODE_EXIT_FLUSH_BUDGET_MS", 5_000, {
   min: 0,
 });
 
+// Switching, archiving or deleting hands the process to another session,
+// which is Claude Code's "clear"; only the process leaving is a real exit.
+function hookReason(reason: SessionEndReason): SessionEndHookReason {
+  return reason === "exit" ? "other" : "clear";
+}
+
 export interface EndSessionOptions {
   reason: SessionEndReason;
   /**
@@ -65,6 +75,8 @@ export interface EndSessionOptions {
   flush?: () => Promise<unknown>;
   /** Extra per-session cleanup owned by the caller (e.g. the message queue). */
   also?: () => void;
+  /** The session's project, reported to SessionEnd hooks as their cwd. */
+  cwd?: string;
   /** Test/embedding override; production exit paths use the configured budget. */
   memoryDrainTimeoutMs?: number;
 }
@@ -125,6 +137,15 @@ export async function endSession(
   options: EndSessionOptions,
 ): Promise<EndSessionResult> {
   if (!markEnded(sessionId)) return NO_PENDING_MEMORY;
+  // Told first, while the session still exists. A hook is bounded by its own
+  // timeout and can never stop the session from ending.
+  await runSessionEndHooks(hookReason(options.reason), {
+    sessionId,
+    turnCount: 0,
+    cwd: options.cwd,
+  }).catch((error: unknown) => {
+    logger.debug("[EndSession] SessionEnd hook failed", { error });
+  });
   // Before the disposers kill its background tasks: a task stopped by the
   // session ending must be reported on resume, not quietly erased. A deleted
   // session has no resume to report to.
