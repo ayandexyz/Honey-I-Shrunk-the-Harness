@@ -7,11 +7,15 @@ import type { HookContext, HookCommand, RegisteredHook } from "../types.js";
 import { executeCommandHook } from "./command.js";
 import { executeCallbackHook } from "./callback.js";
 import { executePromptHook } from "./prompt.js";
+import { executeHttpHook } from "./http.js";
+import { buildHookPayload } from "../payload.js";
+import type { HookEventName } from "../types.js";
 import { bus } from "../../bus/index.js";
 
 export { executeCommandHook } from "./command.js";
 export { executeCallbackHook } from "./callback.js";
 export { executePromptHook } from "./prompt.js";
+export { executeHttpHook } from "./http.js";
 
 // =============================================================================
 // Execute a single hook
@@ -31,7 +35,12 @@ export async function executeHook(
   } as any);
 
   try {
-    const result = await executeHookCommand(hook.command, input, context);
+    const result = await executeHookCommand(
+      hook.event,
+      hook.command,
+      input,
+      context,
+    );
 
     if (!result.success && result.blocked) {
       bus.publish({
@@ -58,6 +67,7 @@ export async function executeHook(
 // =============================================================================
 
 async function executeHookCommand(
+  event: HookEventName,
   matcher: HookCommand,
   input: ToolCallInput,
   context: HookContext,
@@ -66,6 +76,12 @@ async function executeHookCommand(
     case "command":
       return executeCommandHook(matcher.command, input, context, {
         shell: matcher.shell,
+        timeout: matcher.timeout ? matcher.timeout * 1000 : undefined,
+        payload: buildHookPayload(event, input, context),
+      });
+
+    case "http":
+      return executeHttpHook(matcher, buildHookPayload(event, input, context), {
         timeout: matcher.timeout ? matcher.timeout * 1000 : undefined,
       });
 

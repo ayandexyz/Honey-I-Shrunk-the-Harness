@@ -78,3 +78,33 @@ test("plain stdout on exit 0 is additionalContext", async () => {
   assert.equal(result.success, true);
   assert.equal(result.additionalContext, "plain");
 });
+
+const readStdinField = (field: string) =>
+  `node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).${field}))'`;
+
+test("a hook reads the event document on stdin", async () => {
+  const result = await executeCommandHook(readStdinField("hook_event_name"), input, ctx, {
+    payload: { hook_event_name: "PreToolUse", tool_name: "bash" },
+  });
+  assert.equal(result.success, true);
+  assert.equal(result.additionalContext, "PreToolUse");
+});
+
+test("a hook that never reads stdin still completes", async () => {
+  const result = await executeCommandHook("echo done", input, ctx, {
+    payload: { tool_input: { content: "x".repeat(512 * 1024) } },
+  });
+  assert.equal(result.success, true);
+  assert.equal(result.additionalContext, "done");
+});
+
+test("Claude Code's block decision on stdout blocks", async () => {
+  const result = await executeCommandHook(
+    `echo '{"decision":"block","reason":"tests red"}'`,
+    input,
+    ctx,
+  );
+  assert.equal(result.success, false);
+  assert.equal(result.blocked, true);
+  assert.equal(result.blockReason, "tests red");
+});

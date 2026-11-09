@@ -24,6 +24,7 @@ export const HOOK_EVENT_NAMES = [
   "SubagentStart", // When a sub-agent is spawned
   "SubagentStop", // When a sub-agent completes
   "Stop", // When agent loop terminates
+  "SessionEnd", // When a session ends (switched away, archived, deleted, process exit)
   "TurnStart", // Before each turn — inject context, per-turn setup
   "TurnEnd", // After each turn — cost/usage tracking, logging
   "Notification", // When agent needs user attention (e.g. approval)
@@ -101,7 +102,7 @@ export type HookExecutionResult =
 // Hook Command Types (how hooks are defined in config)
 // =============================================================================
 
-export type HookType = "command" | "prompt" | "callback";
+export type HookType = "command" | "http" | "prompt" | "callback";
 
 export interface BaseHookCommand {
   type: HookType;
@@ -116,6 +117,15 @@ export interface CommandHook extends BaseHookCommand {
   shell?: "bash" | "powershell";
 }
 
+/** POSTs the event document to `url`; the reply is read like command stdout. */
+export interface HttpHook extends BaseHookCommand {
+  type: "http";
+  url: string;
+  headers?: Record<string, string>;
+  /** Variables a header may interpolate as `$NAME`; all others read as empty. */
+  allowedEnvVars?: string[];
+}
+
 export interface PromptHook extends BaseHookCommand {
   type: "prompt";
   prompt: string;
@@ -128,7 +138,7 @@ export interface CallbackHook extends BaseHookCommand {
   internal?: boolean;
 }
 
-export type HookCommand = CommandHook | PromptHook | CallbackHook;
+export type HookCommand = CommandHook | HttpHook | PromptHook | CallbackHook;
 
 // =============================================================================
 // Hook Result for callback execution

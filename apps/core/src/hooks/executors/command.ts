@@ -9,12 +9,16 @@ import type {
   HookExecutionResult,
   ToolCallInput,
 } from "../types.js";
+import type { HookPayload } from "../payload.js";
+import { parseHookOutput } from "../output.js";
 
 const HOOK_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes default
 
 export interface CommandExecutorOptions {
   shell?: "bash" | "powershell";
   timeout?: number;
+  /** The event document, written to the hook's stdin (Claude Code's contract). */
+  payload?: HookPayload;
 }
 
 // Build the environment a shell hook sees. Extracted so the contract can be
@@ -78,6 +82,11 @@ export async function executeCommandHook(
       windowsHide: true,
     });
 
+    // A hook may exit without reading its input; the broken pipe that leaves
+    // behind is not the hook's failure.
+    child.stdin.on("error", () => {});
+    child.stdin.end(options.payload ? JSON.stringify(options.payload) : "");
+
     let stdout = "";
     let stderr = "";
 
@@ -94,23 +103,6 @@ export async function executeCommandHook(
 
       if (timedOut) {
         return; // Already resolved with timeout error
-      }
-
-      const trimmed = stdout.trim();
-      let parsed: {
-        block?: boolean;
-        reason?: string;
-        modifiedInput?: Record<string, unknown>;
-        modifiedOutput?: unknown;
-        context?: string;
-        permissionDecision?: "allow" | "deny" | "ask";
-      } | undefined;
-      if (trimmed.startsWith("{")) {
-        try {
-          parsed = JSON.parse(trimmed);
-        } catch {
-          // Not JSON, treat as plain text
-        }
       }
 
       // Exit code 2 = blocking error (special hook protocol)
@@ -131,38 +123,12 @@ export async function executeCommandHook(
         resolve({
           success: false,
           blocked: true,
-          blockReason: parsed?.reason || `Exit code ${code}`,
+          blockReason: reasonFrom(stdout) || `Exit code ${code}`,
         });
         return;
       }
 
-      if (parsed) {
-        if (parsed.block === true) {
-          resolve({
-            success: false,
-            blocked: true,
-            blockReason: parsed.reason,
-          });
-        } else {
-          const permissionDecision = parsed.permissionDecision === "allow" || parsed.permissionDecision === "deny" ||
-            parsed.permissionDecision === "ask"
-            ? parsed.permissionDecision
-            : undefined;
-          resolve({
-            success: true,
-            modifiedInput: parsed.modifiedInput,
-            modifiedOutput: parsed.modifiedOutput,
-            additionalContext: parsed.context,
-            permissionDecision,
-          });
-        }
-        return;
-      }
-
-      resolve({
-        success: true,
-        additionalContext: trimmed || undefined,
-      });
+      resolve(parseHookOutput(stdout));
     });
 
     child.on("error", (err) => {
@@ -174,4 +140,15 @@ export async function executeCommandHook(
       });
     });
   });
+}
+
+function reasonFrom(stdout: string): string | undefined {
+  const trimmed = stdout.trim();
+  if (!trimmed.startsWith("{")) return undefined;
+  try {
+    const reason = (JSON.parse(trimmed) as { reason?: unknown }).reason;
+    return typeof reason === "string" ? reason : undefined;
+  } catch {
+    return undefined;
+  }
 }
