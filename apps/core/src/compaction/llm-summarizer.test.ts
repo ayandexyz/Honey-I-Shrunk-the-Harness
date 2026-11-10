@@ -123,3 +123,29 @@ test("empty compaction output records the successful provider attempt once", asy
   assert.equal(calls[0]?.outcome, "succeeded");
   assert.deepEqual(calls[0]?.usage, { inputTokens: 10, outputTokens: 0 });
 });
+
+test("a summary cut off at maxTokens is rejected, not kept", async () => {
+  let maxTokens: number | undefined;
+  const provider: AIProvider = {
+    info: {
+      id: "zai",
+      name: "Z.ai",
+      supportsStreaming: false,
+      supportsTools: false,
+      maxOutputTokens: 1024,
+    },
+    async execute(options) {
+      maxTokens = options.maxTokens;
+      return {
+        content: "## Goal\n- wire the flag\n## Done\n- edited src/cli/ar",
+        stopReason: "max_tokens",
+        provider: "zai",
+        model: "glm-5.3",
+        usage: { inputTokens: 10, outputTokens: 8192 },
+      };
+    },
+  };
+  await assert.rejects(createLlmSummarizer(provider, undefined)(input), /truncated/);
+  // Room for a reasoning model's thinking AND the summary.
+  assert.ok((maxTokens ?? 0) >= 8_192);
+});

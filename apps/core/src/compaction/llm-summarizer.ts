@@ -56,7 +56,11 @@ export function createLlmSummarizer(
         model,
         // No temperature: reasoning models reject it (the AI SDK drops it with
         // a warning on every compaction), and opencode leaves it unset too.
-        maxTokens: 1_024,
+        // The cap counts reasoning tokens: at 1_024 GLM-5.3 spent all of it
+        // thinking on a 60-message transcript, returning nothing (2 of 3) or a
+        // summary cut off mid-section. A cap, not a spend — a model that does
+        // not think stops when the summary is done.
+        maxTokens: 8_192,
         abortSignal,
       });
     } catch (error) {
@@ -82,6 +86,10 @@ export function createLlmSummarizer(
     });
     const content = result.content?.trim();
     if (!content) throw new Error("provider returned an empty summary");
+    // A summary cut off at the cap replaces the transcript it summarises, and
+    // its missing sections are silently lost; the heuristic is complete.
+    if (result.stopReason === "max_tokens")
+      throw new Error("provider truncated the summary at maxTokens");
     return content;
   };
 }

@@ -207,7 +207,11 @@ async function oneShot(
       system,
       model: input.model,
       quietModelFallback: true,
-      maxTokens: 1024,
+      // The cap counts reasoning tokens. At 1024, GLM-5.3 used 954 and 990 of
+      // it in two of five runs (up to 814 thinking) — a little more and the
+      // JSON array is cut off, parses to nothing, and the turn's memories are
+      // lost without an error. Three proposals need a few hundred tokens.
+      maxTokens: 4096,
     });
     input.onAuxiliaryCall?.({
       purpose: "extraction",
