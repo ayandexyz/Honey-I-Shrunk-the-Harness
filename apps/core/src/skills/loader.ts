@@ -85,13 +85,26 @@ interface SearchGroup {
 function getSearchGroups(opts: LoaderOptions): SearchGroup[] {
   const home = opts.homeDir || os.homedir();
   const installDir = opts.installDir || path.join(__dirname, "..", "..", "..");
+  const system: SearchGroup = {
+    scope: "system",
+    patterns: [skillGlob(path.join(installDir, ".system", "skills"))],
+  };
+  const repo: SearchGroup = {
+    scope: "repo",
+    patterns: [
+      skillGlob(path.join(opts.projectPath, ".claude", "skills")),
+      skillGlob(path.join(opts.projectPath, ".agents", "skills")),
+      skillGlob(path.join(opts.projectPath, ".freecode", "skills")),
+    ],
+  };
+  // The operator's own skills (global dirs + Claude Code plugins) are machine
+  // state, not part of a project: `freecode eval` turns them off so a trial's
+  // prompt does not carry 250 skills another machine would not have.
+  if (process.env.FREECODE_USER_SKILLS === "0") return [system, repo];
   const plugin = getPluginSkillPatterns(home);
 
   return [
-    {
-      scope: "system",
-      patterns: [skillGlob(path.join(installDir, ".system", "skills"))],
-    },
+    system,
     {
       scope: "plugin",
       patterns: plugin.patterns,
@@ -107,14 +120,7 @@ function getSearchGroups(opts: LoaderOptions): SearchGroup[] {
         skillGlob(path.join(home, ".freecode", "skills")),
       ],
     },
-    {
-      scope: "repo",
-      patterns: [
-        skillGlob(path.join(opts.projectPath, ".claude", "skills")),
-        skillGlob(path.join(opts.projectPath, ".agents", "skills")),
-        skillGlob(path.join(opts.projectPath, ".freecode", "skills")),
-      ],
-    },
+    repo,
   ];
 }
 

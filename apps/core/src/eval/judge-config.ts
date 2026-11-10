@@ -36,7 +36,14 @@ export type JudgeResolution =
    */
   | { ok: false; reason: "unconfigured"; detail: string }
   /** Configured, but it IS the model under test. Refuse rather than mislead. */
-  | { ok: false; reason: "same-model"; detail: string };
+  | { ok: false; reason: "same-model"; detail: string }
+  /**
+   * A model the judge's provider cannot serve. `eval:gate` defaults the
+   * provider to claude-cli but inherits FREECODE_JUDGE_MODEL, so a model left
+   * over from a Gemini judge reached `claude -p --model gemini-…`: eight judged
+   * runs scored nothing, each discovered only after every trial had run.
+   */
+  | { ok: false; reason: "wrong-model"; detail: string };
 
 /**
  * Model ids differ cosmetically across providers and gateways, so compare a
@@ -85,6 +92,21 @@ export function resolveJudge(subjectModelId?: string): JudgeResolution {
       detail:
         "No judge configured. Set FREECODE_JUDGE_PROVIDER (and usually " +
         "FREECODE_JUDGE_MODEL) to a provider that is NOT the one under test.",
+    };
+  }
+
+  if (
+    provider === CLAUDE_CLI_JUDGE &&
+    model &&
+    !/^(claude|haiku|sonnet|opus)/i.test(model)
+  ) {
+    return {
+      ok: false,
+      reason: "wrong-model",
+      detail:
+        `Judge provider ${CLAUDE_CLI_JUDGE} cannot run "${model}" — only ` +
+        `Claude models. Unset FREECODE_JUDGE_MODEL (defaults to ` +
+        `${CLAUDE_CLI_DEFAULT_MODEL}) or set it to a Claude model.`,
     };
   }
 

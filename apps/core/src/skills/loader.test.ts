@@ -268,3 +268,22 @@ test("loadSkill resolves a project-local skill by name and scope", async () => {
     cleanup(sb);
   }
 });
+
+test("FREECODE_USER_SKILLS=0 keeps project and system skills, drops user and plugin", async () => {
+  const sb = makeSandbox();
+  const prev = process.env.FREECODE_USER_SKILLS;
+  try {
+    writeSkill(path.join(sb.home, ".claude"), "claude-global");
+    writeSkill(path.join(sb.home, ".freecode"), "freecode-global");
+    writeSkill(path.join(sb.project, ".freecode"), "project-local");
+    process.env.FREECODE_USER_SKILLS = "0";
+    const skills = byName(await load(sb));
+    assert.ok(skills.has("repo/project-local"));
+    assert.ok(!skills.has("user/claude-global"));
+    assert.ok(!skills.has("user/freecode-global"));
+  } finally {
+    if (prev === undefined) delete process.env.FREECODE_USER_SKILLS;
+    else process.env.FREECODE_USER_SKILLS = prev;
+    cleanup(sb);
+  }
+});

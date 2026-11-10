@@ -129,3 +129,13 @@ test("claude-cli resolves to Haiku on the subscription, and still refuses to gra
     assert.equal(self.ok === false && self.reason, "same-model");
   });
 });
+
+test("claude-cli refuses a non-Claude model left over from another judge", () => {
+  withEnv({ FREECODE_JUDGE_PROVIDER: "claude-cli", FREECODE_JUDGE_MODEL: "gemini-3.6-flash" }, () => {
+    const r = resolveJudge("minimax/MiniMax-M3");
+    assert.equal(r.ok === false && r.reason, "wrong-model");
+  });
+  withEnv({ FREECODE_JUDGE_PROVIDER: "claude-cli", FREECODE_JUDGE_MODEL: "claude-sonnet-4-5" }, () => {
+    assert.equal(resolveJudge("minimax/MiniMax-M3").ok, true);
+  });
+});

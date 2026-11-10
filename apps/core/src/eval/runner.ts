@@ -50,6 +50,8 @@ const TRIAL_TIMEOUT_MS = envInt("FREECODE_EVAL_TRIAL_TIMEOUT_MS", 300_000, {
   // can give. An empty variable used to produce exactly that.
   min: 1_000,
 });
+/** How long a timed-out trial's interrupted loops get to unwind. */
+const INTERRUPT_SETTLE_MS = 10_000;
 const MEMORY_DRAIN_TIMEOUT_MS = envInt(
   "FREECODE_EVAL_MEMORY_DRAIN_TIMEOUT_MS",
   10_000,
@@ -83,6 +85,15 @@ export async function initRunner(
   const { readConfig } = await import("../providers/config.js");
 
   await initProviders();
+  // The servers in the operator's ~/.claude.json are not part of what a case
+  // measures: a GLM trial answered an off-repo question by calling
+  // `mcp__agentmemory__*`, a tool another machine would not have. Explicit
+  // `FREECODE_MCP_CLAUDE_CODE=1` still opts back in.
+  process.env.FREECODE_MCP_CLAUDE_CODE ??= "0";
+  // Same for skills: a trial loaded 296, 251 of them the operator's own
+  // (~/.claude, ~/.freecode, Claude Code plugins). Project and bundled
+  // skills still load. `FREECODE_USER_SKILLS=1` opts back in.
+  process.env.FREECODE_USER_SKILLS ??= "0";
   await initMcpServers();
 
   const config = readConfig();
@@ -336,6 +347,10 @@ async function runTrialIn(
 
   const startedAt = Date.now();
   let memoryJobsPending = 0;
+  // Every loop the trial starts, so the timeout can stop them: losing the race
+  // below does not cancel `turns`, and an unstopped loop kept calling the model
+  // for minutes after its trial was scored, overlapping the next case.
+  const loops: { interrupt(): void }[] = [];
   try {
     const loop = await getAppRuntime().runPromise(
       createAgentLoopEffect(
@@ -349,6 +364,7 @@ async function runTrialIn(
           : undefined,
       ),
     );
+    loops.push(loop);
     // One user turn per prompt, on the same session and the same loop. Each
     // `run()` reloads history from the store, so a follow-up sees everything
     // the previous turn did — which is what makes a compaction reachable at
@@ -366,6 +382,7 @@ async function runTrialIn(
         const earlierLoop = await getAppRuntime().runPromise(
           createAgentLoopEffect(sid),
         );
+        loops.push(earlierLoop);
         await getAppRuntime().runPromise(
           earlierLoop.runEffect({
             prompt: earlier,
@@ -525,6 +542,16 @@ async function runTrialIn(
           trialTimer.unref?.();
         }),
       ]);
+    } catch (err) {
+      // Stop the loops and let them unwind before `cleanup()` and the
+      // sandbox's removal pull the floor out from under a running tool.
+      // Bounded: an abort that never lands must not hang the suite.
+      for (const l of loops) l.interrupt();
+      await Promise.race([
+        turns.catch(() => {}),
+        new Promise((r) => setTimeout(r, INTERRUPT_SETTLE_MS).unref?.()),
+      ]);
+      throw err;
     } finally {
       // Left pending, the timer's closure kept this trial's whole AgentLoop
       // alive for 5 minutes after it finished — dozens of conversations at
@@ -538,14 +565,20 @@ async function runTrialIn(
     // An infrastructure failure is a failed trial, not a crashed suite: one
     // dead case must not cost the other nineteen.
     cleanup();
+    // What the trial spent before it died is in its rollout logs. Reporting
+    // zero made a five-minute timeout look free.
+    const spent = [sessionId, ...earlierSessionIds].flatMap((id) => {
+      const ev = loadSessionEvents(id);
+      return ev ? [buildTrace(id, ev.events)] : [];
+    });
     return {
       passed: false,
       reason: `run failed: ${(err as Error).message}`.slice(0, 200),
       infra: true,
       durationMs: Date.now() - startedAt,
-      inputTokens: 0,
-      outputTokens: 0,
-      turns: 0,
+      inputTokens: spent.reduce((n, t) => n + t.inputTokens, 0),
+      outputTokens: spent.reduce((n, t) => n + t.outputTokens, 0),
+      turns: spent.reduce((n, t) => n + t.modelSpans.length, 0),
       repeatedCalls: 0,
       redirects: 0,
       redirectsSkipped: 0,

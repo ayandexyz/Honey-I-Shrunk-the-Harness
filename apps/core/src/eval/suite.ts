@@ -46,7 +46,9 @@ export async function runSuite(
   // Resolve the judge ONCE, against the model actually under test, and only if
   // some case wants one. A `same-model` refusal is loud (it throws) because it
   // means the run would have produced a number that looks like a quality score
-  // and is really a self-similarity score. An `unconfigured` judge does not
+  // and is really a self-similarity score; so is `wrong-model`, a judge that
+  // would fail every call only after every trial had been paid for. An
+  // `unconfigured` judge does not
   // throw — the deterministic expectations on these cases are still worth
   // running — but it is recorded, and `gate.ts` closes the gate on it, because
   // a judged suite graded by nobody is not a passing judged suite.
@@ -58,7 +60,10 @@ export async function runSuite(
     const resolved = resolveJudge(subject);
     if (resolved.ok) {
       config.judge = resolved.judge;
-    } else if (resolved.reason === "same-model") {
+    } else if (
+      resolved.reason === "same-model" ||
+      resolved.reason === "wrong-model"
+    ) {
       throw new Error(resolved.detail);
     } else {
       judgeSkipped = resolved.detail;

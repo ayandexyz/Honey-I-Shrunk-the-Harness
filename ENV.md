@@ -117,7 +117,8 @@ left out.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `FREECODE_MCP_CLAUDE_CODE` | on | `0` stops importing Claude Code's MCP servers (`~/.claude.json`, `.mcp.json`). |
+| `FREECODE_MCP_CLAUDE_CODE` | on (off under `freecode eval`) | `0` stops importing Claude Code's MCP servers (`~/.claude.json`, `.mcp.json`). `freecode eval` defaults it to `0` so a case cannot reach the operator's own servers; `1` opts back in. |
+| `FREECODE_USER_SKILLS` | on (off under `freecode eval`) | `0` loads only bundled and project skills — skips `~/.claude/skills`, `~/.agents/skills`, `~/.freecode/skills` and Claude Code plugin skills (`skills/loader.ts`). `freecode eval` defaults it to `0` so a trial's prompt does not depend on the operator's installed skills; `1` opts back in. |
 | `FREECODE_CLAUDE_CODE_AGENTS` | on | `0` skips subagent definitions from `~/.claude/agents` and `<project>/.claude/agents`. |
 | `FREECODE_DISABLE_EXTENSIONS` | extensions load | `1` loads no extensions at all. |
 | `FREECODE_TRUST_PROJECT_EXTENSIONS` | off | `1` loads `<project>/.freecode/extensions/` without the project being in `extensions.trustedProjects`. An extension is arbitrary code, so use it only on repos you trust. |
