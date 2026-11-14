@@ -139,6 +139,27 @@ fallback. (`glob` is unaffected: 30/30 succeeded.)
   and no doc says it is required, so a user without `rg` on `PATH` has the same
   broken tool. The error text does not tell the model what to do instead.
 
+### 3.5 v4 rerun (2026-10-17), judged 2026-11-15 — internal reading, not publishable
+
+`bench/agent-bench/results/pathology-commits-v4/`: freecode v0.46.1, harness
+`12287ced`, `minimax/MiniMax-M3`, isolation container, 60 min/trial, 3 tasks ×
+3 trials, contamination window `since 2026-06-02` (checked, no problems).
+Judged in audit mode (`pnpm bench:judge … --rejudge`): `claude-haiku-4-5`
+primary via `claude -p`, `gpt-5.6-luna` auditor via `codex exec`. The 20%
+audit sample selected none of the 9 trials, so there are 0 two-sided audits
+(5 needed) and the run is `publishable: false`. Haiku used 9 calls, 2.2M tokens.
+
+| Task | Trials | Mean |
+| --- | --- | --- |
+| implement-night-morning | 8.0, 7.0, 5.0 | 6.67 |
+| fix-night-envelope | 5.0, 7.0, 4.0 | 5.33 |
+| add-agent-control | 0.0 (empty patch, 4 s), 3.0, 3.0 | 2.00 |
+| **all** | 9 runs, $0.663/run, 18.2 min/run | **4.67** (5.25 excluding the empty run) |
+
+The 2026-10-17 reading by the free panel (DeepSeek + GLM, 3 of 9 trials scored
+by one judge, `DEGRADED`) averaged 3.81 — a different judge pair, not
+comparable. Publishing needs `--panel` (GPT on all 9).
+
 ## 4. Prior art (stuck-loop handling)
 
 Full table in spec §3. Short version: opencode had `DOOM_LOOP_THRESHOLD=3`
