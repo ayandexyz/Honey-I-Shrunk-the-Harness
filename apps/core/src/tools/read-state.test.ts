@@ -1,9 +1,10 @@
-import test from "node:test";
+import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, writeFile, rm, utimes } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { ReadTool } from "./read.js";
+import { disposeAll } from "./lsp/client.js";
 import { EditTool } from "./edit.js";
 import {
   getReadState,
@@ -11,6 +12,10 @@ import {
   canDedup,
   markReadPruned,
 } from "./read-state.js";
+
+// Reading a .ts file opens it on a language server (edit-time diagnostics);
+// left running, it keeps the test process alive after the tests pass.
+after(() => disposeAll());
 
 const base = { mtimeMs: 100, size: 10, offset: 1, limit: 2000 };
 const record = (over = {}) => ({ ...base, inContext: true, ...over });

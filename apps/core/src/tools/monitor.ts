@@ -342,13 +342,11 @@ Use it to watch something long and act on it as it happens: a multi-hour test or
   schemas: { parameters: monitorSchema },
   permissions: {
     operations: ["shell"],
-    requiresApproval: true,
   },
   behavior: {
     isConcurrencySafe: false,
     // Runs an arbitrary command, same as bash.
     isDestructive: true,
-    interruptBehavior: "await",
     userFacingName: "Monitor",
   },
   execute: executeMonitor,

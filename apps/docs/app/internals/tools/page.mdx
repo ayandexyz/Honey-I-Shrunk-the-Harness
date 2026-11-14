@@ -46,10 +46,7 @@ export const ReadTool: Tool<ReadParams> = buildTool({
 | `behavior.isConcurrencySafe` | `false` | the batcher — parallel iff every tool in the run is safe |
 | `behavior.isDestructive` | `false` | the loop's verify gate + stagnation counter, and the orchestrator's retry rule |
 | `behavior.userFacingName` | the id | UI labels |
-| `behavior.maxResultSizeChars` | 500,000 | *nothing* — see [Known gaps](#known-gaps) |
-| `behavior.interruptBehavior` | `"await"` | *nothing* |
-| `permissions.operations` | `[]` | *nothing* |
-| `permissions.requiresApproval` | `false` | *nothing* |
+| `permissions.operations` | `[]` | the unattended-run envelope (`freecode night`), which hides a tool whose operations it will never allow |
 | `validateInput` | — | the orchestrator, before execute |
 | `checkPermissions` | — | the orchestrator — but no tool implements it |
 | `getPath` | — | *nothing* — the permission layer uses its own `PATH_TOOLS` |
@@ -349,11 +346,6 @@ string is the tool result the model reads as text.
    object-with-properties shape; anything using JSON Schema composition tells
    the model the tool takes no parameters. Needs a real resolver, not just
    more cases.
-2. **Four `Tool` fields have no readers at all.** `behavior.maxResultSizeChars`
-   (every tool sets it; truncation uses a global 30K budget instead),
-   `behavior.interruptBehavior`, `permissions.operations`, and
-   `permissions.requiresApproval` — `bash` sets the last one to `true` and
-   nothing consults it.
 7. **`getPath` and `isSearchOrReadCommand` are implemented by many tools and
    read by none.** `getPath` is shadowed by `extractTarget` +`PATH_TOOLS` in
    `permission/rules.ts`, which is what the registration checklist actually
@@ -370,9 +362,6 @@ string is the tool result the model reads as text.
     (it is re-rendered from the store each turn rather than read out of history)
     but not a restart or a `session.resume` — and the loop's todo-completion
     gate reads that same store, so a resumed session's plan is silently empty.
-11. **`executeTool` in `factory.ts:88` is dead.** It is exported and re-exported
-    from `tools/index.ts`, but the orchestrator does its own result shaping;
-    nothing calls it. It also implements a *different* result contract.
 12. **`tool_complete` still crosses IPC in one message.** The event carries
     `result.stdout`, now tail-capped at 500K chars at the orchestrator (it
     used to be fully uncapped), but half a megabyte in a single JSON-RPC

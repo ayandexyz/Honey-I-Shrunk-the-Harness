@@ -41,13 +41,10 @@ export function convertMcpTool(mcpTool: McpToolDef, serverName: string): Tool {
       // transient failure could re-issue a mutation — running create_issue
       // twice. Anything not declared read-only is now single-attempt.
       isDestructive: !isReadOnly,
-      interruptBehavior: "await",
-      maxResultSizeChars: 50000,
       userFacingName: `${serverName}/${mcpTool.name}`,
     },
     permissions: {
       operations: ["mcp"],
-      requiresApproval: false,
     },
     execute: async (params, _ctx) => {
       const client = getClient(serverName);

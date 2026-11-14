@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { after } from "node:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { ReadTool } from "./read.js";
+import { disposeAll } from "./lsp/client.js";
+
+// Reading a .ts file opens it on a language server (edit-time diagnostics);
+// left running, it keeps the test process alive after the tests pass.
+after(() => disposeAll());
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "freecode-read-"));
 

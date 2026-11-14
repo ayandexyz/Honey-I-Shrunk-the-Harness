@@ -141,12 +141,10 @@ export const BashOutputTool: Tool<BashOutputParams> = buildTool({
     // Reads an in-memory buffer core already holds — no filesystem, no
     // network, no new process. Same shape as todowrite's empty set.
     operations: [],
-    requiresApproval: false,
   },
   behavior: {
     isConcurrencySafe: true,
     isDestructive: false,
-    interruptBehavior: "await",
     userFacingName: "BashOutput",
   },
   execute: executeBashOutput,

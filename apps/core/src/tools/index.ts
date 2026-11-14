@@ -41,7 +41,6 @@ import type {
 import {
   buildTool,
   defaultBehavior,
-  executeTool,
 } from "./factory.js";
 
 export type {
@@ -156,4 +155,4 @@ export function listTools(): {
 }
 
 export { createToolOrchestrator };
-export { buildTool, defaultBehavior, executeTool };
+export { buildTool, defaultBehavior };

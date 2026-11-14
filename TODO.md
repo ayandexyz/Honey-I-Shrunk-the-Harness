@@ -140,9 +140,11 @@ earlier audit are not repeated here.
       consts, while the compaction and cache vars are deliberately read per call.
 - [ ] **`graph.explore` breaks the memory naming convention** and hard-codes
       `process.cwd()` while every neighbouring `memory.*` method takes `projectPath`.
-- [ ] **MCP servers are user-scope only.** `getConfigDir()` is hard-wired to
-      `~/.freecode` (`cli/utils/config.ts`), so a repository cannot ship the MCP
-      servers its contributors need the way it can ship rules and hooks.
+- [ ] **FreeCode's own MCP config is user-scope only.** A repo can ship servers
+      in Claude Code's `.mcp.json` (imported since 2026-09-22,
+      `mcp/claude-code-config.ts`), but `getConfigDir()` is still hard-wired to
+      `~/.freecode` (`cli/utils/config.ts`), so there is no project-level
+      FreeCode `mcpServers`.
 - [ ] **`freecode session` exposes 2 of 12 session operations.** `fork`, `switch`,
       `archive`, `export`, `import`, `upload`, `download` are IPC-only, so scripting
       session management means speaking JSON-RPC by hand.
@@ -231,13 +233,6 @@ page's **Known gaps**.
 
 ### Real fixes
 
-- [ ] **Four `Tool` metadata fields have zero readers.**
-      `behavior.maxResultSizeChars` (set by every tool and by MCP; truncation
-      actually uses the global 30K `adaptiveTruncate` budget),
-      `behavior.interruptBehavior`, `permissions.operations`, and
-      `permissions.requiresApproval` — `bash.ts:290` sets the last to `true` and
-      nothing consults it. Either wire them or delete them; right now they read as
-      a working permission model that isn't.
 - [ ] **`getPath` and `isSearchOrReadCommand` are implemented widely and read
       nowhere.** `getPath` is shadowed by `extractTarget` + `PATH_TOOLS`
       (`permission/rules.ts`), which is what `CLAUDE.md`'s registration checklist
@@ -246,9 +241,6 @@ page's **Known gaps**.
       at all.
 - [ ] **`checkPermissions` has no implementers.** The orchestrator calls it when
       present (`orchestrator.ts:107`); no tool defines it.
-- [ ] **`executeTool` in `factory.ts:88` is dead code**, exported and re-exported
-      from `tools/index.ts` but called by nothing; it also implements a different
-      result contract from the orchestrator's.
 - [ ] **`read`'s image path pays before the visibility check.** The tool
       base64-encodes any supported image up to 10 MB and returns it as
       `metadata.image`; whether the model can see images is only decided later in

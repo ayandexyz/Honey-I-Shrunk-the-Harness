@@ -615,7 +615,6 @@ Use it when the work would burn context you have no further use for ("find every
   },
   permissions: {
     operations: ["agent.spawn"],
-    requiresApproval: true,
   },
   behavior: {
     isConcurrencySafe: false,
@@ -630,7 +629,6 @@ Use it when the work would burn context you have no further use for ("find every
     // filesystem, so this must read the same as write/edit: triggers the
     // verify gate, counts toward stagnation, and is not safely retryable.
     isDestructive: true,
-    interruptBehavior: "await",
     userFacingName: "Agent",
   },
   execute: executeAgent,

@@ -356,12 +356,10 @@ export const QuestionTool: Tool<QuestionParams> = buildTool({
   },
   permissions: {
     operations: [],
-    requiresApproval: false,
   },
   behavior: {
     isConcurrencySafe: false,
     isDestructive: false,
-    interruptBehavior: "await",
     userFacingName: "Ask Question",
   },
   execute: executeQuestion,

@@ -603,7 +603,6 @@ export const BashTool: Tool<BashParams> = buildTool({
   },
   permissions: {
     operations: ["shell"],
-    requiresApproval: true,
   },
   behavior: {
     isConcurrencySafe: false,
@@ -611,7 +610,6 @@ export const BashTool: Tool<BashParams> = buildTool({
     // codemod), so this must read the same as write/edit: triggers the
     // verify gate, counts toward stagnation, and is not safely retryable.
     isDestructive: true,
-    interruptBehavior: "await",
     userFacingName: "Bash",
   },
   execute: executeBash,

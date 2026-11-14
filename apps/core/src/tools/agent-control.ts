@@ -120,11 +120,10 @@ export const AgentSendTool: Tool<SendParams> = buildTool({
   description:
     "Send a message to a running sub-agent you started (usually a background one): change its task, narrow its scope, or give it context it lacked. It reads the message after its current step. Only for an agent that is still running; to cancel one, use agent_stop.",
   schemas: { parameters: sendSchema },
-  permissions: { operations: ["agent.spawn"], requiresApproval: false },
+  permissions: { operations: ["agent.spawn"] },
   behavior: {
     isConcurrencySafe: false,
     isDestructive: false,
-    interruptBehavior: "await",
     userFacingName: "AgentSend",
   },
   execute: executeSend,
@@ -137,11 +136,10 @@ export const AgentStopTool: Tool<StopParams> = buildTool({
   description:
     "Stop a running sub-agent you started. Returns its last activity; no task notification follows. Use it when its work is no longer wanted — to change what it is doing, agent_send is cheaper.",
   schemas: { parameters: stopSchema },
-  permissions: { operations: ["agent.spawn"], requiresApproval: false },
+  permissions: { operations: ["agent.spawn"] },
   behavior: {
     isConcurrencySafe: false,
     isDestructive: false,
-    interruptBehavior: "await",
     userFacingName: "AgentStop",
   },
   execute: executeStop,

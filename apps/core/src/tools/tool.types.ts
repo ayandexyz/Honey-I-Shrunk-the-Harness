@@ -21,10 +21,6 @@ export interface ToolBehavior {
   concurrencySafeFor?: (args: unknown) => boolean;
   // Whether this tool modifies files/system (affects confirmation prompts)
   isDestructive: boolean;
-  // How to handle interruption while this tool is running
-  interruptBehavior: "await" | "ignore" | "error";
-  // Maximum result size in characters (results larger than this may be truncated)
-  maxResultSizeChars: number;
   // Human-readable name for display in UI
   userFacingName: string;
 }
@@ -53,8 +49,6 @@ export type PermissionOperation = (typeof PERMISSION_OPERATIONS)[number];
 
 export interface ToolPermissions {
   operations: PermissionOperation[];
-  // If true, always prompt user for approval even if tool is in allowlist
-  requiresApproval: boolean;
 }
 
 // =============================================================================

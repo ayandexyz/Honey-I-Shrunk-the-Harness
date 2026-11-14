@@ -87,12 +87,10 @@ export const KillBashTool: Tool<KillBashParams> = buildTool({
   },
   permissions: {
     operations: ["shell"],
-    requiresApproval: false,
   },
   behavior: {
     isConcurrencySafe: false,
     isDestructive: false,
-    interruptBehavior: "await",
     userFacingName: "KillBash",
   },
   execute: executeKillBash,
