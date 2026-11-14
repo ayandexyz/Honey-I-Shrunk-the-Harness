@@ -23,6 +23,7 @@ import { SessionStoreTag } from "../effect/context.js";
 import { createAgentLoopEffect } from "./loop.js";
 import { MemoryService } from "../compaction/service.js";
 import { createRecorder } from "../rollout/recorder.js";
+import { disposeAll } from "../tools/lsp/client.js";
 import { registerProvider } from "../providers/registry.js";
 import type { ProviderId } from "../providers/config.js";
 import type {
@@ -166,6 +167,9 @@ async function scenario(restore: boolean) {
     if (prev === undefined) delete process.env.FREECODE_COMPACT_RESTORE;
     else process.env.FREECODE_COMPACT_RESTORE = prev;
     await runtime.dispose();
+    // Reading a .ts file starts a language server (edit-time diagnostics);
+    // left running, it keeps the test process alive after the tests pass.
+    disposeAll();
     rmSync(rolloutDir, { recursive: true, force: true });
     rmSync(projectPath, { recursive: true, force: true });
   }

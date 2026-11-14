@@ -11,13 +11,6 @@ be "fixed" → `docs/DECISIONS.md`.
 
 ## Small known limitations
 
-### `compact-restore-loop.test.ts` never exits (found 2026-11-15)
-
-Both tests pass, then the process hangs, so `tsx --test 'src/agent/**/*.test.ts'`
-never finishes (killed at 8 minutes). Reproduces on `main`. Something the test's
-`AgentLoop` starts (a timer, a language server, a background shell) outlives
-it. Find the handle and dispose it in the test's teardown.
-
 ### The compaction eval cases are 20KB JSONL lines (added 2026-09-08, updated 2026-09-29)
 
 **Status:** known, cosmetic, needs a paid run to fix.
