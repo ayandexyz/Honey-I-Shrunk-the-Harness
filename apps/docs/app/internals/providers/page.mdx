@@ -404,27 +404,22 @@ an explicit `type`.
    `CACHING_PROVIDERS` (`cache-awareness.ts:24`) is a one-element set, yet
    `minimax` and `zai` go through the same Anthropic endpoint shape and carry the
    same `cacheControl` markers. Their users never see the cold-cache warning.
-6. **A changing tool set busts the cache with no journal entry.** When an MCP
-    server connects or disconnects, `invalidateToolDefs()` rebuilds the tools
-    array; the tools block sits in the cached prefix, so the next request must
-    miss. Nothing calls `recordInvalidation`, so the miss detector reports it as
-    an unexplained bust — the exact false positive the journal exists to prevent.
-7. **`ExecuteResult.thinking` is dead for every provider.** All six set
+6. **`ExecuteResult.thinking` is dead for every provider.** All six set
     `thinking: undefined` in `execute()`; reasoning reaches the loop only as
     `thinking_delta` chunks on the streaming path. A non-streaming turn silently
     loses extended thinking, and there is no way to configure a thinking budget
     or reasoning effort anywhere in `ExecuteOptions`.
-8. **`ProviderInfo.maxOutputTokens`'s documentation is stale.** Its comment
+7. **`ProviderInfo.maxOutputTokens`'s documentation is stale.** Its comment
     (`types.ts:10`) says compaction subtracts it from the context limit;
     compaction actually subtracts `resolveMaxOutputTokens()`, which reads
     models.dev and caps at 32K. The field is only a fallback for callers that
     omit `maxTokens`, and it is 4096 for four of the six providers.
-9. **`session/normalize/` is unreachable.** The v4 spec describes a
+8. **`session/normalize/` is unreachable.** The v4 spec describes a
     `ProviderResponseNormalizer` as a separate layer with per-provider modules;
     nothing in the codebase imports it. Normalization actually happens in
     `streaming.ts` plus `mapUsage`. The directory includes a second, independent
     `[TOOL_CALLS]` parser that duplicates the one in `loop.ts`.
-10. **`browser/` has zero importers.** `CLAUDE.md` calls the Playwright path
+9. **`browser/` has zero importers.** `CLAUDE.md` calls the Playwright path
     "legacy / not wired into the primary path" — it is in fact unreachable: no
     file outside the directory imports anything from it, and `chatgpt` is not in
     the provider registry. It is dead code, not a fallback.
