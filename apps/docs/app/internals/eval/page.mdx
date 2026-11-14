@@ -140,6 +140,12 @@ Optional on any case: `model` (pins `provider/model`), `agentMode`, and
 `expectTool: null` is not filler. "Answer from what you know instead of
 rummaging through the repo" is real behaviour that a prompt edit can break.
 
+**Answering the model's questions.** Headless, the runner declines every
+`question` call (counted as `questionsRejected`). A case that needs to see what
+the model does with an *answer* sets `"answers": ["Just exploring"]`: entry *i*
+answers the *i*-th `question` call (every question in it), and calls past the
+end are declined as before.
+
 **How `expectInArgs` compares values:**
 
 | Form | Example | Means |

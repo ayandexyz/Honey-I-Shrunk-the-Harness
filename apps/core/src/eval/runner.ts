@@ -219,8 +219,13 @@ async function runTrialIn(
   const { getAppRuntime } = await import("../effect/runtime.js");
   const { createAgentLoopEffect } = await import("../agent/loop.js");
   const { getSessionManager } = await import("../session/index.js");
-  const { answerPermission, bus, rejectPermission, rejectQuestion } =
-    await import("../bus/index.js");
+  const {
+    answerPermission,
+    answerQuestion,
+    bus,
+    rejectPermission,
+    rejectQuestion,
+  } = await import("../bus/index.js");
   const { endSession } = await import("../session/end-session.js");
   const { sessionMemoryFlush } = await import("../session/session-flush.js");
   const { SessionStoreTag } = await import("../effect/context.js");
@@ -286,9 +291,20 @@ async function runTrialIn(
   // report written and no verdict. Under `--gate` that reads as a green CI job.
   // Rejecting is the honest headless answer, and the tool already recovers from
   // it ("You can continue without this information").
+  // A case with scripted `answers` replies with those first, in order.
   let questionsRejected = 0;
+  let answersGiven = 0;
   const unsubscribeQuestions = bus.subscribe("question.asked", (e) => {
     if (!ownsSession(e.sessionId)) return;
+    const answer = kase.answers?.[answersGiven];
+    if (answer !== undefined) {
+      answersGiven++;
+      answerQuestion(
+        e.requestId,
+        e.questions.map(() => answer),
+      );
+      return;
+    }
     questionsRejected++;
     rejectQuestion(e.requestId);
   });

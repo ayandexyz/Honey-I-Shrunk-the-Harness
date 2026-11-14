@@ -188,6 +188,13 @@ export interface EvalCase {
    * that can compact. Also the substrate `resume` needs.
    */
   followUps?: string[];
+  /**
+   * Scripted replies to the model's `question` calls, in order: entry i
+   * answers the i-th call (every question in it, if it asks several). Once
+   * they run out, further calls are declined as before. Without this a case
+   * can only observe what a model does with a refusal, never with an answer.
+   */
+  answers?: string[];
 
   // --- environment (spec `2026-08-29-eval-case-registry.md` §9.1) ---------
   /**

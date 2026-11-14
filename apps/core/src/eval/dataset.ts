@@ -164,6 +164,7 @@ function validate(raw: unknown, where: string): EvalCase {
     }
   }
   const followUps = validateFollowUps(o.followUps, where);
+  const answers = validateAnswers(o.answers, where);
   const env = validateEnv(o.env, where);
   // Structural, not a matter of tuning: `selectForCompaction` refuses while
   // `countUserTurns <= preserveRecentTurns` (2), and only a prompt creates a
@@ -263,6 +264,7 @@ function validate(raw: unknown, where: string): EvalCase {
     expectParallelTools: o.expectParallelTools as number | undefined,
     expectCompaction: o.expectCompaction as number | undefined,
     followUps,
+    answers,
     env,
     forbidTools: Array.isArray(o.forbidTools)
       ? (o.forbidTools as string[])
@@ -496,6 +498,24 @@ export const EVAL_ENV_ALLOWLIST = new Set([
   // compaction/tokens.ts getCompactTarget()
   "FREECODE_COMPACT_TARGET_TOKENS",
 ]);
+
+function validateAnswers(
+  value: unknown,
+  where: string,
+): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new DatasetError(`${where}: 'answers' must be a non-empty array`);
+  }
+  for (const entry of value) {
+    if (typeof entry !== "string" || entry.trim().length === 0) {
+      throw new DatasetError(
+        `${where}: every 'answers' entry must be a non-empty string`,
+      );
+    }
+  }
+  return value as string[];
+}
 
 function validateFollowUps(
   value: unknown,

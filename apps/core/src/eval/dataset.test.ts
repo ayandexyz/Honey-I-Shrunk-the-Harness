@@ -623,6 +623,21 @@ test("followUps must be a non-empty array of non-empty strings", () => {
   }
 });
 
+test("answers must be a non-empty array of non-empty strings", () => {
+  const base = `{"id":"a","prompt":"p",${REQUIRED},"expectTool":"question",`;
+  assert.deepEqual(
+    parseSuite(`${base}"answers":["Just exploring"]}`)[0].answers,
+    ["Just exploring"],
+  );
+  for (const v of ["[]", '"b"', "[1]", '["b",""]', '["b","  "]']) {
+    assert.throws(
+      () => parseSuite(`${base}"answers":${v}}`),
+      DatasetError,
+      v,
+    );
+  }
+});
+
 test("expectCompaction needs at least two followUps", () => {
   // Structural, not tuning: selectForCompaction refuses while
   // countUserTurns <= preserveRecentTurns (2), and only a prompt makes a user
