@@ -37,6 +37,12 @@ export interface JudgedRow {
   durationMs: number;
   /** Harness error or timeout: BuffBench's `evalRun.error`. */
   errored: boolean;
+  /**
+   * HTTP status of the trial's LAST model request when that was a 429/5xx —
+   * the run ended on the provider (an agent that retried successfully ends on
+   * a 200). Flagged, never excluded: not retrying is the agent's own fault.
+   */
+  providerEnded?: number;
 }
 
 interface Slice {
@@ -48,6 +54,8 @@ export interface AgentSummary {
   runs: number;
   averageScore: number;
   averageScoreExcludingFailures: number;
+  /** Mean over runs that did not end on a provider error; absent when none did. */
+  averageScoreUninterrupted?: number;
   /** null when any run is unmetered or unpriced: an average over some runs is not the average. */
   averageCost: number | null;
   averageDuration: number;
@@ -66,6 +74,8 @@ export interface Intersection {
 
 export interface JudgedSummary {
   excludedRuns: string[];
+  /** `agent/task|trial (status)` for each run whose last model request failed. */
+  providerEnded: string[];
   agents: Record<string, AgentSummary>;
   spread: { agent: string; taskId: string; min: number; max: number }[];
   saturated: string[];
@@ -73,6 +83,25 @@ export interface JudgedSummary {
   audit: AuditAgreement;
   /** `degraded`: full-panel trials scored by one judge (the other failed). */
   counts: { audited: number; fallback: number; degraded: number; blackout: number };
+}
+
+/**
+ * The status of the trial's last model request when it was a 429/5xx, read
+ * from the egress proxy log every agent goes through. The v4 long-task run
+ * lost 4 of 9 trials to one MiniMax 529 each and nothing in the report said so.
+ */
+export function providerEndedStatus(proxyLog: string): number | undefined {
+  let last: number | undefined;
+  for (const line of proxyLog.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const e = JSON.parse(line) as { modelEndpoint?: boolean; status?: number };
+      if (e.modelEndpoint && typeof e.status === "number") last = e.status;
+    } catch {
+      // A torn final line is not evidence either way.
+    }
+  }
+  return last !== undefined && (last === 429 || last >= 500) ? last : undefined;
 }
 
 const mean = (xs: number[]) => (xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : 0);
@@ -103,6 +132,13 @@ export function summarize(rows: JudgedRow[], versus = "freecode"): JudgedSummary
       runs: mine.length,
       averageScore: mean(scores),
       averageScoreExcludingFailures: mean(scores.filter((s) => s > 1.0)),
+      ...(mine.some((r) => r.providerEnded !== undefined)
+        ? {
+            averageScoreUninterrupted: mean(
+              mine.filter((r) => r.providerEnded === undefined).map((r) => r.judging.overallScore),
+            ),
+          }
+        : {}),
       averageCost: mine.length ? costOf(mine) : null,
       averageDuration: mean(mine.map((r) => r.durationMs)),
       byApp,
@@ -160,6 +196,10 @@ export function summarize(rows: JudgedRow[], versus = "freecode"): JudgedSummary
 
   return {
     excludedRuns: [...excluded].sort(),
+    providerEnded: rows
+      .filter((r) => r.providerEnded !== undefined)
+      .map((r) => `${r.agent}/${runKey(r)} (${r.providerEnded})`)
+      .sort(),
     agents,
     spread,
     saturated,

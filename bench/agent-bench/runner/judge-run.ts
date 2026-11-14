@@ -26,7 +26,7 @@ import { assertNoCollision, JUDGE_TIMEOUT_MS, judgePanel, resolveJudges } from "
 import type { FinalCheckOutput, JudgeInput } from "./judge-prompt.js";
 import { INSTANCE_PREFIX, REPO_DIR, loadJudgedTasks } from "./judged-instances.js";
 import { BASELINE_FILE } from "./judged-trial.js";
-import { MAX_ONE_JUDGE_SHARE, panelVerdict, summarize, type JudgedRow } from "./judged-metrics.js";
+import { MAX_ONE_JUDGE_SHARE, panelVerdict, providerEndedStatus, summarize, type JudgedRow } from "./judged-metrics.js";
 import type { JudgedTask } from "./task-build.js";
 import type { Report, TrialJudging, TrialRecord } from "./types.js";
 
@@ -38,6 +38,11 @@ function arg(name: string): string | undefined {
 }
 
 const errored = (t: TrialRecord) => t.timedOut || t.reason.startsWith("harness error");
+
+function trialProviderEnded(t: TrialRecord): number | undefined {
+  const file = path.join(ROOT, t.artifactDir, "proxy.jsonl");
+  return fs.existsSync(file) ? providerEndedStatus(fs.readFileSync(file, "utf-8")) : undefined;
+}
 
 function contextFiles(task: JudgedTask): Record<string, string> {
   // Theirs: supplemental files plus every changed path that existed at the parent.
@@ -176,6 +181,7 @@ async function main(): Promise<void> {
         usd: t.usd,
         durationMs: t.durationMs,
         errored: errored(t),
+        providerEnded: trialProviderEnded(t),
       };
     });
   const summary = summarize(rows);
@@ -236,6 +242,14 @@ async function main(): Promise<void> {
     );
   }
   if (summary.excludedRuns.length) console.log(`excluded (an agent errored): ${summary.excludedRuns.join(", ")}`);
+  if (summary.providerEnded.length) {
+    console.log(`ended on a provider error (counted, not excluded): ${summary.providerEnded.join(", ")}`);
+    for (const [agent, a] of Object.entries(summary.agents)) {
+      if (a.averageScoreUninterrupted !== undefined) {
+        console.log(`  ${agent}: avg ${a.averageScore.toFixed(2)} → ${a.averageScoreUninterrupted.toFixed(2)} over uninterrupted runs`);
+      }
+    }
+  }
   if (summary.spread.length) console.log(`trials ≥3 apart: ${summary.spread.map((s) => `${s.agent}/${s.taskId} ${s.min}–${s.max}`).join(", ")}`);
   if (summary.saturated.length) console.log(`saturated (everyone > 7.5): ${summary.saturated.join(", ")}`);
   console.log(

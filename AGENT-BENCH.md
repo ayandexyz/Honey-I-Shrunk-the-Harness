@@ -384,7 +384,12 @@ one file.
 `bench:judge` writes `judging.json` per trial and `judged-report.json` per run,
 and prints BuffBench's table (avg, avg excluding scores of 1.0 or below, $/run,
 minutes per run), per-app and co-author columns, cost on tasks both agents solved
-(≥7.5), wide trial spreads, saturated tasks, and audit and fallback counts. Its
+(≥7.5), wide trial spreads, saturated tasks, and audit and fallback counts.
+Runs whose **last model request** was a 429/5xx (read from `proxy.jsonl`, so it
+works for every agent) are listed as *ended on a provider error*, with the
+average over the uninterrupted runs beside it — flagged, never excluded, since
+not retrying is the agent's own fault (v4: one MiniMax 529 each ended 4 of 9
+trials; 4.67 → 6.40). Its
 first line is the verdict: *scored by judge-haiku, audited by judge-gpt*, or audit
 **UNMEASURED** or **FAILED**, which means a published number needs `--panel`.
 `--judges haiku,deepseek` picks the panel by name (default `haiku,gpt`; first is

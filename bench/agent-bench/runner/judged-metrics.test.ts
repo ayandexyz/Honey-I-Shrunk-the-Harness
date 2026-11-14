@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { panelVerdict, summarize, type JudgedRow } from "./judged-metrics.js";
+import { panelVerdict, providerEndedStatus, summarize, type JudgedRow } from "./judged-metrics.js";
 
 function row(over: Partial<JudgedRow> & { score: number }): JudgedRow {
   const { score, ...rest } = over;
@@ -134,4 +134,29 @@ test("a panel configured with one judge is never a two-judge run, however clean 
   assert.equal(s.counts.degraded, 0);
   assert.deepEqual(panelVerdict(s.counts, 2, 1), { ok: false, share: 1 });
   assert.deepEqual(panelVerdict(s.counts, 2, 2), { ok: true, share: 0 });
+});
+
+test("providerEndedStatus flags a run whose last model request failed", () => {
+  const line = (status: number, modelEndpoint = true) =>
+    JSON.stringify({ status, modelEndpoint, path: "/v1/messages" });
+  // v4 add-agent-control t2: 73 successes, then one 529 and the run ended.
+  assert.equal(providerEndedStatus([...Array(73).fill(line(200)), line(529)].join("\n")), 529);
+  // Retried successfully: ends on a 200, not flagged.
+  assert.equal(providerEndedStatus([line(529), line(200)].join("\n")), undefined);
+  // Non-model traffic and a torn last line are ignored.
+  assert.equal(providerEndedStatus([line(429), line(200, false), '{"status":5'].join("\n")), 429);
+  assert.equal(providerEndedStatus(""), undefined);
+});
+
+test("provider-ended runs are flagged and averaged separately, never excluded", () => {
+  const s = summarize([
+    row({ trial: 1, score: 8 }),
+    row({ trial: 2, score: 0, providerEnded: 529 }),
+  ]);
+  assert.deepEqual(s.excludedRuns, []);
+  assert.equal(s.providerEnded.length, 1);
+  assert.match(s.providerEnded[0], /\(529\)$/);
+  const a = Object.values(s.agents)[0];
+  assert.equal(a.averageScore, 4);
+  assert.equal(a.averageScoreUninterrupted, 8);
 });
