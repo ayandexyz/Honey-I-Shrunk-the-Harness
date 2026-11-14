@@ -62,6 +62,7 @@ async function startFake(): Promise<Fake> {
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const challenges = new Map<string, { challenge: string; redirect: string }>();
+  const clientMethods = new Map<string, string>();
   let seq = 0;
   let revoked = false;
   const refreshTokens = new Set<string>();
@@ -103,9 +104,19 @@ async function startFake(): Promise<Fake> {
       });
     }
     if (url.pathname === "/register") {
+      // Like the MCP demo server: RFC 7591's default method is
+      // client_secret_basic, so a registration that names none gets a secret
+      // — which this token endpoint (advertising "none" only) then rejects.
       fake.registrations++;
       const meta = JSON.parse(await body(req)) as Record<string, unknown>;
-      return json(res, 201, { ...meta, client_id: `client-${fake.registrations}`, token_endpoint_auth_method: "none" });
+      const clientId = `client-${fake.registrations}`;
+      const method = (meta.token_endpoint_auth_method as string | undefined) ?? "client_secret_basic";
+      clientMethods.set(clientId, method);
+      return json(res, 201, {
+        ...meta,
+        client_id: clientId,
+        ...(method === "none" ? {} : { client_secret: `secret-${fake.registrations}` }),
+      });
     }
     if (url.pathname === "/authorize") {
       // Stands in for the user approving in a browser.
@@ -120,6 +131,13 @@ async function startFake(): Promise<Fake> {
     }
     if (url.pathname === "/token") {
       const form = new URLSearchParams(await body(req));
+      const basic = req.headers.authorization?.startsWith("Basic ")
+        ? Buffer.from(req.headers.authorization.slice(6), "base64").toString().split(":")[0]
+        : undefined;
+      const clientId = form.get("client_id") ?? basic;
+      if (!clientId || clientMethods.get(clientId) !== "none") {
+        return json(res, 401, { error: "invalid_client" });
+      }
       if (form.get("grant_type") === "authorization_code") {
         const pending = challenges.get(form.get("code")!);
         const verifier = form.get("code_verifier") ?? "";

@@ -111,20 +111,36 @@ export async function loginMcpServer(opts: McpLoginOptions): Promise<McpLoginRes
   const entry = () => readMcpAuth(name, url, file) ?? {};
   const save = (patch: Parameters<typeof updateMcpAuth>[2]) => updateMcpAuth(name, url, patch, file);
 
-  const clientMetadata: OAuthClientMetadata = {
-    client_name: "FreeCode",
-    redirect_uris: [redirectUrl],
-    grant_types: ["authorization_code", "refresh_token"],
-    response_types: ["code"],
-    ...(server.oauth?.scope ? { scope: server.oauth.scope } : {}),
+  // Read at registration time, after the SDK has saved discovery. RFC 7591's
+  // default is client_secret_basic, so a registration that names no method is
+  // issued a secret — which a server whose token endpoint accepts only public
+  // clients then rejects as invalid_client (found live against the MCP demo
+  // server). A public PKCE client whenever the server allows one, as Claude
+  // Code registers; a server that lists only secret methods (Figma) gets none
+  // named and issues the secret it wants.
+  const clientMetadata = (): OAuthClientMetadata => {
+    const methods =
+      entry().discovery?.authorizationServerMetadata?.token_endpoint_auth_methods_supported;
+    const publicClient = !methods || methods.includes("none");
+    return {
+      client_name: "FreeCode",
+      redirect_uris: [redirectUrl],
+      grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"],
+      ...(publicClient ? { token_endpoint_auth_method: "none" } : {}),
+      ...(server.oauth?.scope ? { scope: server.oauth.scope } : {}),
+    };
   };
+  // The SDK answers invalid_client by wiping the client and retrying, which
+  // during a code exchange can only fail with a message that hides the cause.
+  let clientRejected = false;
 
   const provider: OAuthClientProvider = {
     get redirectUrl() {
       return redirectUrl;
     },
     get clientMetadata() {
-      return clientMetadata;
+      return clientMetadata();
     },
     state: () => state,
     clientInformation: () => staticClient ?? entry().client,
@@ -141,14 +157,16 @@ export async function loginMcpServer(opts: McpLoginOptions): Promise<McpLoginRes
     },
     discoveryState: () => entry().discovery,
     saveDiscoveryState: (discovery) => save((e) => ({ ...e, discovery })),
-    invalidateCredentials: (scope) =>
-      save((e) => {
+    invalidateCredentials: (scope) => {
+      if (scope === "all" || scope === "client") clientRejected = true;
+      return save((e) => {
         if (scope === "all") return { discovery: e.discovery };
         if (scope === "client") return { ...e, client: undefined };
         if (scope === "tokens") return { ...e, tokens: undefined, expiresAt: undefined };
         if (scope === "verifier") return { ...e, codeVerifier: undefined };
         return { ...e, discovery: undefined };
-      }),
+      });
+    },
   };
 
   try {
@@ -156,7 +174,17 @@ export async function loginMcpServer(opts: McpLoginOptions): Promise<McpLoginRes
     const first = await auth(provider, { serverUrl: url, scope, fetchFn });
     if (first === "REDIRECT") {
       const code = await opts.waitForCode(callback, state);
-      const second = await auth(provider, { serverUrl: url, scope, authorizationCode: code, fetchFn });
+      let second;
+      try {
+        second = await auth(provider, { serverUrl: url, scope, authorizationCode: code, fetchFn });
+      } catch (err) {
+        if (clientRejected) {
+          throw new Error(
+            "The authorization server rejected FreeCode's client registration while exchanging the code (invalid_client). Run the login again to register a new client.",
+          );
+        }
+        throw err;
+      }
       if (second !== "AUTHORIZED") throw new Error("The authorization server did not issue tokens.");
     }
   } finally {
