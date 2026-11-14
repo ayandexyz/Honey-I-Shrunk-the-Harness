@@ -194,6 +194,7 @@ import { isPlainObject, effectiveCacheTtl } from "../providers/utils.js";
 import { isTimeoutError } from "../providers/fetch-timeout.js";
 import {
   noteStaticPrefix,
+  noteToolSet,
   recordInvalidation,
 } from "../providers/cache-invalidation.js";
 import {
@@ -2776,6 +2777,9 @@ export class AgentLoop {
             }).decision === "allow",
         )
       : allowlisted;
+    // The tools array is in the cached prefix: an MCP connect, a new skill or
+    // a mode switch rewrites it. Document it or D2 reports an unexplained bust.
+    noteToolSet(this.state.sessionId, tools);
 
     // Cap tool results in old history turns to prevent token explosion on long
     // sessions. The model already processed those results fully when they were

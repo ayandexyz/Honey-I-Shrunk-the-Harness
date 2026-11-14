@@ -11,6 +11,13 @@ be "fixed" → `docs/DECISIONS.md`.
 
 ## Small known limitations
 
+### `compact-restore-loop.test.ts` never exits (found 2026-11-15)
+
+Both tests pass, then the process hangs, so `tsx --test 'src/agent/**/*.test.ts'`
+never finishes (killed at 8 minutes). Reproduces on `main`. Something the test's
+`AgentLoop` starts (a timer, a language server, a background shell) outlives
+it. Find the handle and dispose it in the test's teardown.
+
 ### The compaction eval cases are 20KB JSONL lines (added 2026-09-08, updated 2026-09-29)
 
 **Status:** known, cosmetic, needs a paid run to fix.
@@ -206,12 +213,6 @@ that page's **Known gaps**.
       `CACHING_PROVIDERS` (`cache-awareness.ts:24`) is a one-element set, but
       `minimax` and `zai` use the same Anthropic endpoint shape and carry the same
       `cacheControl` markers, so their users never see the cold-cache warning.
-- [ ] **A changing tool set busts the prompt cache with nothing in the
-      journal.** `invalidateToolDefs()` (`tools/defs-cache.ts:49`) fires on
-      `tools.changed` / `mcp.tools.changed`; the tools array sits inside the
-      cached prefix, so the next request necessarily misses. No
-      `recordInvalidation` call, so the detector reports an unexplained bust —
-      the false positive the journal exists to prevent.
 - [ ] **`ProviderRegistryTag` has no consumer.** Defined at
       `effect/context.ts:60` and wired into both live and test layers
       (`effect/layers.ts:68`, `:182`), but nothing resolves it — the loop calls

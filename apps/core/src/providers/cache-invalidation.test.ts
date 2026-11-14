@@ -4,6 +4,7 @@ import {
   clearInvalidations,
   findRecentInvalidation,
   noteStaticPrefix,
+  noteToolSet,
 } from "./cache-invalidation.js";
 import { checkCacheUsage, resetCacheTracking } from "./cache-miss.js";
 
@@ -69,5 +70,59 @@ test("clearInvalidations forgets the fingerprint too", () => {
   clearInvalidations(s);
   // Post-clear the next block is a baseline again, not a change.
   noteStaticPrefix(s, "v2");
+  assert.equal(findRecentInvalidation(s), undefined);
+});
+
+const tool = (name: string, description = `${name} tool`) => ({
+  name,
+  description,
+  parameters: { type: "object", properties: {} },
+});
+
+test("the first tool list only establishes a baseline", () => {
+  const s = session();
+  noteToolSet(s, [tool("read"), tool("write")]);
+  noteToolSet(s, [tool("read"), tool("write")]);
+  assert.equal(findRecentInvalidation(s), undefined);
+});
+
+test("an MCP server connecting mid-session is documented by name", () => {
+  const s = session();
+  noteToolSet(s, [tool("read")]);
+  noteToolSet(s, [tool("mcp__github__search"), tool("read")]);
+  const entry = findRecentInvalidation(s);
+  assert.equal(entry?.source, "tool set changed");
+  assert.equal(entry?.detail, "added mcp__github__search");
+});
+
+test("a switch into a read-only mode is documented", () => {
+  const s = session();
+  noteToolSet(s, [tool("bash"), tool("read"), tool("write")]);
+  noteToolSet(s, [tool("read")]);
+  assert.equal(findRecentInvalidation(s)?.detail, "removed bash, write");
+});
+
+test("a changed description with the same names is still documented", () => {
+  const s = session();
+  noteToolSet(s, [tool("read", "v1")]);
+  noteToolSet(s, [tool("read", "v2")]);
+  assert.match(findRecentInvalidation(s)!.detail, /description or schema/);
+});
+
+test("the miss a tool-set change causes is attributed, not alarmed", () => {
+  const s = session();
+  resetCacheTracking(s);
+  noteToolSet(s, [tool("read")]);
+  checkCacheUsage(s, warm(0, 10_000));
+  noteToolSet(s, [tool("mcp__x__y"), tool("read")]);
+  const problem = checkCacheUsage(s, warm(0, 10_000));
+  assert.match(problem!.documentedCause!, /tool set changed/);
+});
+
+test("clearInvalidations forgets the tool list too", () => {
+  const s = session();
+  noteToolSet(s, [tool("read")]);
+  clearInvalidations(s);
+  noteToolSet(s, [tool("write")]);
   assert.equal(findRecentInvalidation(s), undefined);
 });

@@ -99,8 +99,45 @@ export function noteStaticPrefix(sessionId: string, text: string): void {
   );
 }
 
-/** Drop a finished session's journal and prefix fingerprint. */
+/** Tool list sent on the previous request, per session — see noteToolSet. */
+const toolSets = new Map<string, { digest: string; names: string[] }>();
+
+/**
+ * Record the tool list sent to the provider, documenting an invalidation when
+ * it differs from the previous request's.
+ *
+ * The tools array sits inside the cached prefix (the last tool carries a
+ * breakpoint), so an MCP server connecting, a skill registering, or a switch
+ * into or out of a read-only mode re-sends everything behind it. Legitimate,
+ * but undocumented it reads as a harness bust — same reasoning as
+ * noteStaticPrefix.
+ */
+export function noteToolSet(
+  sessionId: string,
+  tools: ReadonlyArray<{ name: string; description: string; parameters: unknown }>,
+): void {
+  const names = tools.map((t) => t.name);
+  const digest = createHash("sha256").update(JSON.stringify(tools)).digest("hex");
+  const previous = toolSets.get(sessionId);
+  toolSets.set(sessionId, { digest, names });
+  if (previous === undefined || previous.digest === digest) return;
+
+  const added = names.filter((n) => !previous.names.includes(n));
+  const removed = previous.names.filter((n) => !names.includes(n));
+  const parts = [
+    added.length ? `added ${added.join(", ")}` : "",
+    removed.length ? `removed ${removed.join(", ")}` : "",
+  ].filter(Boolean);
+  recordInvalidation(
+    sessionId,
+    "tool set changed",
+    parts.length ? parts.join("; ") : "a tool's description or schema changed",
+  );
+}
+
+/** Drop a finished session's journal and prefix fingerprints. */
 export function clearInvalidations(sessionId: string): void {
   journal.delete(sessionId);
   staticPrefixes.delete(sessionId);
+  toolSets.delete(sessionId);
 }
