@@ -151,7 +151,7 @@ left out.
 |---|---|---|
 | `FREECODE_JUDGE_PROVIDER` | unset (`claude-cli` under `pnpm eval:gate`) | Provider for the judged suite's grader. Must not be the provider under test. `claude-cli` grades with `claude -p` on your Claude subscription (no API key); `pnpm eval:gate` uses it unless you set another. |
 | `FREECODE_JUDGE_MODEL` | provider default (`claude-haiku-4-5` for `claude-cli`) | Model for that grader. |
-| `FREECODE_EVALS_DIR` | `./evals` | Where the case files are read from. |
+| `FREECODE_EVALS_DIR` | nearest `evals/` at or above the cwd | Where the case files are read from. |
 | `FREECODE_EVAL_HOME` | `~/.freecode` | Where eval history (`eval_runs.jsonl`) is kept. |
 | `FREECODE_EVAL_KEEP_SANDBOX` | off | `1` keeps each trial's sandbox dir for inspection instead of deleting it. |
 | `FREECODE_EVAL_TRIAL_TIMEOUT_MS` | `300000` | Per-trial time limit. |

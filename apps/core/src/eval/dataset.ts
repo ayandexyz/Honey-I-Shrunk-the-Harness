@@ -17,9 +17,26 @@ export class DatasetError extends Error {}
 /** Modes that can write to disk. Allowed only for a sandboxed case (§6.1). */
 const MUTATING_MODES = new Set(["build", "danger"]);
 
-/** Repo-relative `evals/` dir, overridable for tests and for installed use. */
+/**
+ * The nearest directory at or above `start` that holds `evals/` — the repo the
+ * shipped cases are written against, so it is also the trial's project root.
+ * Falls back to `start`. Without the walk, `freecode eval` from `apps/core`
+ * found no suite, and with only the suite found the cases would have run
+ * against the wrong tree.
+ */
+export function evalRoot(start = process.cwd()): string {
+  const from = path.resolve(start);
+  for (let dir = from; ; dir = path.dirname(dir)) {
+    if (fs.statSync(path.join(dir, "evals"), { throwIfNoEntry: false })?.isDirectory()) {
+      return dir;
+    }
+    if (path.dirname(dir) === dir) return from;
+  }
+}
+
+/** The `evals/` dir under `evalRoot()`, overridable for tests and for installed use. */
 export function evalsDir(): string {
-  return process.env.FREECODE_EVALS_DIR ?? path.resolve("evals");
+  return process.env.FREECODE_EVALS_DIR ?? path.join(evalRoot(), "evals");
 }
 
 export function suitePath(suite: string): string {

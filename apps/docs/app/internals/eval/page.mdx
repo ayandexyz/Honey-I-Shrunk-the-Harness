@@ -59,7 +59,8 @@ everything green, and quietly dilutes the signal until nobody trusts a red.
 
 ## Your first run
 
-Run from the **repo root** — suite paths resolve against the current directory.
+Run from anywhere inside the repo — the nearest directory above you that holds
+`evals/` is where suites are read from, and it is also the trials' project root.
 
 ```bash
 pnpm eval                      # trajectory, 1 trial each — the cheap smoke run
@@ -535,7 +536,7 @@ Results land in two files:
 
 | Variable | Effect |
 | --- | --- |
-| `FREECODE_EVALS_DIR` | where suites live; default is `./evals` **relative to the cwd** |
+| `FREECODE_EVALS_DIR` | where suites live; default is the nearest `evals/` at or above the cwd |
 | `FREECODE_EVAL_HOME` | where the report and history are written (default `~/.freecode`) |
 | `FREECODE_EVAL_TRIAL_TIMEOUT_MS` | wall-clock cap per trial, default 300000 |
 | `FREECODE_EVAL_VERIFY_TIMEOUT_MS` | cap on a coding case's `verify`, default 60000 |
@@ -567,7 +568,7 @@ repo root**. Read it before running anything that costs money.
 
 | Symptom | Check |
 | --- | --- |
-| `no such suite: …/evals/trajectory.jsonl` | you are not at the repo root; `cd` there or set `FREECODE_EVALS_DIR` |
+| `no such suite: …/evals/trajectory.jsonl` | you are not inside a checkout with an `evals/` dir; `cd` into one or set `FREECODE_EVALS_DIR` |
 | `No provider configured` | set `current.provider` in `~/.freecode/config.json`, or pass `--model <provider>/<model>` |
 | every case fails with `run failed: …` | infrastructure, not the agent — the message is the provider's |
 | `model call hung` | a request stayed open past 300s; `freecode trace <id>` shows which |
@@ -589,32 +590,28 @@ repo root**. Read it before running anything that costs money.
 
 Each is also tracked in `TODO.md`.
 
-1. **`evalsDir()` is relative to the current working directory.** `freecode eval`
-   from anywhere but the repo root fails unless `FREECODE_EVALS_DIR` is set. The
-   shipped cases also reference FreeCode's own source paths, so the suite is
-   repo-specific in a way nothing in the CLI says.
-2. **No shipped case pins `model`**, though the spec says every one should. The
+1. **No shipped case pins `model`**, though the spec says every one should. The
    gate refusing a cross-model baseline covers the main hazard, so this is
    belt-and-braces rather than an open hole.
-3. **The judged thresholds are uncalibrated** — 3.5/2.0 come from the spec, not
+2. **The judged thresholds are uncalibrated** — 3.5/2.0 come from the spec, not
    from a real run on your model.
-4. **Every case costs a real API call.** There is no scripted/replay provider, so
+3. **Every case costs a real API call.** There is no scripted/replay provider, so
    nothing can run per-push. This is the single blocker behind the commented-out
    nightly cron and the unmeasurable redirect criterion.
-5. **Four failure categories have no cases, and cannot yet.**
+4. **Four failure categories have no cases, and cannot yet.**
    `compaction-boundary`, `memory-recall`, `resume` and `mcp-failure` each need
    something the runner does not have — a turn long enough to compact, a seeded
    memory dir, a prior session, a fixture MCP server. A case written today would
    fail for infrastructure reasons and read as an agent failure. The list lives
    in `dataset.test.ts` as `CATEGORIES_WITHOUT_CASES`, so coverage cannot drift
    without someone editing it.
-6. **Coding cases are synthetic and small.** Eleven dependency-free `.mjs`
+5. **Coding cases are synthetic and small.** Eleven dependency-free `.mjs`
    fixtures catch a harness change that breaks editing outright; they will not
    catch one that degrades work on a real codebase.
-7. **The sandbox holds files, not the agent** — `bash` reaches the whole
+6. **The sandbox holds files, not the agent** — `bash` reaches the whole
    filesystem. Cases are trusted fixtures, so this is a limit rather than a live
    hole, but it is why `danger` mode has no eval coverage.
-8. **The price table is small and dated** (`PRICES_AS_OF` 2026-05). Anything not
+7. **The price table is small and dated** (`PRICES_AS_OF` 2026-05). Anything not
    in it prices as nothing until you add it to `~/.freecode/pricing.json`.
 
 ## What this deliberately is not

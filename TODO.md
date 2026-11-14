@@ -157,11 +157,12 @@ that page's **Known gaps**.
 
 ### Real fixes
 
-- [ ] **A loop-health `warn` still reaches nobody by default.** The signal is now trustworthy,
-      but every `warn` goes to `logger.debug` (`loop.ts:737`) — invisible at the
-      default log level and never shown to the model, so nothing acts on a stuck
-      pattern until it doubles into a `stop`. Phase 1 of
-      `specs/2026-08-26-trajectory-redirection.md`.
+- [ ] **Two loop-health `warn`s still reach nobody by default.** Repeated
+      identical calls and repeated errors now get one reminder each
+      (`repeatedCallReminder`, `repeatedErrorReminder`), but `no_progress`,
+      `oscillation_detected` and `repeated_reasoning` only go to
+      `logger.debug` and the rollout log unless redirection is on — nothing
+      acts on them until they double into a `stop` (stagnation never stops).
 - [ ] **The spend circuit breaker is off by default** (`loop.ts:812`,
       `compaction/tokens.ts:105`). `FREECODE_MAX_TURN_TOKENS` is unset unless the
       user sets it, so nothing caps actual spend. `freecode run` now has
@@ -325,10 +326,6 @@ that page's **Known gaps**.
 From releasing `todowrite-for-multistep` and `review-mode-readonly` from
 `evals/quarantine.txt` (10/10 recent trials each; gate opened on the confirm run).
 
-- [ ] **Infra trials are not flagged on the outcome scorer.** `TrialResult.infra`
-      (2026-09-20) excludes provider errors / stalls / hangs from `majority()`
-      on the trajectory suite; `scorers/outcome.ts` only fails on `verify`, so a
-      `coding` case whose model call died still counts as an agent failure.
 - [ ] Three cases remain quarantined and are all deterministic M3 gaps, not
       flakes: `frustrated-user-wants-one-line` (0/10), `ask-when-the-answer-is-
       off-repo` (1/10), `greeting-uses-no-tools` (3/10, one 25-turn session on
@@ -423,11 +420,6 @@ spec's §12; these are the parts that are actionable independently of it.
 
 ### Docs findings (writing `/internals/eval` — 2026-08-23)
 
-- [ ] **`evalsDir()` is CWD-relative** (`eval/dataset.ts:19`,
-      `path.resolve("evals")`), so `freecode eval` fails with "no such suite"
-      anywhere but the repo root unless `FREECODE_EVALS_DIR` is set. The shipped
-      cases also reference FreeCode's own source paths, so the suite is
-      repo-specific and nothing in `--help` says so.
 
 ### Docs findings (eval Phase 2 — sandbox + outcome scorer, 2026-08-27)
 

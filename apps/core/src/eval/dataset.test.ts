@@ -2,7 +2,15 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import * as fs from "fs";
 import * as path from "path";
-import { DatasetError, loadSuite, parseSuite, staleUnmeasured } from "./dataset.js";
+import * as os from "os";
+import {
+  DatasetError,
+  evalRoot,
+  evalsDir,
+  loadSuite,
+  parseSuite,
+  staleUnmeasured,
+} from "./dataset.js";
 import { FAILURE_CATEGORIES } from "./types.js";
 import type { EvalCase, FailureCategory } from "./types.js";
 
@@ -961,5 +969,41 @@ test("the shipped long-horizon suite is valid", () => {
   } finally {
     if (previous === undefined) delete process.env.FREECODE_EVALS_DIR;
     else process.env.FREECODE_EVALS_DIR = previous;
+  }
+});
+
+test("evalRoot walks up to the directory holding evals/", () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "freecode-evalroot-")));
+  try {
+    fs.mkdirSync(path.join(root, "evals"));
+    const deep = path.join(root, "apps", "core", "src");
+    fs.mkdirSync(deep, { recursive: true });
+    assert.equal(evalRoot(deep), root);
+    assert.equal(evalRoot(root), root);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("evalRoot falls back to the start dir when no evals/ is above it", () => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "freecode-evalroot-")));
+  try {
+    assert.equal(evalRoot(dir), dir);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("evalsDir finds the repo's evals/ from a subdirectory", () => {
+  // tsx --test runs from apps/core; the shipped suites live two levels up.
+  const previous = process.env.FREECODE_EVALS_DIR;
+  delete process.env.FREECODE_EVALS_DIR;
+  try {
+    assert.equal(
+      evalsDir(),
+      path.resolve(import.meta.dirname, "../../../../evals"),
+    );
+  } finally {
+    if (previous !== undefined) process.env.FREECODE_EVALS_DIR = previous;
   }
 });

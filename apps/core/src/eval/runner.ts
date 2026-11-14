@@ -13,6 +13,7 @@ import type { JudgeConfig } from "./judge-config.js";
 import type { EvalCase, RunRecord, TrialResult } from "./types.js";
 import { trialEfficiency } from "./scorers/efficiency.js";
 import { echoedModels } from "./model-echo.js";
+import { evalRoot } from "./dataset.js";
 import { scoreOutcome } from "./scorers/outcome.js";
 import { scoreTrajectory } from "./scorers/trajectory.js";
 import { envInt } from "../utils/env.js";
@@ -114,7 +115,7 @@ export async function initRunner(
         "or pass --model <provider>/<model>.",
     );
   }
-  return { provider, model, projectPath: process.cwd() };
+  return { provider, model, projectPath: evalRoot() };
 }
 
 /**
