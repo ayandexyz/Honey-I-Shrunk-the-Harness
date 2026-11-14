@@ -2,7 +2,7 @@
 
 Date: 2026-10-11  
 Reviewed checkout: `97793b1e`  
-Status: partially implemented; local benchmark and TUI streaming optimization built 2026-10-17.
+Status: partially implemented; local benchmark and TUI streaming optimization built 2026-10-17. §5 and §6 measured 2026-11-15 and closed as not worth building. §2 and §4 target `apps/web-app`, retired 2026-10-26.
 
 For prompt changes, token reduction, model selection, and billing efficiency, see the separate [token and cost efficiency guide](2026-10-12-token-and-cost-efficiency.md).
 
@@ -111,6 +111,13 @@ Consider viewport virtualization only if large-transcript profiles justify it; i
 
 ## 5. Avoid loading the whole unchanged history on every send
 
+> **Measured 2026-11-15 — not worth building.** `pnpm bench:local` (10 samples,
+> compiled core): `history_load_unchanged` p95 **4.3 ms** and
+> `history_load_after_append` p95 **7.0 ms** for a 2,400-entry, 1 MB session;
+> `session_resume_large` p95 4.5 ms. Against a model call measured in seconds
+> that is noise, so the cache below is not justified. Revisit only if a real
+> session is an order of magnitude larger.
+
 [AgentLoop.run](../apps/core/src/agent/loop.ts) calls `loadHistory`, which calls the session store's `getMessages`. In [session/store.ts](../apps/core/src/session/store.ts), `readEntries` reads the entire messages file, splits it, and parses every entry. Branch resolution already uses a linear fast path and an ID map; there is no reason to assume a repeated linear-search bug there.
 
 The experiment should target repeated disk reading, parsing, and message conversion across follow-up sends.
@@ -122,6 +129,11 @@ Start by measuring this path against small and large histories. If it is signifi
 **Acceptance:** repeated warm reads avoid reparsing unchanged bytes; branch navigation and compaction produce the same messages as an uncached store; external edits are observed; memory remains bounded. Record bytes parsed, entries converted, and p95 pre-provider latency.
 
 ## 6. Profile the checkpoint barrier
+
+> **Measured 2026-11-15 — not worth optimizing.** `checkpoint_capture_large`
+> (1,001 untracked files, all statted) p95 **58.9 ms**; the small fixture
+> 27 ms. Paid once per user turn, before a multi-second model call. Revisit
+> only for a project with tens of thousands of untracked files.
 
 The agent awaits checkpoint capture before persisting the new user message and proceeding to the model. [CheckpointService](../apps/core/src/checkpoint/service.ts) reports capture duration, and [loop.ts](../apps/core/src/agent/loop.ts) records successful captures. Reuse that evidence first.
 
