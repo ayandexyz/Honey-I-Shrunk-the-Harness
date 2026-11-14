@@ -15,6 +15,40 @@ and `CLAUDE.md`/`AGENTS.md` instructions. Ranked by value per line of work.
 
 - [ ] **7. MCP server (expose)** — serve FreeCode's tools *as* an MCP server. The client
       side is done. Already listed as deferred in `CLAUDE.md`.
+- [ ] **8. Deferred MCP tools + tool search** (added 2026-11-15) — every connected MCP
+      tool's full schema goes into every request (`mcp/convert-tool.ts` →
+      `registerMcpTool` → `getToolDefs()`), so a user with a big server pays for it on
+      each call whether the task needs it or not. **Not built yet because it does not
+      pay here:** measured 2026-11-15 with `apps/core/scripts/measure-mcp-tools.ts`
+      (branch `feat/mcp-tool-search`), this machine's MCP overhead is 7 tools ≈1.3K
+      tokens (1% of 128K) against ≈6.6K for the 21 built-ins — below Claude Code's
+      auto threshold (MCP > 10% of the window), so its auto mode would not defer
+      either. It matters for other users: GitHub's server alone is ≈26K (35 tools).
+      Every surveyed agent except opencode defers MCP behind a search (Claude Code, Codex,
+      jcode, pi, grok-build); the design to copy is **jcode's `McpToolsMode::Auto`**
+      (`jcode-base/src/config.rs`, `agent/turn_execution.rs`), the only multi-provider one:
+      - **Native deferral** where the API has it — Anthropic `defer_loading` +
+        `tool_reference` (Claude Code: off for Haiku and for non-first-party base URLs),
+        OpenAI Responses `tool_search` (Codex, gated on `supports_search_tool`). Check first
+        that the AI SDK passes these through.
+      - **Everywhere else, fixed `mcp_search` + `mcp_call` tools**, so the tool list never
+        changes and the RC8 cache prefix only grows. Pi instead adds found tools to the
+        declared list and eats one cache miss per discovery; that is wrong for RC8.
+      - **Announce** server/tool names as an appended `synthetic: "context"` message
+        (`agent/context-inject.ts`), never the system param — Claude Code's
+        `deferred_tools_delta`, Codex's world-state diffs, jcode's late-tool announcement.
+        Also fixes servers that connect after turn 1 without rebuilding the list.
+      - **Ranker**: `memory/bm25.ts` plus identifier splitting on `__`/`_`/`-`/camelCase
+        (grok `session/tool_index.rs`, Claude Code `ToolSearchTool.ts`) and pi's naive
+        stemming (`extensions/tool-search/tool.ts`); ~8 results.
+      - **Per-server exposure** like pi's `direct`/`deferred`/`hidden` + per-tool globs
+        (`coding-agent/docs/mcp.md`), so a small hot server stays direct.
+      - **Permissions on the real name**: `mcp_call` must evaluate rules, `readOnlyHint` and
+        `isDestructive` against `mcp__server__tool`, never against `mcp_call`.
+      - **Gate**: auto, on only when MCP schemas exceed ~10% of the model's window
+        (Claude Code's default); flip any default only after `eval ab`.
+      Out of scope: code mode (opencode's interpreter, pi's worker) — pays off for long
+      chains of MCP calls, not FreeCode's main use.
 
 ## Subagent permission profiles (added 2026-09-08)
 
