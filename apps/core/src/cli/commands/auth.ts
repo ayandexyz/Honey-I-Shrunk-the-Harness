@@ -69,7 +69,7 @@ outside what OpenAI documents. The account at risk is yours.
 Your API-key setup is untouched: run \`freecode auth logout openai\` to go back.
 `;
 
-function prompt(question: string): Promise<string> {
+export function prompt(question: string): Promise<string> {
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stderr,
@@ -83,7 +83,7 @@ function prompt(question: string): Promise<string> {
 }
 
 /** Best-effort; a machine with no browser just uses the printed URL. */
-function openBrowser(url: string): boolean {
+export function openBrowser(url: string): boolean {
   const cmd =
     process.platform === "darwin"
       ? "open"

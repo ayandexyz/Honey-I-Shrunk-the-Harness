@@ -1,17 +1,18 @@
 import type { CommandModule } from "yargs";
 import { loadMcpConfig } from "../../../mcp/config.js";
 import { getConfigDir } from "../../utils/config.js";
+import { describeMcpLogin } from "../../../mcp/oauth/store.js";
 
 const handler = async () => {
   const config = await loadMcpConfig(getConfigDir());
 
   console.log("\nMCP Servers:");
-  console.log("┌────────────────┬─────────┬─────────────┬────────────────────┐");
-  console.log("│ Name           │ Type    │ Status      │ Tools              │");
-  console.log("├────────────────┼─────────┼─────────────┼────────────────────┤");
+  console.log("┌────────────────┬─────────┬───────────────┬────────────────────┐");
+  console.log("│ Name           │ Type    │ Status        │ Tools              │");
+  console.log("├────────────────┼─────────┼───────────────┼────────────────────┤");
 
   if (config.servers.length === 0) {
-    console.log("│ (no servers configured)                                       │");
+    console.log("│ (no servers configured)                                         │");
   }
 
   for (const server of config.servers) {
@@ -20,7 +21,9 @@ const handler = async () => {
     const status = server.source === "claude-code"
       ? "claude"
       : server.enabled ? "enabled" : "disabled";
-    const statusStr = status.padEnd(11);
+    const login =
+      server.type === "remote" && server.url ? describeMcpLogin(server.name, server.url) : "—";
+    const statusStr = (login === "—" ? status : `${status}, ${login === "signed in" ? "auth" : "expired"}`).padEnd(13);
 
     // Show command/url instead of tools (tools only available when daemon running)
     let detail = "-";
@@ -36,11 +39,12 @@ const handler = async () => {
     );
   }
   console.log(
-    "└────────────────┴─────────┴─────────────┴────────────────────┘\n",
+    "└────────────────┴─────────┴───────────────┴────────────────────┘\n",
   );
   console.log(
     "Note: Status shows config-only. Run 'freecode serve' (TUI/VSCode) to connect servers.\n" +
-      "      'claude' = imported from Claude Code (~/.claude.json, .mcp.json); FREECODE_MCP_CLAUDE_CODE=0 hides them.\n",
+      "      'claude' = imported from Claude Code (~/.claude.json, .mcp.json); FREECODE_MCP_CLAUDE_CODE=0 hides them.\n" +
+      "      'auth' = signed in with 'freecode mcp login <name>'.\n",
   );
 };
 

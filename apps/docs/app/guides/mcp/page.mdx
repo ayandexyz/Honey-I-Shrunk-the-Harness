@@ -67,7 +67,41 @@ file directly for `headers`, `env`, or a `timeout` other than the CLI default.
 | `freecode mcp remove <name>` | delete a server from config |
 | `freecode mcp start <name>` | connect, list tools, register them |
 | `freecode mcp stop <name>` | disconnect and unregister its tools |
-| `freecode mcp status <name>` | print the server's config (not a live health check) |
+| `freecode mcp status <name>` | print the server's config and whether it is signed in (not a live health check) |
+| `freecode mcp login <name>` | sign in to a remote server that needs OAuth (see below) |
+| `freecode mcp logout <name>` | forget a remote server's sign-in |
+
+## Servers that need a login (OAuth)
+
+Hosted servers like Figma, Linear or Notion answer `401` until you sign in. FreeCode
+reports that instead of failing silently: the first message of a session shows
+
+```
+MCP server "figma" needs a login (not signed in) — run: freecode mcp login figma
+```
+
+`freecode mcp login figma` opens the browser, registers FreeCode with the server's
+authorization server when it supports dynamic registration, and stores the tokens in
+`~/.freecode/mcp-auth.json` (mode `0600`). Restart FreeCode and the server's tools
+appear; from then on the access token is refreshed on its own.
+
+- **A connection never opens a browser.** Only `mcp login` does. A background
+  connect, `freecode run` or an overnight run just reports the server as needing a
+  login.
+- **Over SSH**, use `--no-browser`: open the printed URL anywhere, then paste the
+  address-bar URL of the page that fails to load at the end.
+- **Servers imported from Claude Code need their own FreeCode login.** Claude Code's
+  tokens are never reused: servers commonly rotate refresh tokens, so two clients
+  sharing one grant log each other out.
+- **No dynamic registration?** Give the server a pre-registered client in
+  `config.json`; `clientSecret` may be `${ENV_VAR}`:
+
+  ```json
+  { "name": "github", "type": "remote", "url": "https://api.githubcopilot.com/mcp/",
+    "oauth": { "clientId": "…", "clientSecret": "${GITHUB_MCP_SECRET}", "callbackPort": 8765 } }
+  ```
+
+- A server configured with its own `Authorization` header keeps using that header.
 
 ## How a server's tools become FreeCode tools
 
@@ -123,3 +157,9 @@ cached system prefix, and a changed tool set necessarily changes that prefix.
 - **No live health check.** `mcp status` only prints config; there's no way to
   ask "is this server actually connected right now" outside a running
   `freecode serve` process.
+- **A login needs a restart to take effect.** `mcp login` runs in its own process,
+  so a running FreeCode loads the server's tools on its next start. The model cannot
+  start a login mid-session yet (spec `2026-11-15-mcp-oauth.md` Phase 2).
+- **A server asking for more permissions** (`insufficient_scope`) is reported as
+  needing a login; re-running `mcp login` does not yet add the new scope to the old
+  one (Phase 3).

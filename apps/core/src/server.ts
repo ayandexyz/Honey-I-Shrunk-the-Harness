@@ -96,6 +96,7 @@ import {
 import { getInterruptHandler } from "./session/interrupt.js";
 import { generateTitleFromPrompt } from "./agent/title-generator.js";
 import { initMcpServers, listClients, getMcpTools } from "./mcp/index.js";
+import { takeUnannouncedNeedsAuth } from "./mcp/oauth/needs-auth.js";
 import { loadExtensions, listExtensions } from "./extensions/index.js";
 import { getConfigDir } from "./cli/utils/config.js";
 import { initHooks } from "./hooks/bootstrap.js";
@@ -788,6 +789,15 @@ export const methodHandlers: Record<
 
   "session.send": async (params: Record<string, unknown>): Promise<unknown> => {
     await mcpReady;
+    // MCP connects at daemon start, before any session exists to carry a
+    // notice — so a server that needs a login is announced on the first send.
+    for (const line of takeUnannouncedNeedsAuth()) {
+      BusEvents.stream(params.sessionId as string, {
+        type: "notice",
+        level: "warn",
+        content: line,
+      });
+    }
     const {
       sessionId,
       message,

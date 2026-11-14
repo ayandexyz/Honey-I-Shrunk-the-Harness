@@ -1,6 +1,7 @@
 import type { CommandModule } from "yargs";
 import { loadMcpConfig } from "../../../mcp/config.js";
 import { getConfigDir } from "../../utils/config.js";
+import { describeMcpLogin } from "../../../mcp/oauth/store.js";
 
 interface StatusArgs {
   name: string;
@@ -39,6 +40,10 @@ export const statusCommand: CommandModule<object, StatusArgs> = {
       }
     } else if (server.type === "remote" && server.url) {
       console.log(`\nURL:       ${server.url}`);
+      const login = describeMcpLogin(server.name, server.url);
+      console.log(
+        `Login:     ${login === "—" ? `none (freecode mcp login ${server.name} if it needs one)` : login}`,
+      );
       if (server.headers) {
         console.log(`Headers:`);
         for (const [key, value] of Object.entries(server.headers)) {

@@ -20,6 +20,8 @@ interface ClaudeCodeServer {
   env?: Record<string, string>;
   url?: string;
   headers?: Record<string, string>;
+  /** Claude Code's pre-registered OAuth client; its secret lives in their keychain, not here. */
+  oauth?: { clientId?: string; callbackPort?: number };
 }
 
 interface ClaudeJson {
@@ -75,6 +77,9 @@ export function toMcpServer(
       type: "remote",
       url: expandEnvVars(cc.url),
       headers: expandRecord(cc.headers),
+      ...(cc.oauth?.clientId || cc.oauth?.callbackPort
+        ? { oauth: { clientId: cc.oauth.clientId, callbackPort: cc.oauth.callbackPort } }
+        : {}),
       enabled: true,
       timeout: 5000,
       source: "claude-code",

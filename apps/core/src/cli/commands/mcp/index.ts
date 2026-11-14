@@ -5,6 +5,7 @@ import { removeCommand } from "./remove.js";
 import { startCommand } from "./start.js";
 import { stopCommand } from "./stop.js";
 import { statusCommand } from "./status.js";
+import { loginCommand, logoutCommand } from "./login.js";
 
 export const mcpCommand: CommandModule = {
   command: "mcp",
@@ -17,6 +18,8 @@ export const mcpCommand: CommandModule = {
       .command(startCommand)
       .command(stopCommand)
       .command(statusCommand)
+      .command(loginCommand)
+      .command(logoutCommand)
       .demandCommand(1, "Specify a subcommand"),
   handler: () => {
     // Default handler won't be reached due to demandCommand

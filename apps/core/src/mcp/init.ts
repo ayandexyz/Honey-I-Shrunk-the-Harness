@@ -17,6 +17,10 @@ import {
 } from "../permission/mode-policy.js";
 import { BusEvents } from "../bus/index.js";
 import type { McpServer } from "./types.js";
+import { createAuthFetch, McpNeedsAuthError } from "./oauth/auth-fetch.js";
+import { hasMcpLogin } from "./oauth/store.js";
+import { staticClientFor } from "./oauth/login.js";
+import { clearNeedsAuth, isNeedsAuthError, markNeedsAuth } from "./oauth/needs-auth.js";
 
 function getConfigDir(): string {
   return path.join(os.homedir(), ".freecode");
@@ -42,9 +46,23 @@ async function connectServer(
       if (!server.url) {
         throw new Error("URL is required for remote MCP servers");
       }
+      // A configured Authorization header wins; otherwise a stored sign-in
+      // is sent. With neither, a server that needs auth answers 401 and is
+      // reported as needing a login below — a connect never starts one.
+      const configuredAuth = Object.keys(server.headers ?? {}).some(
+        (h) => h.toLowerCase() === "authorization",
+      );
       transport = createHttpTransport({
         url: server.url,
         headers: server.headers as Record<string, string> | undefined,
+        fetch:
+          !configuredAuth && hasMcpLogin(server.name, server.url)
+            ? createAuthFetch({
+                name: server.name,
+                url: server.url,
+                client: staticClientFor(server),
+              })
+            : undefined,
       });
     } else {
       throw new Error(`Unknown MCP server type: ${server.type}`);
@@ -87,10 +105,17 @@ async function connectServer(
       }
     }
 
+    clearNeedsAuth(server.name);
     BusEvents.mcpServerStarted(server.name, tools.length);
 
     return { name: server.name, toolCount: tools.length };
   } catch (err) {
+    if (isNeedsAuthError(err)) {
+      markNeedsAuth(
+        server.name,
+        err instanceof McpNeedsAuthError ? err.reason : "not signed in",
+      );
+    }
     BusEvents.mcpServerError(server.name, String(err));
     return null;
   }

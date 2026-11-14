@@ -11,6 +11,16 @@ export const McpServerSchema = z
     // Remote (HTTP) config
     url: z.string().url().optional(),
     headers: z.record(z.string(), z.string()).optional(),
+    // OAuth client for a server without dynamic client registration
+    // (spec 2026-11-15-mcp-oauth §4.2). `clientSecret` may be `${ENV_VAR}`.
+    oauth: z
+      .object({
+        clientId: z.string().optional(),
+        clientSecret: z.string().optional(),
+        scope: z.string().optional(),
+        callbackPort: z.number().int().positive().optional(),
+      })
+      .optional(),
     // Common config
     enabled: z.boolean().default(true),
     timeout: z.number().default(5000),

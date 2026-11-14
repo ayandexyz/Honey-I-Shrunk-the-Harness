@@ -291,6 +291,8 @@ freecode mcp remove <name>
 freecode mcp start <name>
 freecode mcp stop <name>
 freecode mcp status <name>
+freecode mcp login <name> [--no-browser]
+freecode mcp logout <name>
 ```
 
 | Command | Arguments | Notes |
@@ -298,7 +300,9 @@ freecode mcp status <name>
 | `list` | — | reads config only; it does not connect. The output says so |
 | `add` | `<name> <type> <command>` | `type` is `local` or `remote`. For `local` the command string is split on spaces; for `remote` it is the URL |
 | `remove` | `<name>` | |
-| `start` / `stop` / `status` | `<name>` | |
+| `start` / `stop` / `status` | `<name>` | `status` shows whether a remote server is signed in |
+| `login` | `<name>` | OAuth sign-in for a remote server; `--no-browser` prints the URL and asks for the redirect URL instead. Tokens go to `~/.freecode/mcp-auth.json`. See [MCP servers](/guides/mcp#servers-that-need-a-login-oauth) |
+| `logout` | `<name>` | deletes the stored tokens and client registration |
 
 Servers are written to `~/.freecode/config.json` under `mcp.servers`, with
 `enabled: true` and `timeout: 5000` defaults. There is no project-scoped MCP

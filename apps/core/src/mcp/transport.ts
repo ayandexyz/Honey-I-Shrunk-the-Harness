@@ -5,6 +5,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import {
   StreamableHTTPClientTransport,
 } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { logger } from "../utils/logger.js";
 
 export interface StdioTransportConfig {
@@ -46,6 +47,8 @@ function captureStderr(name: string, transport: StdioClientTransport): void {
 export interface HttpTransportConfig {
   url: string;
   headers?: Record<string, string>;
+  /** Sends a signed-in server's token (`oauth/auth-fetch.ts`). */
+  fetch?: FetchLike;
 }
 
 export function createStdioTransport(
@@ -75,5 +78,6 @@ export function createHttpTransport(
     requestInit: config.headers
       ? { headers: config.headers }
       : undefined,
+    fetch: config.fetch,
   });
 }
