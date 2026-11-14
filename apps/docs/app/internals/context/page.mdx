@@ -306,10 +306,6 @@ there is what the tools are for.
    hierarchy, expands bounded imports, and applies matching `.freecode/rules/`
    files. Static source ordering is frozen for the session to preserve
    prompt-cache stability.
-8. **`invalidateSymbolCache` has no callers.** The repo-map's whole-project cache
-   relies entirely on git HEAD plus a 5-minute TTL, so uncommitted edits inside
-   that window return stale `workspaceSymbol` results. The tree-watcher already
-   detects the changes that matter and could call it.
 9. **`compileDynamicContext`'s `memoryContext` and `ignorePatterns` parameters
    are permanently dead.** Both are always passed empty. `memoryContext` is
    load-bearing in reverse — the comment explaining why it must stay unused is

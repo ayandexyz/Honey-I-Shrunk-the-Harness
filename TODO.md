@@ -299,10 +299,6 @@ that page's **Known gaps**.
 - [ ] **`ProjectContext` is declared twice with different fields** —
       `context/types.ts:5` (dead: `{ projectPath, name, tree, files, metadata }`)
       and `context/tree-cache.ts:14` (live: `{ name, projectPath, tree, gitHead }`).
-- [ ] **`invalidateSymbolCache` has no callers** (`repo-map/index.ts:196`). The
-      whole-project symbol cache relies on git HEAD + a 5-minute TTL, so
-      uncommitted edits inside that window return stale `workspaceSymbol` results.
-      The tree-watcher already detects the relevant changes and could call it.
 - [ ] **`compileDynamicContext`'s `memoryContext` and `ignorePatterns` are
       permanently dead parameters** (`compiler.ts:185`). Both are always passed
       empty by the only caller. `memoryContext` is load-bearing in reverse — the

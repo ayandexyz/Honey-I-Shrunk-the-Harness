@@ -5,6 +5,10 @@ import { registerMcpTool, unregisterMcpTools } from "./index.js";
 import { getOutputStore, disposeOutputStore } from "./output-store/index.js";
 import type { ToolContext } from "./types.js";
 import type { Tool } from "./tool.types.js";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { queryWorkspaceSymbols } from "../repo-map/index.js";
 
 // A tool that returns the structured `{ title, output, metadata }` shape that
 // factory-built tools (write/edit) use. The orchestrator must surface `.output`
@@ -165,5 +169,38 @@ test("orchestrator lets a call through once the required param is present", asyn
     assert.equal(res.stdout, "ok");
   } finally {
     unregisterMcpTools("test-requires-title");
+  }
+});
+
+// A mutating tool must drop the project's symbol cache: it only expires on a
+// new git HEAD or a 5-minute TTL, so `lsp workspaceSymbol` missed a function
+// the agent had just written.
+test("a mutating tool invalidates the workspace symbol cache", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fc-orch-symbols-"));
+  fs.writeFileSync(path.join(dir, "a.ts"), "export function oldOne() {}\n");
+  const writer = {
+    id: "test-symbol-writer",
+    description: "test",
+    schemas: { parameters: { type: "object", properties: {} } },
+    behavior: { isDestructive: true },
+    execute: async () => {
+      fs.writeFileSync(path.join(dir, "b.ts"), "export function freshlyWritten() {}\n");
+      return { success: true, result: { title: "w", output: "ok" } };
+    },
+  } as unknown as Tool;
+  registerMcpTool(writer);
+  try {
+    // Warm the cache before the write.
+    assert.equal((await queryWorkspaceSymbols(dir, "freshlyWritten")).length, 0);
+    await createToolOrchestrator().execute(
+      { id: "call-w", tool: "test-symbol-writer", args: {} } as any,
+      { cwd: dir, projectPath: dir, sessionId: "test-symbols" } as ToolContext,
+    );
+    const found = await queryWorkspaceSymbols(dir, "freshlyWritten");
+    assert.equal(found[0]?.name, "freshlyWritten");
+  } finally {
+    disposeOutputStore("test-symbols");
+    unregisterMcpTools("test-symbol-writer");
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });

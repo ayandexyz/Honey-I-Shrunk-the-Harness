@@ -22,6 +22,7 @@ import {
 } from "./output-store/index.js";
 import { maybeCompressOutput } from "./output-compress.js";
 import { coerceArgs } from "./coerce-args.js";
+import { invalidateSymbolCache } from "../repo-map/index.js";
 import { logger } from "../utils/logger.js";
 
 // Cap on the UI-bound copy of a tool result (displayOutput/stdout). Formerly
@@ -235,6 +236,13 @@ export function createToolOrchestrator(): ToolOrchestrator {
             title: toolDef.description,
             error: execResult.error,
           };
+        }
+        // A mutating tool may have added, renamed or removed symbols; the
+        // whole-project symbol cache only expires on a new git HEAD or its
+        // 5-minute TTL, so `lsp workspaceSymbol` would miss what was just
+        // written. Same key the lsp tool queries with.
+        if (toolDef.behavior?.isDestructive) {
+          invalidateSymbolCache(ctx.projectPath ?? ctx.cwd);
         }
         // Success case. Tools built via factory.ts return a structured
         // `{ title, output, metadata }`; unwrap `.output` so the diff/text

@@ -127,6 +127,7 @@ import { CheckpointService } from "./checkpoint/index.js";
 import type { SerializedMessage } from "./session/store.js";
 import type { FileChange } from "./checkpoint/index.js";
 import { invalidateProjectContext } from "./context/tree-cache.js";
+import { invalidateSymbolCache } from "./repo-map/index.js";
 import {
   summarizeBranch,
   branchSummaryMessage,
@@ -1895,9 +1896,10 @@ export const methodHandlers: Record<
         filesChanged: restored.length,
         durationMs: result.durationMs,
       });
-      // The cached file tree is now stale — the same invalidation any
-      // mutating tool triggers.
+      // The cached file tree and symbol index are now stale — the same
+      // invalidation any mutating tool triggers.
       invalidateProjectContext(session.projectPath);
+      invalidateSymbolCache(session.projectPath);
     }
 
     const nav = conversation
