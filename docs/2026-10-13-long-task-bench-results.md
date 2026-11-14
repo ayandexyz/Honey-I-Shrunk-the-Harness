@@ -156,6 +156,18 @@ audit sample selected none of the 9 trials, so there are 0 two-sided audits
 | add-agent-control | 0.0 (empty patch, 4 s), 3.0, 3.0 | 2.00 |
 | **all** | 9 runs, $0.663/run, 18.2 min/run | **4.67** (5.25 excluding the empty run) |
 
+**Why it is low — a provider outage, not a regression.** MiniMax answered with
+a streamed `529` ("server cluster is currently under high load … (2064) (529)")
+once in 4 of the 9 trials, and every one of those runs ended on the spot:
+add-agent-control t1 (before any successful request), t2 (after 73), t3 (after
+45), fix-night-envelope t3 (after 118). Those are exactly the four lowest scores
+(0, 3, 3, 4) — the judge graded half-finished work. The 5 uninterrupted trials
+average **6.4**. Cause: the stream reduced the error to its message string,
+dropping the HTTP status, and `getErrorStatus` did not read MiniMax's trailing
+`(529)`, so recovery classified a retryable overload as fatal. Fixed 2026-11-15
+(status kept on the stream error chunk + trailing-status parse). The judged
+report excluded none of them (`excludedRuns: []`), so they count as agent failures.
+
 The 2026-10-17 reading by the free panel (DeepSeek + GLM, 3 of 9 trials scored
 by one judge, `DEGRADED`) averaged 3.81 — a different judge pair, not
 comparable. Publishing needs `--panel` (GPT on all 9).

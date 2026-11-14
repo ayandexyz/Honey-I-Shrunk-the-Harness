@@ -288,3 +288,18 @@ test("the last step wins when a multi-step call reports more than one", async ()
   );
   assert.equal(done?.echoedModel, "second");
 });
+
+// A stream error keeps the SDK's HTTP status: the loop rethrows the chunk, and
+// recovery decides retry-or-fatal from that status. Dropping it made a streamed
+// 529 fatal.
+test("normalizeAiSdkStream keeps an error's HTTP status", async () => {
+  const chunks = await collect(
+    normalizeAiSdkStream(
+      fakeStream([
+        { type: "error", error: Object.assign(new Error("overloaded"), { statusCode: 529 }) },
+      ]),
+    ),
+  );
+  const err = chunks.find((c) => (c as { type: string }).type === "error");
+  assert.deepEqual(err, { type: "error", error: "overloaded", statusCode: 529 });
+});

@@ -186,7 +186,9 @@ export type ProviderChunk =
    * session permanently (see normalizeAiSdkStream).
    */
   | { type: "tool_call_invalid"; id?: string; name?: string }
-  | { type: "error"; error: string };
+  /** `statusCode` is the SDK error's HTTP status, kept so recovery can
+   *  tell a retryable 429/5xx from a fatal error once the message is a string. */
+  | { type: "error"; error: string; statusCode?: number };
 
 export interface AIProvider {
   info: ProviderInfo;

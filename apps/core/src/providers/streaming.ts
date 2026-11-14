@@ -107,9 +107,11 @@ export async function* normalizeAiSdkStream(
       }
       case "error": {
         const err = chunk.error;
+        const status = (err as { statusCode?: unknown } | undefined)?.statusCode;
         yield {
           type: "error",
           error: err instanceof Error ? err.message : String(err),
+          ...(typeof status === "number" ? { statusCode: status } : {}),
         };
         break;
       }

@@ -64,7 +64,12 @@ export function getErrorStatus(error: unknown): number | undefined {
     if (typeof anyErr.status === "number") return anyErr.status;
   }
   const msg = String((unwrapped as Error)?.message ?? unwrapped ?? "");
-  const match = msg.match(/(?:API error|status(?:\s+code)?)[:\s]+(\d{3})/i);
+  const match =
+    msg.match(/(?:API error|status(?:\s+code)?)[:\s]+(\d{3})/i) ??
+    // MiniMax ends a streamed error with its HTTP status in brackets:
+    // "…under high load. Please retry… (2064) (529)". Only a trailing
+    // three-digit group, so the (2064) business code is never read as one.
+    msg.match(/\((\d{3})\)\s*$/);
   return match ? Number(match[1]) : undefined;
 }
 
@@ -385,9 +390,17 @@ export function isTransientError(error: unknown): boolean {
     msg.includes("fetch failed") ||
     msg.includes("timeout") ||
     msg.includes("timed out") ||
-    msg.includes("network")
+    msg.includes("network") ||
+    // A streamed error often arrives with no status (claude-code: "the SDK
+    // sometimes fails to properly pass the 529 status code during
+    // streaming"), so overload is also read from the text, as claude-code,
+    // opencode, pi and jcode all do.
+    OVERLOADED_TEXT.test(msg)
   );
 }
+
+const OVERLOADED_TEXT =
+  /overloaded|high load|at capacity|server (?:is )?busy|(?:service|temporarily) unavailable/;
 
 // =============================================================================
 // Default policies (spec ERROR_POLICIES, reduced to the classes providers

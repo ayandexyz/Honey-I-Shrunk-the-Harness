@@ -270,3 +270,33 @@ test("agent loop session continues through a 429 storm", async () => {
     await runtime.dispose();
   }
 });
+
+// v4 long-task bench, add-agent-control t1: MiniMax answered the first request
+// with a streamed 529 and the run ended after 4 s with an empty patch. Once the
+// stream turns the error into a bare message, only this text is left.
+test("a streamed MiniMax 529 'high load' is transient", () => {
+  const e = new Error(
+    "The server cluster is currently under high load. Please retry after a short wait and thank you for your patience. (2064) (529)",
+  );
+  assert.equal(getErrorStatus(e), 529);
+  assert.equal(isTransientError(e), true);
+  // The four-digit business code alone is not a status.
+  assert.equal(getErrorStatus(new Error("bad request (2064)")), undefined);
+});
+
+// Same net the reference agents use: when a stream error carries no status at
+// all, the provider's own words still mark it as an overload.
+test("overload wording is transient even with no status", () => {
+  for (const text of [
+    '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+    "The server cluster is currently under high load. Please retry after a short wait.",
+    "Model is at capacity",
+    "Server is busy, please try later",
+    "The service is temporarily unavailable",
+  ]) {
+    assert.equal(isTransientError(new Error(text)), true, text);
+  }
+  for (const text of ["Invalid API key", "model not found", "context length exceeded"]) {
+    assert.equal(isTransientError(new Error(text)), false, text);
+  }
+});

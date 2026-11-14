@@ -3001,7 +3001,14 @@ export class AgentLoop {
               break;
             }
             case "error":
-              throw new Error(chunk.error);
+              // Keep the status: without it a streamed 529 "overloaded" read
+              // as fatal and ended the run instead of being retried.
+              throw Object.assign(
+                new Error(chunk.error),
+                chunk.statusCode !== undefined
+                  ? { statusCode: chunk.statusCode }
+                  : {},
+              );
             case "done":
               echoedModel = chunk.echoedModel;
               stopReason = chunk.stopReason;
