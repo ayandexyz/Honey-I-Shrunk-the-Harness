@@ -251,14 +251,32 @@ export function checkCacheUsage(
   const previous = baselines.get(sessionId);
 
   // A provider that reports neither read nor write is not caching. Recording a
-  // zero baseline would make the next caching turn look like a bust. A pending
-  // miss is dropped too — with no cache fields there is no way to observe the
-  // recovery that would acquit it, and an unverifiable alarm is the wolf-cry
-  // this detector exists to avoid.
+  // zero baseline would make the next caching turn look like a bust. The
+  // exception is the same route going silent right after it cached: that is
+  // the cache stopping entirely, the miss most worth alarming on, so it is
+  // judged below like any other zero read (and held one sample like one).
   const reportsCache = sample.cacheReadTokens > 0 || sample.cacheWriteTokens > 0;
-  if (!reportsCache) {
+  const stoppedCaching =
+    previous !== undefined &&
+    previous.generation === generation &&
+    previous.cachedPrefix >= MIN_MISSED_TOKENS &&
+    sample.provider === previous.provider &&
+    sample.model === previous.model;
+  if (!reportsCache && !stoppedCaching) {
     baselines.delete(sessionId);
+    const pending = pendings.get(sessionId);
     pendings.delete(sessionId);
+    // A held miss whose follow-up is silent again on the same route did not
+    // recover: the cache is still gone.
+    if (
+      pending &&
+      pending.generation === generation &&
+      previous?.provider === sample.provider &&
+      previous?.model === sample.model
+    ) {
+      recordMiss(sessionId, pending.sample);
+      return pending.problem;
+    }
     return undefined;
   }
 

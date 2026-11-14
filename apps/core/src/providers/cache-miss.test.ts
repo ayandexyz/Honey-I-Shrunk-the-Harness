@@ -90,11 +90,45 @@ test("a generation bump suppresses the rebuild compaction must cause", () => {
 
 test("a provider that reports no cache activity is never flagged", () => {
   const s = session();
-  checkCacheUsage(s, warm(0, 10_000));
   // Gemini/OpenAI-shaped: no cache fields at all. Absent data must not look
-  // like a miss, and must not leave a zero baseline behind either.
+  // like a miss.
   assert.equal(checkCacheUsage(s, warm(0, 0)), undefined);
-  assert.equal(checkCacheUsage(s, warm(0, 8_000)), undefined);
+  assert.equal(checkCacheUsage(s, warm(0, 0)), undefined);
+  assert.equal(getCacheStats(s), undefined);
+});
+
+test("switching to a provider that does not cache is not a miss", () => {
+  const s = session();
+  checkCacheUsage(s, { ...warm(0, 10_000), provider: "anthropic", model: "a" });
+  // No zero baseline is left behind either, so caching on the next turn is
+  // judged as a first call, not as a bust.
+  const gemini = { provider: "google", model: "g" };
+  assert.equal(checkCacheUsage(s, { ...warm(0, 0), ...gemini }), undefined);
+  assert.equal(checkCacheUsage(s, { ...warm(0, 0), ...gemini }), undefined);
+  assert.equal(checkCacheUsage(s, { ...warm(0, 8_000), ...gemini }), undefined);
+});
+
+test("the same route going silent after caching is a miss, one sample late", () => {
+  const s = session();
+  const on = { provider: "anthropic", model: "a" };
+  checkCacheUsage(s, { ...warm(0, 10_000), ...on });
+  // Neither read nor write: the cache stopped. Held like any zero read…
+  assert.equal(checkCacheUsage(s, { ...warm(0, 0), ...on }), undefined);
+  // …and still silent on the next call, so it alarms.
+  const problem = checkCacheUsage(s, { ...warm(0, 0), ...on });
+  assert.equal(problem?.kind, "expected_read_missing");
+  assert.equal(problem?.affectedTokens, 10_000);
+  assert.equal(getCacheStats(s)!.misses.at(-1)?.reason, "harness: zero read");
+  // One alarm, not one per call for the rest of the session.
+  assert.equal(checkCacheUsage(s, { ...warm(0, 0), ...on }), undefined);
+});
+
+test("a silent call the next read recovers from is a provider blip", () => {
+  const s = session();
+  checkCacheUsage(s, warm(0, 10_000));
+  assert.equal(checkCacheUsage(s, warm(0, 0)), undefined);
+  assert.equal(checkCacheUsage(s, warm(10_000, 500)), undefined);
+  assert.equal(getCacheStats(s)!.misses.at(-1)?.reason, "provider blip");
 });
 
 test("an old journal entry does not excuse a later bust", () => {

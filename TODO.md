@@ -11,25 +11,6 @@ be "fixed" → `docs/DECISIONS.md`.
 
 ## Small known limitations
 
-### Web-app shows no text until the turn's final snapshot (found 2026-10-11)
-
-**Status:** confirmed in source, not yet measured in a browser run. Affects
-`freecode web` and the Tauri desktop app.
-
-Core streams `text_delta` / `thinking_delta` while the provider is still
-generating, then sends the full `text` / `thinking` snapshot. The web-app
-transport forwards both, but `handleStreamEvent` (`apps/web-app/src/App.tsx:237`)
-only handles `text` and `thinking`, so the deltas are dropped and the reply
-appears all at once at the end.
-
-Fix: append deltas to the active text/reasoning part and let the snapshot
-replace that part, never append both. Keep separate parts around tool calls and
-model iterations. Batch deltas per animation frame and flush them on done,
-error, interrupt and session switch. Details and acceptance criteria are in
-`docs/2026-10-11-performance-recommendations.md` §2. Pair it with §4: smooth
-`scrollIntoView` on every update (`chat/MessageList.tsx:11`) and un-memoized
-`marked.parse` in `TextPart.tsx` will be hit far more often once deltas render.
-
 ### The compaction eval cases are 20KB JSONL lines (added 2026-09-08, updated 2026-09-29)
 
 **Status:** known, cosmetic, needs a paid run to fix.
@@ -221,12 +202,6 @@ that page's **Known gaps**.
       destructures only `readTokens`/`writeTokens`), and the test asserts the old
       non-inclusive semantics. Either fix to
       `read / (read + nonCachedInputTokens + write)` and use it, or delete it.
-- [ ] **A total cache failure is invisible to the miss detector.**
-      `emitCacheWarm` returns before `checkCacheHealth` when reads and writes are
-      both zero (`loop.ts:1910`), and `checkCacheUsage`'s `!reportsCache` branch
-      would bail anyway (`cache-miss.ts:82`) — so `expected_read_missing` is
-      reachable only when a write happened. "Caching stopped entirely" is the case
-      most worth alarming on.
 - [ ] **Only `anthropic` is treated as a caching provider for the cold warning.**
       `CACHING_PROVIDERS` (`cache-awareness.ts:24`) is a one-element set, but
       `minimax` and `zai` use the same Anthropic endpoint shape and carry the same

@@ -3213,7 +3213,6 @@ export class AgentLoop {
       cacheReadInputTokens: usage?.cacheReadInputTokens,
       cacheCreationInputTokens: cacheWrite,
     });
-    if (readTokens === 0 && writeTokens === 0) return;
     const problem = this.checkCacheHealth(
       usage,
       readTokens,
@@ -3221,6 +3220,8 @@ export class AgentLoop {
       provider,
       model,
     );
+    // No cache activity and nothing to alarm on: not caching, nothing to show.
+    if (!problem && readTokens === 0 && writeTokens === 0) return;
     const stats = getCacheStats(this.state.sessionId);
     if (problem) {
       logger.warn(`[cache] ${describeCacheProblem(problem)}`);
