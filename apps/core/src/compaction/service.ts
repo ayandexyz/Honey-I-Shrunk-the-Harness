@@ -30,8 +30,8 @@ interface MemoryServiceOptions {
   hooks?: HookRuntime;
 }
 
-// ponytail: fixed retry threshold after a hook blocks compaction; make it
-// a CompactionConfig field if hooks ever need tighter control.
+// Fixed on purpose (docs/DECISIONS.md): make it a CompactionConfig field when
+// a hook actually needs tighter control, not before.
 const BLOCKED_RETRY_GROWTH_TOKENS = 5_000;
 
 export class MemoryService {

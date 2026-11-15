@@ -15,10 +15,11 @@ export interface ProviderInfo {
   defaultModel?: string;
   supportsStreaming: boolean;
   supportsTools: boolean;
-  // Tokens this provider reserves for the reply when the caller doesn't set
-  // maxTokens. Providers count it against the context window, so the usable
-  // input budget is (context limit - this), not the full limit — compaction
-  // subtracts it before deciding whether to fire.
+  // Reply cap used only when a caller omits `maxTokens` (the catalogue's
+  // OUTPUT_TOKEN_CAP for featured providers, 4096 otherwise). The agent loop
+  // never relies on it: it passes `resolveMaxOutputTokens()` — models.dev's
+  // output limit capped at OUTPUT_TOKEN_CAP — and that is also what compaction
+  // subtracts from the context window (loop.ts), not this field.
   maxOutputTokens: number;
   /**
    * May this provider be spent on model calls the user did not ask for —

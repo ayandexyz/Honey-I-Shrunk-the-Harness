@@ -101,9 +101,6 @@ Each is also listed in that page's **Known gaps** section. Deliberate behaviour 
 - [ ] **Dangling wikilinks are invisible** — skipped correctly (`builder.ts:78`),
       but a typo'd `[[link]]` never surfaces anywhere. The explorer should list
       unresolved links.
-- [ ] **Blocked-compaction retry threshold is hardcoded** — fixed 5,000 tokens
-      (`service.ts:34`, flagged `ponytail` in-code); make it a `CompactionConfig`
-      field if a hook ever needs tighter control.
 - [ ] **TUI client can only stream one session at a time** — single
       `activeStreamId` + single `onStreamEvent` slot (`apps/tui/src/ipc/client.ts:46`),
       even though `bus/bridge.ts` stamps `sessionId` specifically to allow
@@ -130,10 +127,6 @@ earlier audit are not repeated here.
       `rollout/`, `history.jsonl`, `mcp-auth.json`) builds from `os.homedir()`
       directly, so setting it produces a half-relocated install. Honour it through
       one `freecodeHome()` helper, or rename it.
-- [ ] **Six env vars need a process restart and nothing says so** —
-      `FREECODE_TOOL_RESULT_BUDGET_CHARS` (`loop.ts:152`) and the five
-      `FREECODE_OUTPUT_*` values (`tools/output-store/config.ts`) are module-load
-      consts, while the compaction and cache vars are deliberately read per call.
 - [ ] **`graph.explore` breaks the memory naming convention** and hard-codes
       `process.cwd()` while every neighbouring `memory.*` method takes `projectPath`.
 - [ ] **FreeCode's own MCP config is user-scope only.** A repo can ship servers
@@ -182,11 +175,6 @@ that page's **Known gaps**.
       `thinking_delta` on the streaming path, so a non-streaming turn loses
       extended thinking silently. Related: there is no thinking-budget or
       reasoning-effort field anywhere in `ExecuteOptions`.
-- [ ] **`ProviderInfo.maxOutputTokens`'s doc comment is stale** (`types.ts:10`).
-      It says compaction subtracts it; compaction subtracts
-      `resolveMaxOutputTokens()` (models.dev ∧ `OUTPUT_TOKEN_CAP`). The field is
-      only a fallback for callers that omit `maxTokens`, and it is 4096 for four
-      of the six providers.
 ## Docs-audit findings (tool system — 2026-08-23)
 
 Found while writing `apps/docs/app/internals/tools`. Each is also listed in that

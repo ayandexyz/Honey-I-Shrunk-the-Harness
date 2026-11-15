@@ -176,20 +176,13 @@ nothing. See [hook events](/reference/hook-events#the-shell-protocol).
 
 Found while writing this page; each is also tracked in `TODO.md`.
 
-- **`FREECODE_HOME` looks like a data-root override and is not one.** It is read in
-  exactly one place — the updater's `stable` symlink path (`apps/tui/src/entry.ts:101`).
-  Every other path (`config.json`, `sessions/`, `projects/`, `rollout/`,
-  `history.jsonl`) is built from `os.homedir()` directly, so setting it produces a
+- **`FREECODE_HOME` looks like a data-root override and is not one.** Only
+  checkpoints (`checkpoint/store.ts`, `checkpoint/shadow-git.ts`) and
+  `scripts/uninstall.sh` read it. Every other path (`config.json`, `sessions/`,
+  `projects/`, `rollout/`, `history.jsonl`, `mcp-auth.json`) is built from
+  `os.homedir()` directly, so setting it produces a
   half-relocated install. Either honor it everywhere through one `freecodeHome()`
   helper, or rename it to what it actually controls.
-- **Six variables need a restart, and nothing says so.** The `tools/output-store`
-  constants and `TOOL_RESULT_BUDGET_CHARS` are module-load `const`s, while the
-  compaction and cache variables are read per call — a deliberate choice there
-  ("the long-lived daemon and the tests can both change it without a module
-  reload") that was simply not applied to the tool budgets.
-- **`FREECODE_TOOL_RESULT_BUDGET_CHARS=""` silently means zero.**
-  `Number("")` is `0`, which is finite, so an empty export sets the budget to 0
-  instead of falling back to the default the way every other numeric variable does.
 - **No `--env`-style listing.** There is no command that prints the effective
   values, so diagnosing "why is it compacting so early" means reading source. A
   `freecode config env` that dumps name / default / effective / source would pay

@@ -17,6 +17,10 @@ left out.
   (`apps/core/src/eval/ab.ts`, `VARIABLE_ENV_KEYS`).
 - **Numbers:** an empty or unparseable value is ignored with a warning, never
   read as 0 (`utils/env.ts`).
+- **Read at startup:** a row marked *(read at startup)* is a module-level
+  constant, read once when the process loads. A running daemon (the TUI's
+  backend) keeps the old value until it restarts; everything else is read per
+  call.
 - **Shell profiles:** a variable exported in `~/.bashrc` applies to every
   FreeCode run started from that shell, including evals and benches. A
   forgotten `FREECODE_COMPACT_TARGET_TOKENS=40000` there made one session
@@ -31,7 +35,7 @@ left out.
 | `FREECODE_COMPACT_TARGET_TOKENS` | `120000` | Cost ceiling for the conversation. Compaction fires at whichever comes first: the model's window, or this. Raise it (e.g. `500000`) to use more of a large window; lower it to compact more often. **Too low compacts every minute**: every request already carries ~11K tokens of system prompt and tools. |
 | `FREECODE_AUTO_COMPACT_TOKENS` | unset | Test override: compact as soon as the context reaches this many tokens, ignoring the window and the target. For checking the trigger by hand. |
 | `FREECODE_COMPACT_RESTORE` | on | `0` stops re-attaching the 5 most recent files, the list of touched files and loaded skills after a compaction (`compaction/restore.ts`). `eval ab`. |
-| `FREECODE_TOOL_RESULT_BUDGET_CHARS` | `200000` | How many characters of old tool results a request may carry before older ones are replaced by a marker. `0` prunes all of them. |
+| `FREECODE_TOOL_RESULT_BUDGET_CHARS` | `200000` | How many characters of old tool results a request may carry before older ones are replaced by a marker. `0` prunes all of them. *(read at startup)* |
 | `FREECODE_MAX_TURN_TOKENS` | off | Spend circuit breaker: stop a run once it has billed this many tokens (input + output). Backstop for a runaway loop, not a normal limit. |
 
 ## Agent loop behaviour
@@ -58,11 +62,11 @@ left out.
 | `FREECODE_READ_DEDUP` | on | `0` always returns a file's full content, never the "unchanged since you last read it" stub. |
 | `FREECODE_READ_LINE_NUMBERS` | off | `1` prefixes each line of `read` output with its number. `eval ab`. |
 | `FREECODE_BASH_COMPRESS` | off | `1` compresses noisy bash output (source is never touched; search output only collapses duplicate lines). Off because its A/B measured +12% tokens: the model pages back what was elided. `eval ab`. |
-| `FREECODE_OUTPUT_MAX_CHARS` | `30000` | Characters of one tool output shown to the model (head + tail); the rest stays fetchable with the `output` tool. Also caps payload fields handed to hooks. |
-| `FREECODE_OUTPUT_TAIL_CHARS` | `6000` | How much of that budget is the tail of the output. |
-| `FREECODE_OUTPUT_LINES` | `200` | Default line window per `output` tool call. |
-| `FREECODE_OUTPUT_STORE_BYTES` | 16 MB | Per-session store of full tool outputs; oldest evicted first. |
-| `FREECODE_OUTPUT_STORE_SESSIONS` | `50` | How many sessions' output stores stay live at once. |
+| `FREECODE_OUTPUT_MAX_CHARS` | `30000` | Characters of one tool output shown to the model (head + tail); the rest stays fetchable with the `output` tool. Also caps payload fields handed to hooks. *(read at startup)* |
+| `FREECODE_OUTPUT_TAIL_CHARS` | `6000` | How much of that budget is the tail of the output. *(read at startup)* |
+| `FREECODE_OUTPUT_LINES` | `200` | Default line window per `output` tool call. *(read at startup)* |
+| `FREECODE_OUTPUT_STORE_BYTES` | 16 MB | Per-session store of full tool outputs; oldest evicted first. *(read at startup)* |
+| `FREECODE_OUTPUT_STORE_SESSIONS` | `50` | How many sessions' output stores stay live at once. *(read at startup)* |
 | `FREECODE_LSP_SERVERS` | built-in table | JSON mapping file extensions to language servers, e.g. `{".rs": {"command": "rust-analyzer", "args": []}}`. Adds to or overrides the built-ins. |
 | `FREECODE_EDIT_DIAGNOSTICS` | on | `0` stops sending the errors an edit introduced (language-server diagnostics, minus what was already broken) to the model on its next request. Spec `2026-10-14-edit-time-diagnostics.md`. `eval ab`. |
 | `FREECODE_LSP_AUTO_INSTALL` | on | `0` stops edit diagnostics from installing a missing npm language server (`typescript-language-server`, `pyright`) into `~/.freecode/lsp`. |

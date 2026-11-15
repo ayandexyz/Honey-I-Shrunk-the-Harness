@@ -251,9 +251,6 @@ separate instance) and the loop's own instance stay consistent across turns.
    event designed to make this visible in replay is absent. It is one of seven
    rollout event types with no emitter — see
    [Sessions, store & rollout](/internals/sessions#known-gaps).
-3. **The blocked-retry threshold is a fixed 5,000 tokens** (`service.ts:34`) and
-   not part of `CompactionConfig`, so a hook that wants tighter control can't have
-   it.
 
 ## Where to look
 

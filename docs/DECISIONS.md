@@ -53,6 +53,10 @@ Grouped by subsystem. Open bugs are in `TODO.md`; unbuilt features in
   would block the page that delivers the token.
 - **k-means determinism (`SEED = 42`, id-sorted points).** Non-deterministic
   clustering means the same store retrieving different memories on different days.
+- **The retry after a hook blocks compaction is a fixed 5,000 tokens of growth**
+  (`BLOCKED_RETRY_GROWTH_TOKENS`, `compaction/service.ts`), not a
+  `CompactionConfig` field. No hook needs to tune it; make it configurable when
+  one does, not before. (Moved from TODO.md on 2026-11-15.)
 
 ## CLI, settings, env, IPC, hooks
 
