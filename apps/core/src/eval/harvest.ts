@@ -96,7 +96,10 @@ export function harvestCase(input: HarvestInput): HarvestResult {
     ...(model ? { model: `${model.provider}/${model.model}` } : {}),
     expectTool: first ? first.tool : null,
     ...(first ? argExpectations(trace, first.tool) : {}),
-    expectMaxTurns: Math.max(1, trace.modelSpans.length),
+    // One turn of slack: the exact observed count made a fresh draft red on
+    // any rerun that took one turn longer, and the note alone did not stop
+    // that being committed.
+    expectMaxTurns: Math.max(1, trace.modelSpans.length) + 1,
   };
 
   // The harvested run is usually the WRONG behaviour — that being why it is
@@ -135,9 +138,8 @@ export function harvestCase(input: HarvestInput): HarvestResult {
       "suite reports what it covers.",
   );
   notes.push(
-    `expectMaxTurns is the OBSERVED count (${kase.expectMaxTurns}), so the ` +
-      `case fails on a run one turn longer. Loosen it unless the turn count is ` +
-      `the point.`,
+    `expectMaxTurns is the observed count plus one (${kase.expectMaxTurns}). ` +
+      `Tighten it to ${(kase.expectMaxTurns ?? 2) - 1} only if the turn count is the point.`,
   );
   if (!model) {
     notes.push(

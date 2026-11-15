@@ -46,6 +46,8 @@ export interface ResolvedModel {
   name: string;
   mode: number;
   think: number;
+  /** The requested name, when it was unknown and the default served instead. */
+  fellBackFrom?: string;
 }
 
 /** Resolves a model name, honouring a `@think=N` suffix. */
@@ -62,10 +64,32 @@ export function resolveGeminiWebModel(requested?: string): ResolvedModel {
     name = name.slice(0, at);
   }
 
-  const config = MODELS[name] ?? MODELS[DEFAULT_MODEL];
+  const known = MODELS[name] !== undefined;
+  const config = known ? MODELS[name] : MODELS[DEFAULT_MODEL];
   return {
-    name: MODELS[name] ? name : DEFAULT_MODEL,
+    name: known ? name : DEFAULT_MODEL,
     mode: config.mode,
     think: thinkOverride ?? config.think,
+    ...(known ? {} : { fellBackFrom: name }),
   };
+}
+
+const warnedFallbacks = new Set<string>();
+
+/**
+ * The fallback stays (a stale id must degrade to a working model, not a dead
+ * session), but the user is told once per id that they are not getting the
+ * model they picked — before this they were served the default silently.
+ */
+export function warnOnModelFallback(
+  resolved: ResolvedModel,
+  warn: (message: string) => void = console.warn,
+): void {
+  const from = resolved.fellBackFrom;
+  if (!from || warnedFallbacks.has(from)) return;
+  warnedFallbacks.add(from);
+  warn(
+    `[gemini-web] Unknown model "${from}"; using ${resolved.name} instead. ` +
+      `Known models: ${Object.keys(MODELS).join(", ")}.`,
+  );
 }

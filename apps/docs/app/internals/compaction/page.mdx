@@ -246,11 +246,6 @@ separate instance) and the loop's own instance stay consistent across turns.
 1. **The estimator is `chars ÷ 4` for every model and provider**
    (`tokens.ts:13`) — no tokenizer, no per-provider adjustment. Acceptable only
    because the measured count is preferred; it is the fallback that under-reports.
-2. **`context.overflow` is never recorded.** The loop detects overflow and retries
-   (`loop.ts:1003`) but never calls `recorder.recordContextOverflow()`, so the one
-   event designed to make this visible in replay is absent. It is one of seven
-   rollout event types with no emitter — see
-   [Sessions, store & rollout](/internals/sessions#known-gaps).
 
 ## Where to look
 

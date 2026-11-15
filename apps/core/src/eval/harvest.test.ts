@@ -98,7 +98,8 @@ test("harvests the last user turn by default", () => {
   // Scoped by timestamp: turn 1's `read` must not leak into turn 2.
   assert.equal(result.kase.expectTool, "grep");
   assert.deepEqual(result.kase.expectInArgs, { pattern: "HANG_THRESHOLD" });
-  assert.equal(result.kase.expectMaxTurns, 1);
+  // One model turn observed, drafted with one turn of slack.
+  assert.equal(result.kase.expectMaxTurns, 2);
 });
 
 test("--turn selects an earlier turn, scoped to its own window", () => {

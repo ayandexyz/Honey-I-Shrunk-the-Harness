@@ -11,7 +11,7 @@ import { createTimeoutFetch } from "../fetch-timeout.js";
 import { loadGeminiWebSettings } from "./settings.js";
 import { buildHeaders, buildPayload, requestUrl, USER_AGENT, ORIGIN } from "./protocol.js";
 import { DeltaFold, extractResponseText, findUpstreamError } from "./parse.js";
-import { resolveGeminiWebModel } from "./models.js";
+import { resolveGeminiWebModel, warnOnModelFallback } from "./models.js";
 
 // A pinned fallback for when the scrape fails (offline, or the page changed).
 // It WILL rot — the label moves every few weeks — which is exactly why it is a
@@ -80,6 +80,7 @@ async function post(
 ): Promise<Response> {
   const settings = loadGeminiWebSettings();
   const resolved = resolveGeminiWebModel(options.model);
+  warnOnModelFallback(resolved);
   const label = await getBuildLabel(forceLabelRefresh);
   if (options.minGapMs) {
     const wait = lastRequestAt + options.minGapMs - Date.now();

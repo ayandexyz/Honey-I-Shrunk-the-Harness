@@ -347,11 +347,6 @@ spec's §12; these are the parts that are actionable independently of it.
       `files` fixture, so `--suite coding` is refused. Harvesting a _sandboxed_
       case would mean reconstructing the fixture from the tool calls that
       created it — possible in principle, not attempted.
-- [ ] **`expectMaxTurns` is harvested as the observed count exactly**, so a
-      drafted case fails on a run one turn longer. A note says so, but a human
-      who skims it commits a case that is red by construction. Consider
-      emitting `observed + 1`, or a `--slack N` flag.
-
 ### Findings (eval Phase 5 — LLMOps close-out, 2026-08-27)
 
 - [ ] **Daily usage has no USD.** `providers/pricing.ts` now exists and feeds
@@ -422,10 +417,6 @@ Ranked by value. Full context in §8 of that spec.
 
 ### Real fixes
 
-- [ ] **A stale model id degrades silently.** `resolveGeminiWebModel` falls back
-      to the default rather than erroring (deliberate — see D8), but the user is
-      then served a different model than the one they picked with no signal.
-      Wants a one-line notice on fallback, not a throw.
 - [ ] **No per-provider "usage not measurable" affordance.** `gemini-web`
       reports no usage on purpose (the endpoint returns no token counts, and
       `chars / 4` would reach the daily tracker as though measured). The
