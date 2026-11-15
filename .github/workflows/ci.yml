@@ -18,11 +18,6 @@ jobs:
     name: Build + test + lint + typecheck
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
-      # Skip the postinstall Playwright browser fetch — the TUI doesn't
-      # need it for tests/lints, and downloading Chromium would balloon
-      # CI time without catching anything these jobs look at.
-      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
     steps:
       - uses: actions/checkout@v4
 

@@ -415,10 +415,12 @@ FREECODE_EVAL_MODEL=...          # what CI pins as the model under test
 
 ## What is not automated yet
 
-1. ~~Nightly cron~~ **Done (2026-09-04):** `.github/workflows/eval.yml` runs
-   `trajectory --gate` nightly at 04:00 UTC; coding/judged remain
-   `workflow_dispatch`. The workflow caches `~/.freecode/eval_runs.jsonl` —
-   without it a fresh runner reports "run zero" and passes unconditionally.
+1. **Nightly cron: removed 2026-11-15.** It ran `trajectory --gate` at 04:00
+   UTC from 2026-09-04, but the repo never had the provider secrets, so every
+   run failed at "No provider configured" before a single case. The workflow is
+   `workflow_dispatch` only now; add the secrets and `vars.FREECODE_EVAL_MODEL`
+   before putting `schedule:` back. It caches `~/.freecode/eval_runs.jsonl` —
+   without that a fresh runner reports "run zero" and passes unconditionally.
 2. **`eval ab` has no CI wiring, by design.** Leave it that way.
 3. **`--quarantine-report` is manual.** Could be a monthly scheduled job that
    opens a PR editing `evals/quarantine.txt`.
@@ -439,8 +441,8 @@ which has no gate, no baseline and no CI at all.
 Where the big labs go further:
 
 - **Tiered cadence** — deterministic tier per commit, cheap model tier nightly,
-  full suite per release candidate. The nightly trajectory cron (enabled
-  2026-09-04) is our middle tier; the deterministic per-commit tier is
+  full suite per release candidate. We have no middle tier at the moment (the
+  nightly trajectory cron was removed 2026-11-15, see above); the deterministic per-commit tier is
   `ci.yml`'s `pnpm test`.
 - **Replay / recorded fixtures** — cassettes or golden traces, so everything
   that isn't the model can be tested for free. This is fx §3 and it is why they

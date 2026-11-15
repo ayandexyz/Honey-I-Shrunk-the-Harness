@@ -8,8 +8,10 @@ name: Eval
 # releases. `ci.yml` stays free and fast; this is the one that costs money, so
 # it is opt-in.
 #
-# The nightly cron runs the trajectory suite only — deterministic scorers,
-# the cheapest of the three. Coding/judged stay dispatch-only.
+# Dispatch-only. A nightly cron ran here and failed every night at "No provider
+# configured": the repo has none of the secrets/vars below. Put `schedule:`
+# back only together with those secrets — a red run nobody can fix trains
+# everyone to ignore this workflow.
 on:
   workflow_dispatch:
     inputs:
@@ -21,8 +23,6 @@ on:
         description: "Trials per case (--gate implies 3)"
         type: string
         default: "3"
-  schedule:
-    - cron: "0 4 * * *"
 
 concurrency:
   # Never two eval runs at once: they append to the same history file, and a
@@ -39,10 +39,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      # On schedule events inputs.* are empty; fall back to the nightly defaults.
       SUITE: ${{ inputs.suite || 'trajectory' }}
       TRIALS: ${{ inputs.trials || '3' }}
-      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
       # The model under test. Pin it here rather than relying on a provider
       # default: a default that changes silently reprices the baseline, and a
       # repriced baseline is worse than none because it still looks like data.

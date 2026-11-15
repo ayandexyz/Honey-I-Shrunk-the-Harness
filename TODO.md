@@ -424,14 +424,6 @@ harness can block a release". Remaining:
       The hazard — comparing across models — is now caught by `baselineFor`
       refusing a cross-model baseline, so this is belt-and-braces rather than an
       open hole.
-- [ ] **The eval CI workflow fails every night without running a case.** It is
-      on a nightly `schedule` on the `mirror` repo, and every run since at least
-      2026-11-13 fails in ~30s with "No provider configured": every
-      `secrets.*_API_KEY`, `vars.FREECODE_EVAL_MODEL` and the judge vars are empty
-      there. No spend (it dies before a model call), but the workflow is red every
-      day, which trains everyone to ignore it. Either set the secrets/vars on the
-      repo, or put the trigger back to `workflow_dispatch` only.
-
 ### Docs findings (rewriting `/internals/eval` — 2026-08-31)
 
 - [ ] **`stuck-loop` has 8 cases and none of them can block a release.** All of

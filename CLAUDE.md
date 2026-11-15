@@ -347,9 +347,10 @@ Behavior changes are verified by evals, not by eyeballing a transcript. **Read
 - **New deterministic assertion?** That's a `*.test.ts` next to its code, not an
   eval case. Evals are only for what needs a real model turn.
 - **Release ritual** stays `pnpm eval:gate` (judge defaults to `claude-cli`, Haiku on your Claude subscription; needs `claude` logged in).
-  Nightly CI runs the trajectory suite gated; a red nightly is a regression to
-  triage, not noise — quarantine (`evals/quarantine.txt`) is for flakes only,
-  with a one-line reason.
+  The CI eval workflow is dispatch-only (the nightly cron was removed 2026-11-15:
+  the repo has no provider secrets, so it failed every night before running a
+  case). A red gate run is a regression to triage, not noise — quarantine
+  (`evals/quarantine.txt`) is for flakes only, with a one-line reason.
 - Never edit a coding fixture's `immutable` checker to make a case pass, and
   never delete or weaken a failing case without understanding why it fails.
 
