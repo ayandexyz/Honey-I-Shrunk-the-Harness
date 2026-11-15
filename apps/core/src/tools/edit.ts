@@ -746,6 +746,4 @@ export const EditTool: Tool<EditParams> = buildTool({
   },
   execute: executeEdit,
   validateInput: validateEditInput,
-  isSearchOrReadCommand: () => ({ isSearch: false, isRead: false }),
-  getPath: (params) => params.filePath,
 });

@@ -159,5 +159,4 @@ Use it when you already have a URL — from the user, a search result, or a link
   },
   execute: executeWebFetch,
   validateInput: validateWebFetchInput,
-  isSearchOrReadCommand: () => ({ isSearch: false, isRead: true }),
 });

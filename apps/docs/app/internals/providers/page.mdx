@@ -413,10 +413,6 @@ an explicit `type`.
     compaction actually subtracts `resolveMaxOutputTokens()`, which reads
     models.dev and caps at 32K. The field is only a fallback for callers that
     omit `maxTokens`, and it is 4096 for four of the six providers.
-8. **`browser/` has zero importers.** `CLAUDE.md` calls the Playwright path
-    "legacy / not wired into the primary path" — it is in fact unreachable: no
-    file outside the directory imports anything from it, and `chatgpt` is not in
-    the provider registry. It is dead code, not a fallback.
 
 ## Where to look
 

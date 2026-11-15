@@ -49,8 +49,6 @@ export const ReadTool: Tool<ReadParams> = buildTool({
 | `permissions.operations` | `[]` | the unattended-run envelope (`freecode night`), which hides a tool whose operations it will never allow |
 | `validateInput` | — | the orchestrator, before execute |
 | `checkPermissions` | — | the orchestrator — but no tool implements it |
-| `getPath` | — | *nothing* — the permission layer uses its own `PATH_TOOLS` |
-| `isSearchOrReadCommand` | — | *nothing* |
 
 Defaults fail closed in the direction that matters: an unfamiliar tool is
 sequential and non-destructive, so it gets its own batch and never claims to
@@ -346,11 +344,6 @@ string is the tool result the model reads as text.
    object-with-properties shape; anything using JSON Schema composition tells
    the model the tool takes no parameters. Needs a real resolver, not just
    more cases.
-7. **`getPath` and `isSearchOrReadCommand` are implemented by many tools and
-   read by none.** `getPath` is shadowed by `extractTarget` +`PATH_TOOLS` in
-   `permission/rules.ts`, which is what the registration checklist actually
-   tells you to update — two independent answers to "which path does this tool
-   touch", only one of them live.
 8. **`checkPermissions` has no implementers.** The orchestrator calls it if
    present (`orchestrator.ts:107`); no tool defines it.
 9. **Permission profiles are unreachable.** `createToolOrchestrator()` is called

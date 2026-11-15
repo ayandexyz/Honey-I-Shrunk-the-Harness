@@ -56,14 +56,7 @@ const args = [
   "build",
   "--compile",
   "--minify",
-  // playwright-core's Electron/BiDi transports are optional requires the
-  // legacy browser/ path never exercises, but bun's bundler still tries to
-  // statically resolve them and fails since neither is a dependency.
-  "--external",
-  "electron",
-  "--external",
-  "chromium-bidi/*",
-  // Same shape, different package: @anush008/tokenizers (via fastembed) has a
+  // @anush008/tokenizers (via fastembed) has a
   // platform-specific optionalDependency per OS, and pnpm installs only the
   // one matching this machine — the other two are dangling symlinks. bun's
   // bundler statically resolves all three branches of the package's platform

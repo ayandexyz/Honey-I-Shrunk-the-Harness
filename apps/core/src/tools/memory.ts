@@ -260,5 +260,4 @@ export const MemoryTool: Tool<MemoryParams> = buildTool({
   },
   execute: executeMemory,
   validateInput: validateMemoryInput,
-  isSearchOrReadCommand: () => ({ isSearch: false, isRead: false }),
 });

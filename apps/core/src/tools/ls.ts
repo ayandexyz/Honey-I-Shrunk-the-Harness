@@ -251,6 +251,4 @@ Use it to orient yourself in a directory you have not seen. Once you know what y
   },
   execute: executeLs,
   validateInput: validateLsInput,
-  isSearchOrReadCommand: () => ({ isSearch: false, isRead: true }),
-  getPath: (params) => params.path || ".",
 });

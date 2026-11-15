@@ -633,5 +633,4 @@ Use it when the work would burn context you have no further use for ("find every
   },
   execute: executeAgent,
   validateInput: validateAgentInput,
-  isSearchOrReadCommand: () => ({ isSearch: false, isRead: false }),
 });

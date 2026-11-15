@@ -138,5 +138,4 @@ export const OutputTool: Tool<OutputParams> = buildTool({
   },
   execute: executeOutput,
   validateInput: validateOutputInput,
-  isSearchOrReadCommand: () => ({ isSearch: false, isRead: true }),
 });

@@ -364,5 +364,4 @@ export const QuestionTool: Tool<QuestionParams> = buildTool({
   },
   execute: executeQuestion,
   validateInput: validateQuestionInput,
-  isSearchOrReadCommand: () => ({ isSearch: false, isRead: false }),
 });

@@ -95,5 +95,4 @@ export const KillBashTool: Tool<KillBashParams> = buildTool({
   },
   execute: executeKillBash,
   validateInput: validateKillBashInput,
-  isSearchOrReadCommand: () => ({ isSearch: false, isRead: false }),
 });

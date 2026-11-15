@@ -351,5 +351,4 @@ Use it to watch something long and act on it as it happens: a multi-hour test or
   },
   execute: executeMonitor,
   validateInput: validateMonitorInput,
-  isSearchOrReadCommand: () => ({ isSearch: false, isRead: false }),
 });

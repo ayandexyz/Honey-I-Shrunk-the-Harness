@@ -209,5 +209,4 @@ export const SkillTool: Tool<SkillParams> = buildTool({
   },
   execute: executeSkill,
   validateInput: validateSkillInput,
-  isSearchOrReadCommand: () => ({ isSearch: false, isRead: false }),
 });

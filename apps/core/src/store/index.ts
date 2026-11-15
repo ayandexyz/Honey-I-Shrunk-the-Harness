@@ -1,16 +1,13 @@
 // =============================================================================
 // Store Module - Public API
-// PRIMARY: Thread/turn persistence with SQLite + JSON fallback
+// PRIMARY: Thread persistence with SQLite + JSON fallback
 // =============================================================================
 
 // Types
 export type {
   ThreadStore,
   StoredThread,
-  StoredTurn,
-  StoredToolCall,
   ThreadFilter,
-  StoredTurnItemsView,
   ThreadStatus,
   ThreadGoalStatus,
 } from "./types.js";

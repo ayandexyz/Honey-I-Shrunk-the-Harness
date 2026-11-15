@@ -149,5 +149,4 @@ export const BashOutputTool: Tool<BashOutputParams> = buildTool({
   },
   execute: executeBashOutput,
   validateInput: validateBashOutputInput,
-  isSearchOrReadCommand: () => ({ isSearch: false, isRead: true }),
 });

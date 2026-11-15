@@ -161,6 +161,4 @@ export const WriteTool: Tool<WriteParams> = buildTool({
   },
   execute: executeWrite,
   validateInput: validateWriteInput,
-  isSearchOrReadCommand: () => ({ isSearch: false, isRead: false }),
-  getPath: (params) => params.filePath,
 });

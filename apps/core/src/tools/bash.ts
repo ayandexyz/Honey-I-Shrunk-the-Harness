@@ -614,5 +614,4 @@ export const BashTool: Tool<BashParams> = buildTool({
   },
   execute: executeBash,
   validateInput: validateBashInput,
-  isSearchOrReadCommand: () => ({ isSearch: false, isRead: false }),
 });

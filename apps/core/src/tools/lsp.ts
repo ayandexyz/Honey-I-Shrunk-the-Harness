@@ -290,6 +290,4 @@ export const LspTool: Tool<LspParams> = buildTool({
   },
   execute: executeLsp,
   validateInput: validateLspInput,
-  getPath: (params) => params.filePath ?? "",
-  isSearchOrReadCommand: () => ({ isSearch: false, isRead: true }),
 });

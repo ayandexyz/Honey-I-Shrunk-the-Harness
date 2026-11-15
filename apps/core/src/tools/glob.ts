@@ -163,5 +163,4 @@ export const GlobTool: Tool<GlobParams> = buildTool({
   },
   execute: executeGlob,
   validateInput: validateGlobInput,
-  isSearchOrReadCommand: () => ({ isSearch: true, isRead: false }),
 });

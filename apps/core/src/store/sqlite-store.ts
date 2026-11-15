@@ -7,10 +7,7 @@
 import type {
   ThreadStore,
   StoredThread,
-  StoredTurn,
-  StoredToolCall,
   ThreadFilter,
-  StoredTurnItemsView,
 } from "./types.js";
 import { logger } from "../utils/logger.js";
 
@@ -189,12 +186,6 @@ export class SqliteThreadStoreImpl implements ThreadStore {
   async deleteThread(threadId: string): Promise<void> {
     if (!this.isAvailable()) throw new Error("SQLite not available");
 
-    this.db
-      .prepare(
-        "DELETE FROM tool_calls WHERE turnId IN (SELECT id FROM turns WHERE threadId = ?)",
-      )
-      .run(threadId);
-    this.db.prepare("DELETE FROM turns WHERE threadId = ?").run(threadId);
     this.db.prepare("DELETE FROM threads WHERE id = ?").run(threadId);
   }
 
@@ -247,153 +238,6 @@ export class SqliteThreadStoreImpl implements ThreadStore {
   }
 
   // ===========================================================================
-  // Turn Operations
-  // ===========================================================================
-
-  async createTurn(
-    turn: Omit<StoredTurn, "id" | "createdAt">,
-  ): Promise<string> {
-    if (!this.isAvailable()) throw new Error("SQLite not available");
-
-    const id = `turn-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    const now = Date.now();
-
-    const stmt = this.db.prepare(`
-      INSERT INTO turns (id, threadId, turnNumber, prompt, response, createdAt, durationMs, toolCallCount)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    stmt.run(
-      id,
-      turn.threadId,
-      turn.turnNumber,
-      turn.prompt,
-      turn.response || null,
-      now,
-      turn.durationMs || null,
-      turn.toolCallCount || 0,
-    );
-
-    // Update thread's lastTurnAt
-    this.db
-      .prepare("UPDATE threads SET lastTurnAt = ?, turnCount = ? WHERE id = ?")
-      .run(now, turn.turnNumber, turn.threadId);
-
-    return id;
-  }
-
-  async getTurn(turnId: string): Promise<StoredTurn | null> {
-    if (!this.isAvailable()) throw new Error("SQLite not available");
-
-    const stmt = this.db.prepare("SELECT * FROM turns WHERE id = ?");
-    const row = stmt.get(turnId);
-    if (!row) return null;
-
-    return this.rowToTurn(row);
-  }
-
-  async getTurnsForThread(threadId: string): Promise<StoredTurn[]> {
-    if (!this.isAvailable()) throw new Error("SQLite not available");
-
-    const stmt = this.db.prepare(
-      "SELECT * FROM turns WHERE threadId = ? ORDER BY turnNumber ASC",
-    );
-    const rows = stmt.all(threadId);
-    return rows.map((r: any) => this.rowToTurn(r));
-  }
-
-  async getTurnItemsView(
-    threadId: string,
-    limit?: number,
-  ): Promise<StoredTurnItemsView[]> {
-    if (!this.isAvailable()) throw new Error("SQLite not available");
-
-    let query = `
-      SELECT t.*, tc.id as tcId, tc.toolName, tc.result, tc.error, tc.durationMs, tc.sequence
-      FROM turns t
-      LEFT JOIN tool_calls tc ON tc.turnId = t.id
-      WHERE t.threadId = ?
-      ORDER BY t.turnNumber ASC, tc.sequence ASC
-    `;
-
-    if (limit) {
-      query += ` LIMIT ${limit}`;
-    }
-
-    const stmt = this.db.prepare(query);
-    const rows = stmt.all(threadId);
-
-    // Group tool calls by turn
-    const turnMap = new Map<string, StoredTurnItemsView>();
-
-    for (const row of rows) {
-      if (!turnMap.has(row.id)) {
-        turnMap.set(row.id, {
-          threadId: row.threadId,
-          turnNumber: row.turnNumber,
-          prompt: row.prompt,
-          response: row.response,
-          createdAt: row.createdAt,
-          toolCalls: [],
-        });
-      }
-
-      if (row.tcId) {
-        turnMap.get(row.id)!.toolCalls.push({
-          id: row.tcId,
-          toolName: row.toolName,
-          result: row.result,
-          error: row.error,
-          durationMs: row.durationMs,
-        });
-      }
-    }
-
-    return Array.from(turnMap.values());
-  }
-
-  // ===========================================================================
-  // Tool Call Operations
-  // ===========================================================================
-
-  async addToolCall(
-    turnId: string,
-    toolCall: Omit<StoredToolCall, "id" | "sequence">,
-  ): Promise<string> {
-    if (!this.isAvailable()) throw new Error("SQLite not available");
-
-    // Get next sequence number
-    const seqStmt = this.db.prepare(
-      "SELECT COUNT(*) as count FROM tool_calls WHERE turnId = ?",
-    );
-    const { count } = seqStmt.get(turnId);
-
-    const id = `tc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    const stmt = this.db.prepare(`
-      INSERT INTO tool_calls (id, turnId, toolName, args, result, error, durationMs, sequence)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    stmt.run(
-      id,
-      turnId,
-      toolCall.toolName,
-      JSON.stringify(toolCall.args),
-      toolCall.result || null,
-      toolCall.error || null,
-      toolCall.durationMs || null,
-      count + 1,
-    );
-
-    // Update turn's tool call count
-    this.db
-      .prepare("UPDATE turns SET toolCallCount = ? WHERE id = ?")
-      .run(count + 1, turnId);
-
-    return id;
-  }
-
-  // ===========================================================================
   // Utility
   // ===========================================================================
 
@@ -425,19 +269,6 @@ export class SqliteThreadStoreImpl implements ThreadStore {
     };
   }
 
-  private rowToTurn(row: any): StoredTurn {
-    return {
-      id: row.id,
-      threadId: row.threadId,
-      turnNumber: row.turnNumber,
-      prompt: row.prompt,
-      response: row.response,
-      createdAt: row.createdAt,
-      durationMs: row.durationMs,
-      toolCallCount: row.toolCallCount,
-    };
-  }
-
   // ===========================================================================
   // Schema Migrations
   // ===========================================================================
@@ -458,32 +289,8 @@ export class SqliteThreadStoreImpl implements ThreadStore {
       goalStatus TEXT,
       goalUpdatedAt INTEGER
     )`,
-    `CREATE TABLE IF NOT EXISTS turns (
-      id TEXT PRIMARY KEY,
-      threadId TEXT NOT NULL,
-      turnNumber INTEGER NOT NULL,
-      prompt TEXT NOT NULL,
-      response TEXT,
-      createdAt INTEGER NOT NULL,
-      durationMs INTEGER,
-      toolCallCount INTEGER DEFAULT 0,
-      FOREIGN KEY (threadId) REFERENCES threads(id)
-    )`,
-    `CREATE TABLE IF NOT EXISTS tool_calls (
-      id TEXT PRIMARY KEY,
-      turnId TEXT NOT NULL,
-      toolName TEXT NOT NULL,
-      args TEXT,
-      result TEXT,
-      error TEXT,
-      durationMs INTEGER,
-      sequence INTEGER NOT NULL,
-      FOREIGN KEY (turnId) REFERENCES turns(id)
-    )`,
     `CREATE INDEX IF NOT EXISTS idx_threads_status ON threads(status)`,
     `CREATE INDEX IF NOT EXISTS idx_threads_project ON threads(projectPath)`,
-    `CREATE INDEX IF NOT EXISTS idx_turns_thread ON turns(threadId)`,
-    `CREATE INDEX IF NOT EXISTS idx_tool_calls_turn ON tool_calls(turnId)`,
   ];
 
   /**

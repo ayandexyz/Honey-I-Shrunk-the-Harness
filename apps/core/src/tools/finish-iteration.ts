@@ -251,5 +251,4 @@ export const FinishIterationTool: Tool<FinishParams> = buildTool({
   },
   execute: executeFinish,
   validateInput: validateFinishInput,
-  isSearchOrReadCommand: () => ({ isSearch: false, isRead: false }),
 });

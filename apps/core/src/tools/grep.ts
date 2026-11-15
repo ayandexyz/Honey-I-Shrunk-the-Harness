@@ -309,5 +309,4 @@ export const GrepTool: Tool<GrepParams> = buildTool({
   },
   execute: executeGrep,
   validateInput: validateGrepInput,
-  isSearchOrReadCommand: () => ({ isSearch: true, isRead: false }),
 });

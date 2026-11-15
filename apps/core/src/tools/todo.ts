@@ -396,5 +396,4 @@ export const TodoWriteTool: Tool<TodoWriteParams> = buildTool({
   },
   execute: executeTodoWrite,
   validateInput: validateTodoInput,
-  isSearchOrReadCommand: () => ({ isSearch: false, isRead: false }),
 });

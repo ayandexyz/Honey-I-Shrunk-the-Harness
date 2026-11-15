@@ -222,11 +222,6 @@ that page's **Known gaps**.
       `resolveMaxOutputTokens()` (models.dev ∧ `OUTPUT_TOKEN_CAP`). The field is
       only a fallback for callers that omit `maxTokens`, and it is 4096 for four
       of the six providers.
-- [ ] **`browser/` has zero importers.** `CLAUDE.md` calls the Playwright path
-      "legacy / not wired into the primary path"; it is actually unreachable — no
-      file outside the directory imports it, and `chatgpt` is not registered.
-      Decide: delete it, or wire it behind a flag and say so.
-
 ## Docs-audit findings (tool system — 2026-08-23)
 
 Found while writing `apps/docs/app/internals/tools`. Each is also listed in that
@@ -234,12 +229,6 @@ page's **Known gaps**.
 
 ### Real fixes
 
-- [ ] **`getPath` and `isSearchOrReadCommand` are implemented widely and read
-      nowhere.** `getPath` is shadowed by `extractTarget` + `PATH_TOOLS`
-      (`permission/rules.ts`), which is what `CLAUDE.md`'s registration checklist
-      tells contributors to update — two independent answers to "which path does
-      this tool touch", one of them live. `isSearchOrReadCommand` has no consumer
-      at all.
 - [ ] **`checkPermissions` has no implementers.** The orchestrator calls it when
       present (`orchestrator.ts:107`); no tool defines it.
 - [ ] **`read`'s image path pays before the visibility check.** The tool
@@ -283,23 +272,6 @@ that page's **Known gaps**.
 
 ### Real fixes
 
-- [ ] **`collector.ts` + `context/types.ts` + `context/strategies/` are
-      unreachable.** `collectContext()` resolves a strategy from a registry that
-      only `createDefaultStrategies()` fills, and that function has no callers — so
-      the lookup would fail even if something invoked it. Nothing does:
-      `AgentLoop.collectContext` (`loop.ts:2295`) is a private method calling
-      `getFrozenSessionContext`. Delete the trio, or wire it and drop `tree-cache`'s
-      parallel implementation.
-- [ ] **`FileTreeStrategy` implements the design the project explicitly
-      rejected** — depth-3 walk reading the **full contents of every file** into
-      `files` (`strategies/file-tree.ts:90`), i.e. the "collect files then send
-      them" pre-pass the single-agentic-loop architecture exists to avoid. Dead,
-      but 126 lines of dead code that reads like the intended design. It also
-      builds keys with `path.relative(process.cwd(), …)` instead of the project
-      path.
-- [ ] **`ProjectContext` is declared twice with different fields** —
-      `context/types.ts:5` (dead: `{ projectPath, name, tree, files, metadata }`)
-      and `context/tree-cache.ts:14` (live: `{ name, projectPath, tree, gitHead }`).
 - [ ] **`compileDynamicContext`'s `memoryContext` and `ignorePatterns` are
       permanently dead parameters** (`compiler.ts:185`). Both are always passed
       empty by the only caller. `memoryContext` is load-bearing in reverse — the
@@ -425,15 +397,6 @@ spec's §12; these are the parts that are actionable independently of it.
 
 ### Findings (eval Phase 4 — `eval add`, 2026-08-27)
 
-- [ ] **The thread store's turn table is dead code.** `createTurn` is
-      implemented in `store/json-store.ts`, `store/sqlite-store.ts` and
-      `ThreadStore.addTurn` (`store/thread-store.ts:164`), and **nothing in the
-      repo calls any of them**. Verified against a real installation:
-      `~/.freecode/state/store.json` holds 118 threads and 0 turns. So
-      `StoredTurn`, `StoredToolCall` and `getTurnItemsView` are a persistence
-      layer with no writer. Either wire it up or delete it — but it should not
-      keep sitting there looking like a source of truth. It already misled the
-      eval spec (§5.1's table, corrected in §8.1).
 - [ ] **`eval add` cannot harvest a coding case.** A recorded session has no
       `files` fixture, so `--suite coding` is refused. Harvesting a _sandboxed_
       case would mean reconstructing the fixture from the tool calls that

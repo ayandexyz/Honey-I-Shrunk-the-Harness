@@ -272,9 +272,9 @@ interface — slower and unindexed, but sessions still work. Selection happens o
 lazily, at first use (`thread-store.ts:28`), and the dynamic `import()` means the
 SQLite module is never even loaded when it isn't needed.
 
-> **Unwired.** The full API — turns, tool calls, `searchThreads`,
-> `getTurnItemsView`, goal tracking — is implemented on both backends, but nothing
-> in the live path calls it. `SessionManager` used to call `threadStore.create()`
+> **Unwired.** The rest of the API — `searchThreads`, goal tracking — is
+> implemented on both backends, but nothing in the live path calls it. (Its turn
+> and tool-call tables had no caller either and were deleted on 2026-11-15.) `SessionManager` used to call `threadStore.create()`
 > when a session started; that write had no reader anywhere (session listing has
 > always read `meta.json` files instead), so it was removed rather than left as a
 > write with no purpose. Treat the schema as built and waiting, not as a source of

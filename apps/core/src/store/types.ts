@@ -1,6 +1,6 @@
 // =============================================================================
 // Thread Store Types - Session persistence for FreeCode
-// PRIMARY: Define types for thread storage, turns, and filtering
+// PRIMARY: Define types for thread storage and filtering
 // STORAGE: SQLite primary with JSON file fallback
 // =============================================================================
 
@@ -42,62 +42,6 @@ export interface StoredThread {
 }
 
 // ============================================================================
-// StoredTurn - A single turn in a thread (user message + assistant response)
-// ============================================================================
-
-export interface StoredTurn {
-  // Identity
-  id: string;
-  threadId: string;
-  turnNumber: number;
-
-  // Content
-  prompt: string;
-  response?: string;
-
-  // Timing
-  createdAt: number;
-  durationMs?: number;
-
-  // Results
-  toolCallCount: number;
-  toolCalls?: StoredToolCall[];
-}
-
-// ============================================================================
-// StoredToolCall - Individual tool call within a turn
-// ============================================================================
-
-export interface StoredToolCall {
-  id: string;
-  toolName: string;
-  args: Record<string, unknown>;
-  result?: string;
-  error?: string;
-  durationMs?: number;
-  sequence: number;
-}
-
-// ============================================================================
-// StoredTurnItemsView - Aggregated view for display (turn + tool calls)
-// ============================================================================
-
-export interface StoredTurnItemsView {
-  threadId: string;
-  turnNumber: number;
-  prompt: string;
-  response?: string;
-  createdAt: number;
-  toolCalls: Array<{
-    id: string;
-    toolName: string;
-    result?: string;
-    error?: string;
-    durationMs?: number;
-  }>;
-}
-
-// ============================================================================
 // ThreadFilter - Filter options for listing/searching threads
 // ============================================================================
 
@@ -125,21 +69,6 @@ export interface ThreadStore {
   listThreads(filter?: ThreadFilter): Promise<StoredThread[]>;
   searchThreads(query: string): Promise<StoredThread[]>;
 
-  // Turn operations
-  createTurn(turn: Omit<StoredTurn, "id" | "createdAt">): Promise<string>;
-  getTurn(turnId: string): Promise<StoredTurn | null>;
-  getTurnsForThread(threadId: string): Promise<StoredTurn[]>;
-  getTurnItemsView(
-    threadId: string,
-    limit?: number,
-  ): Promise<StoredTurnItemsView[]>;
-
-  // Tool call operations
-  addToolCall(
-    turnId: string,
-    toolCall: Omit<StoredToolCall, "id" | "sequence">,
-  ): Promise<string>;
-
   // Utility
   close(): Promise<void>;
 }
@@ -150,7 +79,6 @@ export interface ThreadStore {
 
 export interface JsonThreadStore {
   threads: Record<string, StoredThread>;
-  turns: Record<string, StoredTurn[]>;
   metadata: {
     version: number;
     lastUpdated: number;

@@ -110,12 +110,6 @@ export interface Tool<P = unknown, R = unknown> {
     params: P,
     ctx: ToolContext,
   ): Promise<PermissionCheckResult>;
-
-  // Optional: Get file paths this tool operates on (for permission matching)
-  getPath?(params: P): string | string[];
-
-  // Optional: Check if this is a search/read command (for optimization)
-  isSearchOrReadCommand?(): { isSearch: boolean; isRead: boolean };
 }
 
 // =============================================================================

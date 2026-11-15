@@ -391,6 +391,4 @@ export const ReadTool: Tool<ReadParams> = buildTool({
   },
   execute: executeRead,
   validateInput: validateReadInput,
-  isSearchOrReadCommand: () => ({ isSearch: false, isRead: true }),
-  getPath: (params) => params.filePath,
 });

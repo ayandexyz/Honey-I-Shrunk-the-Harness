@@ -275,21 +275,6 @@ there is what the tools are for.
    minutes rendered the *first* session's tree even after the watcher had
    refreshed it. `PromptCompiler.clearCaches()` and its one caller
    (`defs-cache.ts`) were removed with it.
-3. **`collector.ts`, `context/types.ts`, and `strategies/` are unreachable.**
-   `collectContext()` looks up a strategy from a registry that
-   `createDefaultStrategies()` would populate — and that function is never
-   called, so the lookup would fail even if something invoked it. Nothing does:
-   `AgentLoop.collectContext` is a private method calling
-   `getFrozenSessionContext`. This is also a second, conflicting `ProjectContext`
-   type (`{ projectPath, name, tree, files, metadata }`) alongside the live one
-   in `tree-cache.ts`.
-4. **`FileTreeStrategy` implements the architecture the project explicitly
-   rejected.** It walks to depth 3 and reads **the full contents of every file**
-   into `files` (`strategies/file-tree.ts:90`) — the "collect files, then send
-   them" pre-pass that the single-agentic-loop design exists to avoid. It is
-   dead, but it is 126 lines of dead code that reads like the intended design.
-   It also builds paths with `path.relative(process.cwd(), …)` rather than the
-   project path.
 5. ~~Editing `CLAUDE.md` mid-session busts the prompt cache silently.~~
    **Fixed.** `noteStaticPrefix` fingerprints the compiled static block each
    turn and records an invalidation when it moves, so
@@ -311,9 +296,6 @@ there is what the tools are for.
    load-bearing in reverse — the comment explaining why it must stay unused is
    the real documentation — but a parameter that must never be used is better
    expressed as no parameter.
-10. **`ProjectContext` is declared twice** — `context/types.ts:5` (dead) and
-    `context/tree-cache.ts:14` (live) — with different fields and no relation
-    between them.
 
 ## Where to look
 

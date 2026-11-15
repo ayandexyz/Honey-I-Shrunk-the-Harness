@@ -49,8 +49,6 @@ export function buildTool<P, R>(config: {
     params: P,
     ctx: ToolContext,
   ) => Promise<PermissionCheckResult>;
-  getPath?: (params: P) => string | string[];
-  isSearchOrReadCommand?: () => { isSearch: boolean; isRead: boolean };
 }): Tool<P, R> {
   const fullPermissions: ToolPermissions = {
     ...defaultPermissions,
@@ -72,7 +70,5 @@ export function buildTool<P, R>(config: {
     execute: config.execute as Tool<P, R>["execute"],
     validateInput: config.validateInput,
     checkPermissions: config.checkPermissions as Tool<P, R>["checkPermissions"],
-    getPath: config.getPath as Tool<P, R>["getPath"],
-    isSearchOrReadCommand: config.isSearchOrReadCommand,
   };
 }

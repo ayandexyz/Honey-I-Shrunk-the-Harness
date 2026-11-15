@@ -103,5 +103,4 @@ export const WebSearchTool: Tool<WebSearchParams> = buildTool({
   },
   execute: executeWebSearch,
   validateInput: validateWebSearchInput,
-  isSearchOrReadCommand: () => ({ isSearch: true, isRead: false }),
 });

@@ -1,16 +1,13 @@
 // =============================================================================
 // Thread Store - Unified interface for session persistence
-// PRIMARY: Create and manage threads, turns, and tool calls
+// PRIMARY: Create and manage threads
 // FALLBACK: SQLite → JSON file if SQLite unavailable
 // =============================================================================
 
 import type {
   ThreadStore,
   StoredThread,
-  StoredTurn,
-  StoredToolCall,
   ThreadFilter,
-  StoredTurnItemsView,
 } from "./types.js";
 import { JsonThreadStoreImpl, createJsonThreadStore } from "./json-store.js";
 import { logger } from "../utils/logger.js";
@@ -155,71 +152,6 @@ export class ThreadStoreService {
   }
 
   // ===========================================================================
-  // Turn Operations
-  // ===========================================================================
-
-  /**
-   * Add a turn to a thread
-   */
-  async addTurn(
-    threadId: string,
-    turnNumber: number,
-    prompt: string,
-    response?: string,
-    toolCallCount?: number,
-  ): Promise<string> {
-    return this.store.createTurn({
-      threadId,
-      turnNumber,
-      prompt,
-      response,
-      toolCallCount: toolCallCount || 0,
-      toolCalls: [],
-    });
-  }
-
-  /**
-   * Get all turns for a thread
-   */
-  async getTurns(threadId: string): Promise<StoredTurn[]> {
-    return this.store.getTurnsForThread(threadId);
-  }
-
-  /**
-   * Get turns with tool calls as a view (for display)
-   */
-  async getTurnItemsView(
-    threadId: string,
-    limit?: number,
-  ): Promise<StoredTurnItemsView[]> {
-    return this.store.getTurnItemsView(threadId, limit);
-  }
-
-  // ===========================================================================
-  // Tool Call Operations
-  // ===========================================================================
-
-  /**
-   * Add a tool call to a turn
-   */
-  async addToolCall(
-    turnId: string,
-    toolName: string,
-    args: Record<string, unknown>,
-    result?: string,
-    error?: string,
-    durationMs?: number,
-  ): Promise<string> {
-    return this.store.addToolCall(turnId, {
-      toolName,
-      args,
-      result,
-      error,
-      durationMs,
-    });
-  }
-
-  // ===========================================================================
   // Goal Tracking
   // ===========================================================================
 
@@ -276,9 +208,6 @@ export async function createThreadStoreService(): Promise<ThreadStoreService> {
 
 export type {
   StoredThread,
-  StoredTurn,
-  StoredToolCall,
   ThreadFilter,
-  StoredTurnItemsView,
   ThreadStore,
 } from "./types.js";

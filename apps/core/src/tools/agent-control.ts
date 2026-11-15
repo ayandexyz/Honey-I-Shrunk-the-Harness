@@ -128,7 +128,6 @@ export const AgentSendTool: Tool<SendParams> = buildTool({
   },
   execute: executeSend,
   validateInput: (p) => validate(p, ["agent_id", "message"]),
-  isSearchOrReadCommand: () => ({ isSearch: false, isRead: false }),
 });
 
 export const AgentStopTool: Tool<StopParams> = buildTool({
@@ -144,5 +143,4 @@ export const AgentStopTool: Tool<StopParams> = buildTool({
   },
   execute: executeStop,
   validateInput: (p) => validate(p, ["agent_id"]),
-  isSearchOrReadCommand: () => ({ isSearch: false, isRead: false }),
 });

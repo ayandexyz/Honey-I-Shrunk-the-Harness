@@ -10,12 +10,10 @@
 // this is testable without a session on disk.
 //
 // DEPARTURE FROM THE SPEC (§8, and the §5.1 table row that feeds it): the
-// prompt does NOT come from `StoredTurn.prompt`. That table is written at every
-// layer — `json-store.ts`, `sqlite-store.ts`, `thread-store.addTurn` — and
-// `createTurn` has no production caller anywhere in the repo, so it is always
-// empty. The durable text is the SESSION store's `messages.jsonl`. Building on
-// the thread store would have produced a command that fails on every real
-// session.
+// prompt does NOT come from the thread store's turn table. That table had a
+// writer at every layer and no caller anywhere, so it was always empty — and
+// it was deleted on 2026-11-15. The durable text is the SESSION store's
+// `messages.jsonl`.
 // =============================================================================
 
 import { buildTrace } from "../rollout/trace.js";
