@@ -9,9 +9,12 @@
 // sessions from *other* projects that happen to share a machine.
 // =============================================================================
 
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
+import {
+  isBool,
+  isNumberAtLeast,
+  pickSetting,
+  settingsSections,
+} from "../settings/load.js";
 import {
   inRetryBackoff,
   readLastConsolidatedAt,
@@ -62,60 +65,15 @@ function isEnvTruthy(value: string | undefined): boolean {
   return v === "1" || v === "true" || v === "yes";
 }
 
-function readScope(filePath: string): Record<string, unknown> | undefined {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8")) as {
-      memory?: Record<string, unknown>;
-    };
-    return parsed.memory;
-  } catch {
-    // Missing or malformed → next scope, then defaults. An unparseable settings
-    // file must not silently disable memory.
-    return undefined;
-  }
-}
-
 export function loadConsolidationSettings(
   projectRoot: string,
 ): ConsolidationSettings {
-  const scopes = [
-    path.join(projectRoot, ".freecode", "settings.json"),
-    path.join(os.homedir(), ".freecode", "settings.json"),
-  ];
-
-  let autoConsolidate: boolean | undefined;
-  let minHours: number | undefined;
-  let minSessions: number | undefined;
-
-  for (const file of scopes) {
-    const memory = readScope(file);
-    if (!memory) continue;
-    if (
-      autoConsolidate === undefined &&
-      typeof memory.autoConsolidate === "boolean"
-    ) {
-      autoConsolidate = memory.autoConsolidate;
-    }
-    if (
-      minHours === undefined &&
-      typeof memory.consolidateMinHours === "number" &&
-      memory.consolidateMinHours >= 0
-    ) {
-      minHours = memory.consolidateMinHours;
-    }
-    if (
-      minSessions === undefined &&
-      typeof memory.consolidateMinSessions === "number" &&
-      memory.consolidateMinSessions >= 1
-    ) {
-      minSessions = Math.floor(memory.consolidateMinSessions);
-    }
-  }
-
+  const sections = settingsSections(projectRoot, "memory");
+  const minSessions = pickSetting(sections, "consolidateMinSessions", isNumberAtLeast(1));
   return {
-    autoConsolidate: autoConsolidate ?? true,
-    minHours: minHours ?? DEFAULT_MIN_HOURS,
-    minSessions: minSessions ?? DEFAULT_MIN_SESSIONS,
+    autoConsolidate: pickSetting(sections, "autoConsolidate", isBool) ?? true,
+    minHours: pickSetting(sections, "consolidateMinHours", isNumberAtLeast(0)) ?? DEFAULT_MIN_HOURS,
+    minSessions: minSessions !== undefined ? Math.floor(minSessions) : DEFAULT_MIN_SESSIONS,
   };
 }
 

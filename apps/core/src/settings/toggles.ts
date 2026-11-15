@@ -13,7 +13,6 @@
 
 import type { SettingView } from "@thisisayande/freecode-shared";
 import * as fs from "fs";
-import * as os from "os";
 import * as path from "path";
 import { loadMemorySettings } from "../memory/extract-policy.js";
 import { loadConsolidationSettings } from "../memory/consolidate-policy.js";
@@ -22,6 +21,7 @@ import { taskNotificationsEnabled } from "../agent/task-notify.js";
 import { resolveCacheWarmingMode } from "../providers/cache-warmer.js";
 import { loadRedirectSettings } from "../agent/redirect/settings.js";
 import { loadSignalSettings } from "../agent/signals/settings.js";
+import { readSettingsFile, readSettingsScopes, settingsFile } from "./load.js";
 
 interface ToggleDef {
   key: string;
@@ -141,19 +141,7 @@ const TOGGLES: readonly ToggleDef[] = [
   },
 ];
 
-const userFile = (): string => path.join(os.homedir(), ".freecode", "settings.json");
-const projectFile = (root: string): string => path.join(root, ".freecode", "settings.json");
-
-function readJson(file: string): Record<string, unknown> | undefined {
-  try {
-    const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf-8"));
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
+const userFile = (): string => settingsFile("user", "");
 
 function has(obj: Record<string, unknown> | undefined, keys: string[]): boolean {
   let at: unknown = obj;
@@ -167,9 +155,9 @@ function has(obj: Record<string, unknown> | undefined, keys: string[]): boolean 
 function lockReason(def: ToggleDef, projectRoot: string, env: NodeJS.ProcessEnv): string | undefined {
   const envVar = def.env.find((name) => (env[name] ?? "") !== "");
   if (envVar) return `Set by ${envVar}=${env[envVar]}`;
-  // The project file is read first, so a key there beats the user file.
-  if (path.resolve(projectFile(projectRoot)) !== path.resolve(userFile())
-    && has(readJson(projectFile(projectRoot)), def.path)) {
+  // Project beats user, key by key, so a key there decides.
+  const project = readSettingsScopes(projectRoot).find((d) => d.scope === "project");
+  if (has(project?.data, def.path)) {
     return "Set in this project's .freecode/settings.json";
   }
   return undefined;
@@ -201,7 +189,7 @@ export function setSetting(key: string, value: string): void {
   const file = userFile();
   let settings: Record<string, unknown> = {};
   if (fs.existsSync(file)) {
-    const parsed = readJson(file);
+    const parsed = readSettingsFile(file);
     if (!parsed) throw new Error(`${file} is not valid JSON; fix it by hand first`);
     settings = parsed;
   }

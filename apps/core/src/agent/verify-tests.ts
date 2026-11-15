@@ -12,6 +12,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { envFlag } from "./signals/settings.js";
+import { isBool, pickSetting, settingsSections } from "../settings/load.js";
 import { detectPackageManager, type VerifyCommand } from "./verify.js";
 
 export const MAX_TEST_ATTEMPTS = 2;
@@ -43,26 +44,15 @@ export interface VerifySettings {
   testCommand?: string;
 }
 
-type Scope = { tests?: unknown; testCommand?: unknown };
-
-function readScope(file: string): Scope | undefined {
-  try {
-    return (JSON.parse(fs.readFileSync(file, "utf-8")) as { verify?: Scope }).verify;
-  } catch {
-    return undefined;
-  }
-}
+const isCommand = (v: unknown): v is string => typeof v === "string" && v.trim() !== "";
 
 /** Project → user → default; env beats both. Read per call, for `eval ab`. */
 export function loadVerifySettings(projectRoot: string, env: NodeJS.ProcessEnv = process.env): VerifySettings {
-  const scopes = [path.join(projectRoot, ".freecode", "settings.json"), path.join(os.homedir(), ".freecode", "settings.json")]
-    .map(readScope)
-    .filter((s): s is Scope => s !== undefined);
-  const tests = scopes.find((s) => typeof s.tests === "boolean")?.tests as boolean | undefined;
-  const fileCmd = scopes.find((s) => typeof s.testCommand === "string" && s.testCommand.trim())?.testCommand as string | undefined;
+  const sections = settingsSections(projectRoot, "verify");
+  const fileCmd = pickSetting(sections, "testCommand", isCommand);
   const envCmd = env.FREECODE_VERIFY_TEST_COMMAND?.trim();
   return {
-    tests: envFlag(env.FREECODE_VERIFY_TESTS) ?? tests ?? true,
+    tests: envFlag(env.FREECODE_VERIFY_TESTS) ?? pickSetting(sections, "tests", isBool) ?? true,
     ...((envCmd || fileCmd) ? { testCommand: envCmd || fileCmd } : {}),
   };
 }

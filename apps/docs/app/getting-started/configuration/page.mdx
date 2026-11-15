@@ -25,8 +25,9 @@ badly: one-off debugging and CI. They are listed in full under
 
 ## What settings.json holds
 
-Exactly three top-level keys are read. Anything else in the file is ignored
-without comment.
+These three are the keys most projects need; the
+[settings reference](/reference/settings) lists the rest. An unknown key is
+reported on startup, with the key you probably meant.
 
 ```json
 {
@@ -85,14 +86,16 @@ prompts you answer become a policy you can read and revert.
 
 ## How the two scopes combine
 
-There is no single precedence rule, which is the part that surprises people:
-**each section merges by its own.**
+One rule, the same one Claude Code uses: **project beats user, key by key, and
+lists accumulate.**
 
 | Section | Merge |
 | --- | --- |
-| `permissions` | **concatenated.** `allow = project + user + session grants`, same for `ask` and `deny` |
-| `hooks` | **replaced by `event + name`.** A project hook named `format-ts` replaces the user hook of that name |
-| `memory` | **first definition wins**, project → user → default |
+| `memory`, and every other single value | **project, then user, then default**, per field — a field the project leaves out comes from your user file |
+| `permissions` | a list, so **both files' rules apply**: `allow = project + user + session grants`, same for `ask` and `deny` |
+| `hooks` | a list per event, so **both files' hooks run** — except that a project hook replaces a user hook with the same `name` |
+
+Environment variables beat both files.
 
 So a project cannot *remove* a rule your user file grants — but because deny is
 evaluated first, it can neutralise one by adding the matching `deny`. Both

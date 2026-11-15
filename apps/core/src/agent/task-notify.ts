@@ -28,10 +28,8 @@
 // model just has to ask.
 // =============================================================================
 
-import * as fs from "fs";
-import * as os from "os";
-import * as path from "path";
 import { envFlag } from "./signals/settings.js";
+import { isBool, pickSetting, settingsSections } from "../settings/load.js";
 
 export interface TaskNotification {
   taskId: string;
@@ -103,30 +101,13 @@ export function notifyTask(sessionId: string, n: TaskNotification): boolean {
   return true;
 }
 
-function readScope(filePath: string): boolean | undefined {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8")) as {
-      tasks?: { notify?: unknown };
-    };
-    const v = parsed.tasks?.notify;
-    return typeof v === "boolean" ? v : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 export function taskNotificationsEnabled(
   projectRoot: string,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  const fromEnv = envFlag(env.FREECODE_TASK_NOTIFY);
-  if (fromEnv !== undefined) return fromEnv;
-  for (const file of [
-    path.join(projectRoot, ".freecode", "settings.json"),
-    path.join(os.homedir(), ".freecode", "settings.json"),
-  ]) {
-    const v = readScope(file);
-    if (v !== undefined) return v;
-  }
-  return true;
+  return (
+    envFlag(env.FREECODE_TASK_NOTIFY) ??
+    pickSetting(settingsSections(projectRoot, "tasks"), "notify", isBool) ??
+    true
+  );
 }

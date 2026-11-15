@@ -11,45 +11,23 @@
 // than the one being fixed.
 // =============================================================================
 
-import * as fs from "fs";
-import { settingsPath, type RuleScope } from "../permission/settings.js";
+import { readSettingsScopes } from "./load.js";
 import { findUnknownSettings } from "./known-keys.js";
 import { logger } from "../utils/logger.js";
 
 /**
  * Returns the warnings it emitted, so a caller (or a test) can see them
- * without scraping the log.
+ * without scraping the log. A file that does not parse is already reported by
+ * the loader.
  */
 export function warnOnUnknownSettings(projectRoot: string): string[] {
   const emitted: string[] = [];
-
-  for (const scope of ["project", "user"] as const satisfies RuleScope[]) {
-    const filePath = settingsPath(scope, projectRoot);
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
-    } catch (error) {
-      // ENOENT is the normal case. A parse failure is already reported by
-      // each reader as it fails closed, and saying it a fifth time here
-      // helps nobody.
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        logger.warn(`[Settings] Could not read ${filePath}: ${error}`);
-      }
-      continue;
-    }
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      logger.warn(`[Settings] ${filePath} is not a JSON object — ignoring it.`);
-      continue;
-    }
-
-    for (const warning of findUnknownSettings(
-      parsed as Record<string, unknown>,
-    )) {
-      const message = `[Settings] ${warning.message} (${filePath})`;
+  for (const doc of readSettingsScopes(projectRoot)) {
+    for (const warning of findUnknownSettings(doc.data)) {
+      const message = `[Settings] ${warning.message} (${doc.path})`;
       logger.warn(message);
       emitted.push(message);
     }
   }
-
   return emitted;
 }

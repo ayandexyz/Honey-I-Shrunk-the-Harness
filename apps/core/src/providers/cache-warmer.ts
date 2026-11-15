@@ -33,9 +33,7 @@
 // which is where the money is.
 // =============================================================================
 
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
+import { readSettingsScope, settingsSections } from "../settings/load.js";
 import type { AIProvider, ExecuteOptions, ExecuteUsage } from "./types.js";
 import { priceFor, type ModelPrice } from "./pricing.js";
 import { getCacheTtl } from "./utils.js";
@@ -121,35 +119,21 @@ export function decideWarm(
 
 // --- settings ---------------------------------------------------------------
 
-function readMode(file: string): CacheWarmingMode | undefined {
-  try {
-    const raw = JSON.parse(fs.readFileSync(file, "utf-8")) as {
-      cache?: { warming?: unknown };
-    };
-    const v = raw?.cache?.warming;
-    return v === "off" || v === "streaming" || v === "idle" ? v : undefined;
-  } catch {
-    return undefined;
-  }
-}
+const isMode = (v: unknown): v is CacheWarmingMode =>
+  v === "off" || v === "streaming" || v === "idle";
 
 export function resolveCacheWarmingMode(
   projectRoot: string | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): CacheWarmingMode {
   const fromEnv = env.FREECODE_CACHE_WARMING;
-  if (fromEnv === "off" || fromEnv === "streaming" || fromEnv === "idle")
-    return fromEnv;
-  const files = [
-    projectRoot
-      ? path.join(projectRoot, ".freecode", "settings.json")
-      : undefined,
-    path.join(os.homedir(), ".freecode", "settings.json"),
-  ];
-  for (const f of files) {
-    if (!f) continue;
-    const m = readMode(f);
-    if (m) return m;
+  if (isMode(fromEnv)) return fromEnv;
+  const sections = projectRoot
+    ? settingsSections(projectRoot, "cache")
+    : [readSettingsScope("user", "")?.data.cache];
+  for (const s of sections) {
+    const v = (s as { warming?: unknown } | undefined)?.warming;
+    if (isMode(v)) return v;
   }
   return "idle";
 }

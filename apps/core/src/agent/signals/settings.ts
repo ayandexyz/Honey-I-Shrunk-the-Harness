@@ -23,9 +23,7 @@
 // bench run flips one gate for one trial without editing anybody's settings.
 // =============================================================================
 
-import * as fs from "fs";
-import * as os from "os";
-import * as path from "path";
+import { settingsSections } from "../../settings/load.js";
 
 export const AUTO_POKE_MAX_PER_RUN = 3;
 /** A completion-step rise of this many points or more, in one call, is a spike. */
@@ -50,17 +48,6 @@ type Scope = Partial<{
   confidenceGate: Partial<SignalSettings["confidenceGate"]>;
   hillClimbGate: Partial<SignalSettings["hillClimbGate"]>;
 }>;
-
-function readScope(filePath: string): Scope | undefined {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8")) as {
-      signals?: Scope;
-    };
-    return parsed.signals;
-  } catch {
-    return undefined;
-  }
-}
 
 /** "1"/"true"/"yes" → true, "0"/"false"/"no" → false, anything else → unset. */
 export function envFlag(value: string | undefined): boolean | undefined {
@@ -123,11 +110,5 @@ export function resolveSignalSettings(
 }
 
 export function loadSignalSettings(projectRoot: string): SignalSettings {
-  const scopes = [
-    path.join(projectRoot, ".freecode", "settings.json"),
-    path.join(os.homedir(), ".freecode", "settings.json"),
-  ]
-    .map(readScope)
-    .filter((s): s is Scope => s !== undefined);
-  return resolveSignalSettings(scopes);
+  return resolveSignalSettings(settingsSections(projectRoot, "signals") as Scope[]);
 }

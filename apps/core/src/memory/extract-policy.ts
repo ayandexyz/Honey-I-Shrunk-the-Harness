@@ -6,9 +6,12 @@
 // Spec: 2026-08-09-memory-write-path.md, D5.
 // =============================================================================
 
-import * as fs from "fs";
-import * as path from "path";
-import * as os from "os";
+import {
+  isBool,
+  isNumberAtLeast,
+  pickSetting,
+  settingsSections,
+} from "../settings/load.js";
 import { lexicalSimilarity } from "./graph/index.js";
 
 // Extract every N completed runs. Deliberately more conservative than jcode's
@@ -108,54 +111,14 @@ export interface MemorySettings {
   autoRecall: boolean;
 }
 
-function readScope(filePath: string): Record<string, unknown> | undefined {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8")) as {
-      memory?: Record<string, unknown>;
-    };
-    return parsed.memory;
-  } catch {
-    // Missing or malformed → the next scope decides, then the defaults. An
-    // unparseable settings file must not silently disable memory.
-    return undefined;
-  }
-}
-
-// Priority chain, first definition wins: project → user → defaults. Matches
-// the scope order the permission settings already use.
+// Priority chain, project → user → defaults, key by key (`settings/load.ts`).
 export function loadMemorySettings(projectRoot: string): MemorySettings {
-  const scopes = [
-    path.join(projectRoot, ".freecode", "settings.json"),
-    path.join(os.homedir(), ".freecode", "settings.json"),
-  ];
-
-  let autoExtract: boolean | undefined;
-  let intervalRuns: number | undefined;
-  let retrievalJudge: boolean | undefined;
-  let autoRecall: boolean | undefined;
-  for (const file of scopes) {
-    const memory = readScope(file);
-    if (!memory) continue;
-    if (autoExtract === undefined && typeof memory.autoExtract === "boolean") {
-      autoExtract = memory.autoExtract;
-    }
-    if (
-      retrievalJudge === undefined &&
-      typeof memory.retrievalJudge === "boolean"
-    ) {
-      retrievalJudge = memory.retrievalJudge;
-    }
-    if (autoRecall === undefined && typeof memory.autoRecall === "boolean") {
-      autoRecall = memory.autoRecall;
-    }
-    if (
-      intervalRuns === undefined &&
-      typeof memory.extractEveryNRuns === "number" &&
-      memory.extractEveryNRuns >= 1
-    ) {
-      intervalRuns = Math.floor(memory.extractEveryNRuns);
-    }
-  }
+  const sections = settingsSections(projectRoot, "memory");
+  const autoExtract = pickSetting(sections, "autoExtract", isBool);
+  const retrievalJudge = pickSetting(sections, "retrievalJudge", isBool);
+  const autoRecall = pickSetting(sections, "autoRecall", isBool);
+  const everyN = pickSetting(sections, "extractEveryNRuns", isNumberAtLeast(1));
+  const intervalRuns = everyN !== undefined ? Math.floor(everyN) : undefined;
 
   return {
     autoExtract: autoExtract ?? true,

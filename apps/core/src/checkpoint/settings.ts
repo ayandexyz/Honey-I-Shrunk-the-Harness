@@ -12,10 +12,8 @@
 // so the "flip a default only on an eval ab delta" rule does not apply.
 // =============================================================================
 
-import * as fs from "fs";
-import * as os from "os";
-import * as path from "path";
 import { envFlag } from "../agent/signals/settings.js";
+import { settingsSections } from "../settings/load.js";
 
 /** claude-code's MAX_SNAPSHOTS. */
 export const MAX_CHECKPOINTS_PER_SESSION = 100;
@@ -31,17 +29,6 @@ export const DEFAULT_CHECKPOINT_SETTINGS: CheckpointSettings = {
 };
 
 type Scope = Partial<CheckpointSettings>;
-
-function readScope(filePath: string): Scope | undefined {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8")) as {
-      checkpoints?: Scope;
-    };
-    return parsed.checkpoints;
-  } catch {
-    return undefined;
-  }
-}
 
 export function resolveCheckpointSettings(
   scopes: Scope[],
@@ -68,11 +55,7 @@ export function resolveCheckpointSettings(
 export function loadCheckpointSettings(
   projectRoot: string,
 ): CheckpointSettings {
-  const scopes = [
-    path.join(projectRoot, ".freecode", "settings.json"),
-    path.join(os.homedir(), ".freecode", "settings.json"),
-  ]
-    .map(readScope)
-    .filter((s): s is Scope => s !== undefined);
-  return resolveCheckpointSettings(scopes);
+  return resolveCheckpointSettings(
+    settingsSections(projectRoot, "checkpoints") as Scope[],
+  );
 }

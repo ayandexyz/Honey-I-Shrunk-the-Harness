@@ -7,7 +7,6 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import * as os from "os";
 import type {
   PermissionRule,
   PermissionRuleDecision,
@@ -16,28 +15,15 @@ import type {
 } from "./rule-types.js";
 import { emptyRuleSet } from "./rule-types.js";
 import { parseRule, parseRuleSet } from "./rules.js";
-import { logger } from "../utils/logger.js";
+import {
+  readSettingsScopes,
+  settingsFile,
+  type SettingsScope,
+} from "../settings/load.js";
 
-export type RuleScope = "project" | "user";
+export type RuleScope = SettingsScope;
 
-export function settingsPath(scope: RuleScope, projectRoot: string): string {
-  return scope === "project"
-    ? path.join(projectRoot, ".freecode", "settings.json")
-    : path.join(os.homedir(), ".freecode", "settings.json");
-}
-
-function readSettingsFile(filePath: string): PermissionSettings {
-  try {
-    const raw = fs.readFileSync(filePath, "utf-8");
-    const parsed = JSON.parse(raw) as { permissions?: PermissionSettings };
-    return parsed.permissions ?? {};
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      logger.warn(`[Permission] Ignoring unreadable settings at ${filePath}: ${error}`);
-    }
-    return {};
-  }
-}
+export const settingsPath = settingsFile;
 
 /**
  * Holds the merged rule sets for a session: project + user scopes from disk
@@ -54,10 +40,11 @@ export class PermissionSettingsManager {
   }
 
   reload(): void {
-    const scopes = (["project", "user"] as const).map((scope) =>
-      parseRuleSet(readSettingsFile(settingsPath(scope, this.projectRoot))),
+    const scopes = readSettingsScopes(this.projectRoot).map((doc) =>
+      parseRuleSet((doc.data.permissions ?? {}) as PermissionSettings),
     );
-    // Within a tier scope doesn't matter: deny anywhere is deny
+    // Lists accumulate across scopes, and within a tier scope doesn't
+    // matter: deny anywhere is deny
     this.merged = {
       allow: scopes.flatMap((s) => s.allow),
       ask: scopes.flatMap((s) => s.ask),

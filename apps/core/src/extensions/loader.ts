@@ -23,6 +23,7 @@ import { registerPromptCommand, unregisterPromptCommand } from "../commands/regi
 import { registerHook, unregisterHook } from "../hooks/registry.js";
 import { BusEvents } from "../bus/index.js";
 import { logger } from "../utils/logger.js";
+import { readSettingsFile } from "../settings/load.js";
 import type {
   ExtensionAPI,
   ExtensionModule,
@@ -38,16 +39,13 @@ export function listExtensions(): LoadedExtension[] {
   return [...loaded.values()];
 }
 
+// User scope only: a repository must not be able to vouch for itself.
 function readTrustedProjects(home = os.homedir()): string[] {
-  try {
-    const raw = JSON.parse(
-      fs.readFileSync(path.join(home, ".freecode", "settings.json"), "utf-8"),
-    ) as { extensions?: { trustedProjects?: unknown } };
-    const list = raw?.extensions?.trustedProjects;
-    return Array.isArray(list) ? list.filter((p): p is string => typeof p === "string") : [];
-  } catch {
-    return [];
-  }
+  const extensions = readSettingsFile(path.join(home, ".freecode", "settings.json"))?.extensions as
+    | { trustedProjects?: unknown }
+    | undefined;
+  const list = extensions?.trustedProjects;
+  return Array.isArray(list) ? list.filter((p): p is string => typeof p === "string") : [];
 }
 
 export function isProjectTrusted(projectPath: string, env = process.env): boolean {

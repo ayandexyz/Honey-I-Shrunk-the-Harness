@@ -8,6 +8,22 @@ description: "Full schema for project and user settings."
 Settings are read from `.freecode/settings.json` (project) and
 `~/.freecode/settings.json` (user).
 
+**How the two combine — one rule for every key** (`settings/load.ts`):
+
+- **Project beats user, key by key.** A value the project file sets, and that is
+  valid for its key, wins. Anything the project leaves out — or sets to a value
+  the key does not accept — falls through to the user file, then the default.
+- **Lists accumulate.** `permissions.allow|ask|deny` and each `hooks.<event>`
+  list gather entries from both files; a hook replaces another only when both
+  share a `name`.
+- **Environment variables beat both files.**
+- **A few keys are user-only**, because a repository must not be able to
+  grant itself trust: `extensions.trustedProjects`.
+
+A file that does not parse is treated as empty for its scope, with one warning.
+When the project *is* your home directory the two paths are one file, read once
+as the user's.
+
 The file is hand-written — or, for the on/off features, flipped with
 `/settings` in the TUI, which writes the user file — and holds no secrets, which is the point: the project
 copy is meant to be **committed**, so the permission rules and hooks your team
@@ -235,8 +251,7 @@ stdout form are documented under [hook events](/reference/hook-events#the-shell-
 { "memory": { "autoExtract": false } }
 ```
 
-Scope merge here is **first definition wins, project → user → default**, per
-field. `FREECODE_DISABLE_MEMORY_EXTRACTION=1` overrides both files. Throttling is
+Project beats user, field by field (see the rule at the top). `FREECODE_DISABLE_MEMORY_EXTRACTION=1` overrides both files. Throttling is
 safe because each extraction rebuilds the transcript from the session's whole
 history, so a skipped run is covered by the next one.
 `FREECODE_DISABLE_MEMORY_RECALL=1` and `FREECODE_DISABLE_MEMORY_CONSOLIDATION=1`
@@ -313,12 +328,9 @@ model turn.
 
 Found while writing this page; each is also tracked in `TODO.md`.
 
-- **One file, three loaders, three merge rules.** `permissions` concatenates
-  scopes, `hooks` override by name, `memory` takes the first definition. All three
-  are defensible in isolation, but nothing states the difference, and
-  `/getting-started/configuration` currently claims a single "project wins" rule
-  that is only true for hooks. A shared loader (parse once, hand each subsystem its
-  section) would make one answer true.
+- ~~**One file, three loaders, three merge rules.**~~ Fixed: every reader goes
+  through `settings/load.ts` (parsed once per file version), and the one rule is
+  stated at the top of this page.
 - ~~**Unknown keys are silently ignored.**~~ Fixed: `settings/known-keys.ts`
   reports any key nothing reads, with a "did you mean" for near misses. It is a
   *name* check only — values stay each loader's business, since they already

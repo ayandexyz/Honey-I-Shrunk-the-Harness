@@ -1,9 +1,9 @@
 // =============================================================================
 // The known shape of `.freecode/settings.json`.
 //
-// Five modules read this file independently — permissions, hooks, memory,
-// redirect and signals — and each ignores everything it does not recognise. That is the
-// right behaviour per reader, but the sum of it was that an unknown key was
+// Every subsystem reads its own section through `settings/load.ts` and
+// ignores everything it does not recognise. That is the right behaviour per
+// reader, but the sum of it was that an unknown key was
 // indistinguishable from a broken feature: `"permission"` for `"permissions"`
 // silently disabled every rule in a security-relevant, hand-edited file, with
 // nothing on stderr.

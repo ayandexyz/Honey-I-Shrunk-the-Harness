@@ -114,12 +114,6 @@ earlier audit are not repeated here.
 
 ### Real fixes
 
-- [ ] **`settings.json` has three loaders and three different merge rules.**
-      `permissions` concatenates both scopes, `hooks` override by `event + name`,
-      `memory` takes the first definition (project → user → default). Nothing states
-      the difference and `/getting-started/configuration` claims a single "project
-      wins" rule that only holds for hooks. One loader that parses the file once and
-      hands each subsystem its section would make one answer true.
 - [ ] **`FREECODE_HOME` is honoured by checkpoints and nothing else** —
       `checkpoint/store.ts:33`, `checkpoint/shadow-git.ts:46` and
       `scripts/uninstall.sh` read it (the TUI updater no longer does, re-checked

@@ -9,11 +9,15 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import * as os from "os";
 import type { HookEventName, CommandHook, HttpHook } from "./types.js";
 import { HOOK_EVENT_NAMES } from "./types.js";
 import { registerHook, unregisterAllHooks } from "./registry.js";
 import { logger } from "../utils/logger.js";
+import {
+  readSettingsFile,
+  readSettingsScopes,
+  settingsFile,
+} from "../settings/load.js";
 
 // =============================================================================
 // Configuration Types
@@ -77,27 +81,12 @@ export function hooksSettingsPath(
   scope: "project" | "user",
   projectRoot: string,
 ): string {
-  return scope === "project"
-    ? path.join(projectRoot, ".freecode", "settings.json")
-    : path.join(os.homedir(), ".freecode", "settings.json");
+  return settingsFile(scope, projectRoot);
 }
 
 // =============================================================================
 // Settings Reading
 // =============================================================================
-
-function readHooksFromFile(filePath: string, scope: Scope): HooksByEvent {
-  let raw: string;
-  try {
-    raw = fs.readFileSync(filePath, "utf-8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT" || scope === "launch") {
-      logger.warn(`[Hooks] Ignoring unreadable settings at ${filePath}: ${error}`);
-    }
-    return Object.create(null);
-  }
-  return readHooksDocument(raw, filePath, scope);
-}
 
 /**
  * The launch scope is a file path or, like `claude --settings`, the JSON
@@ -105,20 +94,26 @@ function readHooksFromFile(filePath: string, scope: Scope): HooksByEvent {
  */
 function readLaunchHooks(value: string): HooksByEvent {
   const trimmed = value.trim();
-  return trimmed.startsWith("{")
-    ? readHooksDocument(trimmed, "FREECODE_SETTINGS", "launch")
-    : readHooksFromFile(trimmed, "launch");
+  if (!trimmed.startsWith("{")) {
+    if (!fs.existsSync(trimmed)) {
+      logger.warn(`[Hooks] Ignoring missing launch settings at ${trimmed}`);
+      return Object.create(null);
+    }
+    return readHooksDocument(readSettingsFile(trimmed), "launch");
+  }
+  try {
+    return readHooksDocument(JSON.parse(trimmed), "launch");
+  } catch (error) {
+    logger.warn(`[Hooks] Ignoring unparseable settings at FREECODE_SETTINGS: ${error}`);
+    return Object.create(null);
+  }
 }
 
-function readHooksDocument(raw: string, label: string, scope: Scope): HooksByEvent {
+function readHooksDocument(
+  parsed: { hooks?: Record<string, RawHookEntry[]> } | undefined,
+  scope: Scope,
+): HooksByEvent {
   const normalized: HooksByEvent = Object.create(null);
-  let parsed: { hooks?: Record<string, RawHookEntry[]> };
-  try {
-    parsed = JSON.parse(raw);
-  } catch (error) {
-    logger.warn(`[Hooks] Ignoring unparseable settings at ${label}: ${error}`);
-    return normalized;
-  }
 
   for (const [event, entries] of Object.entries(parsed?.hooks ?? {})) {
     if (!isValidEventName(event)) {
@@ -276,9 +271,11 @@ export class HookSettingsManager {
     // First, unregister all hooks from settings (for reload)
     unregisterAllHooks("settings");
 
+    // Lowest priority first: a later scope replaces a same-named hook.
     const scopes: HooksByEvent[] = [
-      readHooksFromFile(hooksSettingsPath("user", this.projectRoot), "user"),
-      readHooksFromFile(hooksSettingsPath("project", this.projectRoot), "project"),
+      ...readSettingsScopes(this.projectRoot)
+        .reverse()
+        .map((doc) => readHooksDocument(doc.data, doc.scope)),
       this.launchSettings
         ? readLaunchHooks(this.launchSettings)
         : (Object.create(null) as HooksByEvent),
