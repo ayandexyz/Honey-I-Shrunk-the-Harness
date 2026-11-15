@@ -1,5 +1,7 @@
+import * as fs from "fs";
 import { AIProvider, ProviderInfo } from "./types.js";
-import { ProviderId } from "./config.js";
+import { CONFIG_FILE, ProviderId } from "./config.js";
+import { AUTH_FILE } from "./auth-store.js";
 
 export interface ProviderDefinition {
   info: ProviderInfo;
@@ -8,11 +10,42 @@ export interface ProviderDefinition {
 
 const registry = new Map<ProviderId, ProviderDefinition>();
 
+/**
+ * One instance per provider id. `create()` is cheap, but the instance it
+ * returns builds its SDK client on first request — importing the SDK factory
+ * and reading the key with a synchronous `readFileSync` of config.json — so a
+ * fresh instance per call (every turn, every compaction) paid that each time.
+ */
+const instances = new Map<ProviderId, AIProvider>();
+let instancesStamp: string | undefined;
+
+/**
+ * What a cached instance was built from: the key and auth mode come from
+ * config.json, and whether a subscription login exists from auth.json. A
+ * change to either — `freecode auth login` in another terminal, a key set from
+ * the TUI — must still take effect on the next call, as it did when every call
+ * built a new instance, so the cache is dropped whenever either file changes.
+ * One stat each is far cheaper than what it saves.
+ */
+function credentialStamp(): string {
+  return [CONFIG_FILE, AUTH_FILE]
+    .map((file) => {
+      try {
+        const st = fs.statSync(file);
+        return `${st.mtimeMs}:${st.size}`;
+      } catch {
+        return "-";
+      }
+    })
+    .join("|");
+}
+
 export function registerProvider(
   id: ProviderId,
   def: ProviderDefinition,
 ): void {
   registry.set(id, def);
+  instances.delete(id);
 }
 
 export function getProvider(id: ProviderId): AIProvider {
@@ -21,7 +54,17 @@ export function getProvider(id: ProviderId): AIProvider {
     const available = Array.from(registry.keys()).join(", ");
     throw new Error(`Provider "${id}" not registered. Available: ${available}`);
   }
-  return def.create();
+  const stamp = credentialStamp();
+  if (stamp !== instancesStamp) {
+    instances.clear();
+    instancesStamp = stamp;
+  }
+  let provider = instances.get(id);
+  if (!provider) {
+    provider = def.create();
+    instances.set(id, provider);
+  }
+  return provider;
 }
 
 export function listProviders(): ProviderInfo[] {

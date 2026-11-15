@@ -341,16 +341,16 @@ string is the tool result the model reads as text.
    object-with-properties shape; anything using JSON Schema composition tells
    the model the tool takes no parameters. Needs a real resolver, not just
    more cases.
-10. **The todo list is in-memory only** (`todo.ts:25`). It survives compaction
+2. **The todo list is in-memory only** (`todo.ts:25`). It survives compaction
     (it is re-rendered from the store each turn rather than read out of history)
     but not a restart or a `session.resume` — and the loop's todo-completion
     gate reads that same store, so a resumed session's plan is silently empty.
-12. **`tool_complete` still crosses IPC in one message.** The event carries
+3. **`tool_complete` still crosses IPC in one message.** The event carries
     `result.stdout`, now tail-capped at 500K chars at the orchestrator (it
     used to be fully uncapped), but half a megabyte in a single JSON-RPC
     message is still a lot; a streaming or windowed hand-off has no design
     yet.
-13. **`read`'s image path bypasses the model-visibility check.** The tool
+4. **`read`'s image path bypasses the model-visibility check.** The tool
     returns `metadata.image` for any supported extension; whether the model can
     actually see images is decided later, in the loop. A text-only model
     therefore pays for a full base64 read (up to 10 MB) before being told the

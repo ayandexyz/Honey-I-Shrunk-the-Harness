@@ -243,18 +243,18 @@ separate instance) and the loop's own instance stay consistent across turns.
 
 ## Known gaps
 
-2. **`getContextLimit(model)` ignores its argument** and returns the constant
+1. **`getContextLimit(model)` ignores its argument** and returns the constant
    floor (`tokens.ts:20`). Harmless, but the name promises a per-model table that
    no longer exists.
-3. **The estimator is `chars ÷ 4` for every model and provider**
+2. **The estimator is `chars ÷ 4` for every model and provider**
    (`tokens.ts:13`) — no tokenizer, no per-provider adjustment. Acceptable only
    because the measured count is preferred; it is the fallback that under-reports.
-4. **`context.overflow` is never recorded.** The loop detects overflow and retries
+3. **`context.overflow` is never recorded.** The loop detects overflow and retries
    (`loop.ts:1003`) but never calls `recorder.recordContextOverflow()`, so the one
    event designed to make this visible in replay is absent. It is one of seven
    rollout event types with no emitter — see
    [Sessions, store & rollout](/internals/sessions#known-gaps).
-5. **The blocked-retry threshold is a fixed 5,000 tokens** (`service.ts:34`) and
+4. **The blocked-retry threshold is a fixed 5,000 tokens** (`service.ts:34`) and
    not part of `CompactionConfig`, so a hook that wants tighter control can't have
    it.
 

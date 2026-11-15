@@ -379,28 +379,23 @@ an explicit `type`.
 
 ## Known gaps
 
-2. **`getProvider()` constructs a new client on every call**
-   (`registry.ts:24`), and each constructor calls `getApiKey()`, which does a
-   synchronous `readFileSync` + `JSON.parse` of `~/.freecode/config.json`. That
-   is a blocking disk read per provider call — at least once per turn, plus once
-   per compaction. Memoizing per id would be a few lines.
-4. **`summarizeCache`'s hit ratio is wrong and unused.** It computes
+1. **`summarizeCache`'s hit ratio is wrong and unused.** It computes
    `read / (read + inputTokens)` (`cache-awareness.ts:71`) treating `inputTokens`
    as the fresh portion — but the normalized shape makes it *inclusive* of cache
    reads and writes, so reads are double-counted in the denominator and the ratio
    is understated. Nothing outside its own test reads the field; the loop
    destructures only `readTokens` and `writeTokens`. The test asserts the old
    non-inclusive semantics.
-5. **Only `anthropic` counts as a caching provider for the cold warning.**
+2. **Only `anthropic` counts as a caching provider for the cold warning.**
    `CACHING_PROVIDERS` (`cache-awareness.ts:24`) is a one-element set, yet
    `minimax` and `zai` go through the same Anthropic endpoint shape and carry the
    same `cacheControl` markers. Their users never see the cold-cache warning.
-6. **`ExecuteResult.thinking` is dead for every provider.** All six set
+3. **`ExecuteResult.thinking` is dead for every provider.** All six set
     `thinking: undefined` in `execute()`; reasoning reaches the loop only as
     `thinking_delta` chunks on the streaming path. A non-streaming turn silently
     loses extended thinking, and there is no way to configure a thinking budget
     or reasoning effort anywhere in `ExecuteOptions`.
-7. **`ProviderInfo.maxOutputTokens`'s documentation is stale.** Its comment
+4. **`ProviderInfo.maxOutputTokens`'s documentation is stale.** Its comment
     (`types.ts:10`) says compaction subtracts it from the context limit;
     compaction actually subtracts `resolveMaxOutputTokens()`, which reads
     models.dev and caps at 32K. The field is only a fallback for callers that

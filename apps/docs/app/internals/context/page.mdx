@@ -256,15 +256,6 @@ there is what the tools are for.
    `session-context.ts` freezes `gitHead` for the session — a live read would
    rewrite position 0 on every commit and re-bill the whole conversation
    behind it.
-1. ~~The git HEAD never reaches the model.~~ **Fixed** by rendering it:
-   `compileProjectSummary` takes the head it was already being handed and emits
-   a `Git HEAD:` line between `Path` and the file tree, so `CLAUDE.md` and the
-   in-code comments now describe what the model actually gets. The line is
-   dropped when `tree-cache` reports `no-git`, which is a sentinel rather than a
-   value. It is safe in that cache-sensitive slot only because
-   `session-context.ts` freezes `gitHead` for the session — a live read would
-   rewrite position 0 on every commit and re-bill the whole conversation
-   behind it.
 2. ~~The compiler's `fileTreeCache` is keyed on something the value doesn't
    depend on.~~ **Fixed** by deleting the cache: `compileProjectSummary` was
    only ever formatting a four-line string, so caching it bought nothing and
@@ -273,7 +264,7 @@ there is what the tools are for.
    minutes rendered the *first* session's tree even after the watcher had
    refreshed it. `PromptCompiler.clearCaches()` and its one caller
    (`defs-cache.ts`) were removed with it.
-5. ~~Editing `CLAUDE.md` mid-session busts the prompt cache silently.~~
+3. ~~Editing `CLAUDE.md` mid-session busts the prompt cache silently.~~
    **Fixed.** `noteStaticPrefix` fingerprints the compiled static block each
    turn and records an invalidation when it moves, so
    [the cache-miss detector](/internals/providers#cache-observability)
@@ -282,10 +273,10 @@ there is what the tools are for.
    `CLAUDE.md` in particular also covers an edited `AGENTS.md`, a skill
    appearing or disappearing, and whatever joins that block later. The MCP
    tool-set gap is a separate site and is still open.
-6. Instruction loading is now bounded by import depth/file/byte limits and
+4. Instruction loading is now bounded by import depth/file/byte limits and
    scoped-rule selection, while user-authored instruction files are not
    truncated. `/context` exposes source metadata without contents.
-7. **Instruction hierarchy is implemented.** Resolution walks the repository
+5. **Instruction hierarchy is implemented.** Resolution walks the repository
    hierarchy, expands bounded imports, and applies matching `.freecode/rules/`
    files. Static source ordering is frozen for the session to preserve
    prompt-cache stability.

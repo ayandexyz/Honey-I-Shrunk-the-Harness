@@ -178,15 +178,6 @@ that page's **Known gaps**.
 
 ### Real fixes
 
-- [ ] **`getProvider()` builds a fresh provider per call and reads config from
-      disk each time.** `registry.ts:24` calls `def.create("")` on every lookup,
-      and since the catalogue refactor that is `createGenericProvider(entry)`
-      (`registry.ts:94`) — a new instance whose SDK memo (`sdkPromise`) starts
-      empty, so its first request re-imports the SDK factory and calls
-      `getApiKey()` (a synchronous `readFileSync` + `JSON.parse` of
-      `~/.freecode/config.json`). At least once per turn (`callProviderOnce`)
-      plus once per compaction. Memoize the instance per provider id,
-      invalidating when config changes.
 - [ ] **`summarizeCache`'s hit ratio is both wrong and unused.**
       `read / (read + inputTokens)` (`cache-awareness.ts:71`) treats `inputTokens`
       as the fresh portion, but `NormalizedUsage.inputTokens` is inclusive of
