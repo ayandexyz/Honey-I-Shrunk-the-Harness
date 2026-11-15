@@ -10,6 +10,7 @@
 // =============================================================================
 
 import { getCacheTtl, type CacheTtl } from "./utils.js";
+import { resolveCatalogue } from "./catalogue.js";
 
 // The cold line follows whatever TTL the request actually asked for, so the
 // warning stays true under FREECODE_CACHE_TTL=1h instead of firing at six
@@ -19,9 +20,16 @@ const TTL_MS: Record<CacheTtl, number> = {
   "1h": 60 * 60 * 1000,
 };
 
-// Providers whose prompt cache is time-limited (so a gap causes a miss).
+// Providers whose prompt cache is time-limited (so a gap causes a miss): every
+// one the generic driver talks to through `@ai-sdk/anthropic`, which is the
+// same test it uses to place the `cacheControl` markers (generic-provider.ts).
+// That covers minimax and zai, which a hand-kept `["anthropic"]` list left out.
 // OpenAI/Gemini caching is either automatic-without-TTL-signal or absent here.
-const CACHING_PROVIDERS = new Set(["anthropic"]);
+function hasTimeLimitedCache(provider: string): boolean {
+  return resolveCatalogue().some(
+    (entry) => entry.id === provider && entry.npm === "@ai-sdk/anthropic",
+  );
+}
 
 const lastSend = new Map<string, number>(); // sessionId → last send epoch ms
 
@@ -32,7 +40,7 @@ export function noteSendAndCheckCold(
   provider: string,
   now: number = Date.now(),
 ): string | null {
-  if (!CACHING_PROVIDERS.has(provider)) {
+  if (!hasTimeLimitedCache(provider)) {
     lastSend.set(sessionId, now);
     return null;
   }
@@ -53,22 +61,18 @@ export function noteSendAndCheckCold(
 export interface CacheSummary {
   readTokens: number; // served from cache (cheap)
   writeTokens: number; // written to cache this turn (cache-creation)
-  hitRatio: number; // read / (read + fresh input), 0..1
 }
 
 export function summarizeCache(usage?: {
-  inputTokens?: number;
   cacheReadInputTokens?: number;
   cacheCreationInputTokens?: number;
 }): CacheSummary {
-  const read = usage?.cacheReadInputTokens ?? 0;
-  const write = usage?.cacheCreationInputTokens ?? 0;
-  const fresh = usage?.inputTokens ?? 0;
-  const denom = read + fresh;
+  // A hit ratio used to be computed here as read / (read + inputTokens) — wrong,
+  // because `inputTokens` already includes cache reads and writes, and read by
+  // nothing. The ratios the TUI shows come from `cache-miss.ts` (`getCacheStats`).
   return {
-    readTokens: read,
-    writeTokens: write,
-    hitRatio: denom > 0 ? read / denom : 0,
+    readTokens: usage?.cacheReadInputTokens ?? 0,
+    writeTokens: usage?.cacheCreationInputTokens ?? 0,
   };
 }
 

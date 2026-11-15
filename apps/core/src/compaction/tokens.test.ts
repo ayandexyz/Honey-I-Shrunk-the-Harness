@@ -2,8 +2,6 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   estimateTokenCount,
-  getContextLimit,
-  getAutoCompactThreshold,
   getCompactTarget,
   shouldCompact,
   DEFAULT_COMPACT_TARGET_TOKENS,
@@ -16,15 +14,6 @@ delete process.env.FREECODE_AUTO_COMPACT_TOKENS;
 
 test("estimateTokenCount uses a conservative char estimate", () => {
   assert.equal(estimateTokenCount("Hello World"), 3);
-});
-
-test("getContextLimit returns the offline fallback floor", () => {
-  assert.equal(getContextLimit("unknown-model"), 100_000);
-  assert.equal(getContextLimit("gpt-4o"), 100_000);
-});
-
-test("getAutoCompactThreshold reserves compaction buffer", () => {
-  assert.equal(getAutoCompactThreshold("gpt-4o", 13_000), 87_000);
 });
 
 test("shouldCompact uses the fallback limit when no explicit limit is given", () => {

@@ -101,8 +101,6 @@ Each is also listed in that page's **Known gaps** section. Deliberate behaviour 
 - [ ] **Dangling wikilinks are invisible** — skipped correctly (`builder.ts:78`),
       but a typo'd `[[link]]` never surfaces anywhere. The explorer should list
       unresolved links.
-- [ ] **`getContextLimit(model)` ignores its argument** (`tokens.ts:20`) and
-      returns the constant floor. Rename or drop the parameter.
 - [ ] **Blocked-compaction retry threshold is hardcoded** — fixed 5,000 tokens
       (`service.ts:34`, flagged `ponytail` in-code); make it a `CompactionConfig`
       field if a hook ever needs tighter control.
@@ -178,18 +176,6 @@ that page's **Known gaps**.
 
 ### Real fixes
 
-- [ ] **`summarizeCache`'s hit ratio is both wrong and unused.**
-      `read / (read + inputTokens)` (`cache-awareness.ts:71`) treats `inputTokens`
-      as the fresh portion, but `NormalizedUsage.inputTokens` is inclusive of
-      cache reads and writes — so reads are double-counted in the denominator.
-      Nothing outside `cache-awareness.test.ts:38` reads `hitRatio` (the loop
-      destructures only `readTokens`/`writeTokens`), and the test asserts the old
-      non-inclusive semantics. Either fix to
-      `read / (read + nonCachedInputTokens + write)` and use it, or delete it.
-- [ ] **Only `anthropic` is treated as a caching provider for the cold warning.**
-      `CACHING_PROVIDERS` (`cache-awareness.ts:24`) is a one-element set, but
-      `minimax` and `zai` use the same Anthropic endpoint shape and carry the same
-      `cacheControl` markers, so their users never see the cold-cache warning.
 - [ ] **`ExecuteResult.thinking` is dead for every provider.** The generic driver
       sets `thinking: undefined` in `execute()` (`generic-provider.ts:357`);
       reasoning reaches the loop only as

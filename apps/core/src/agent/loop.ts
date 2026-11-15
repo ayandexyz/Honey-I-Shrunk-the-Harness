@@ -3218,7 +3218,6 @@ export class AgentLoop {
     const cacheWrite =
       usage?.cacheWriteInputTokens ?? usage?.cacheCreationInputTokens ?? 0;
     const { readTokens, writeTokens } = summarizeCache({
-      inputTokens: usage?.inputTokens,
       cacheReadInputTokens: usage?.cacheReadInputTokens,
       cacheCreationInputTokens: cacheWrite,
     });

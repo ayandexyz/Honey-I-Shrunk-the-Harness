@@ -15,19 +15,6 @@ export function estimateTokenCount(text: string): number {
   return Math.ceil(text.length / CHARS_PER_TOKEN);
 }
 
-// Kept for callers/tests; always returns the offline floor now that the live
-// limit comes from models.dev via shouldCompact's contextLimit argument.
-export function getContextLimit(_model: string): number {
-  return FALLBACK_CONTEXT_LIMIT;
-}
-
-export function getAutoCompactThreshold(
-  model: string,
-  bufferTokens: number,
-): number {
-  return Math.max(0, getContextLimit(model) - bufferTokens);
-}
-
 /**
  * Cost ceiling for the conversation, independent of the model's window.
  *
@@ -117,15 +104,18 @@ export function getMaxTurnTokens(): number | undefined {
 
 export function shouldCompact(
   tokenCount: number,
-  model: string,
+  // Unused since the limit stopped being a per-model table: the live window
+  // comes from models.dev as `contextLimit`. Kept so the 30-odd call sites
+  // (MemoryService and its tests) did not churn with this cleanup.
+  _model: string,
   bufferTokens: number,
   contextLimit?: number,
 ): boolean {
   const override = getAutoCompactOverride();
   if (override !== undefined) return tokenCount >= override;
-  // Prefer an explicit (models.dev) limit; fall back to the local table.
+  // Prefer the explicit (models.dev) limit; otherwise the offline floor.
   const windowLimit =
-    contextLimit && contextLimit > 0 ? contextLimit : getContextLimit(model);
+    contextLimit && contextLimit > 0 ? contextLimit : FALLBACK_CONTEXT_LIMIT;
   // Whichever binds first: what the model can hold, or what we're willing to
   // pay for on every subsequent turn.
   const limit = Math.min(windowLimit, getCompactTarget());

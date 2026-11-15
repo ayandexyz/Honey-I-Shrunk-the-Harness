@@ -46,26 +46,39 @@ test("gap just under TTL stays warm, over TTL goes cold", () => {
   });
 });
 
+test("minimax and zai warn too: they reach the Anthropic API shape and cache", () => {
+  withCacheTtl("5m", () => {
+    for (const provider of ["minimax", "zai"]) {
+      const session = `s-${provider}`;
+      disposeCacheAwareness(session);
+      noteSendAndCheckCold(session, provider, 0);
+      assert.match(
+        noteSendAndCheckCold(session, provider, FIVE_MIN + 1000) ?? "",
+        /cold/i,
+        provider,
+      );
+    }
+  });
+});
+
 test("non-caching providers never warn", () => {
   disposeCacheAwareness("s4");
   noteSendAndCheckCold("s4", "openai", 0);
   assert.equal(noteSendAndCheckCold("s4", "openai", 10 * FIVE_MIN), null);
 });
 
-test("summarizeCache computes hit ratio", () => {
+test("summarizeCache reports cache reads and writes", () => {
   const s = summarizeCache({
-    inputTokens: 100,
     cacheReadInputTokens: 900,
     cacheCreationInputTokens: 50,
   });
   assert.equal(s.readTokens, 900);
   assert.equal(s.writeTokens, 50);
-  assert.equal(s.hitRatio, 0.9); // 900 / (900 + 100)
 });
 
 test("summarizeCache handles missing usage", () => {
   const s = summarizeCache(undefined);
-  assert.deepEqual([s.readTokens, s.writeTokens, s.hitRatio], [0, 0, 0]);
+  assert.deepEqual([s.readTokens, s.writeTokens], [0, 0]);
 });
 
 test("the cold line follows FREECODE_CACHE_TTL", () => {
