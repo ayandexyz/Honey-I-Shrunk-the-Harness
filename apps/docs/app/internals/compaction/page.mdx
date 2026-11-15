@@ -243,10 +243,6 @@ separate instance) and the loop's own instance stay consistent across turns.
 
 ## Known gaps
 
-1. **`renderPromptMemoryContext()` is dead code.** Exported from `selector.ts:64`,
-   referenced only by comments in `loop.ts` explaining why it must _not_ be used
-   (it renders `recentMessages`, which are already in history verbatim and would
-   rewrite the prefix every turn).
 2. **`getContextLimit(model)` ignores its argument** and returns the constant
    floor (`tokens.ts:20`). Harmless, but the name promises a per-model table that
    no longer exists.

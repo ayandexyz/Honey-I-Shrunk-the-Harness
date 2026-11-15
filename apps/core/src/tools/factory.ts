@@ -10,7 +10,6 @@ import type {
   ToolPermissions,
   ToolExecutionResult,
   ValidationResult,
-  PermissionCheckResult,
   JsonSchema,
 } from "./tool.types.js";
 import type { ToolContext } from "./types.js";
@@ -45,10 +44,6 @@ export function buildTool<P, R>(config: {
   behavior?: Partial<ToolBehavior>;
   execute: (params: P, ctx: ToolContext) => Promise<ToolExecutionResult<R>>;
   validateInput?: (params: unknown) => ValidationResult;
-  checkPermissions?: (
-    params: P,
-    ctx: ToolContext,
-  ) => Promise<PermissionCheckResult>;
 }): Tool<P, R> {
   const fullPermissions: ToolPermissions = {
     ...defaultPermissions,
@@ -69,6 +64,5 @@ export function buildTool<P, R>(config: {
     permissions: fullPermissions,
     execute: config.execute as Tool<P, R>["execute"],
     validateInput: config.validateInput,
-    checkPermissions: config.checkPermissions as Tool<P, R>["checkPermissions"],
   };
 }

@@ -91,8 +91,6 @@ test("compileDynamicContext reuses an explicit clock", () => {
   const text = compiler.compileDynamicContext(
     "📄 a.txt",
     "abc12345",
-    "",
-    undefined,
     "2026-08-08T12:00:00Z",
   );
   assert.ok(text.includes("Current Time: 2026-08-08T12:00:00Z"));

@@ -1,7 +1,6 @@
 import type {
   CompactionConfig,
   MemoryMessage,
-  PromptMemoryContext,
   SelectionResult,
 } from "./types.js";
 
@@ -67,24 +66,4 @@ export function selectForCompaction(
     summarizeTokenCount: countTokens(summarize),
     preserveTokenCount: countTokens(preserve),
   };
-}
-
-export function renderPromptMemoryContext(
-  context: PromptMemoryContext,
-): string {
-  const sections: string[] = [];
-
-  if (context.summary) {
-    sections.push("Compacted session summary:");
-    sections.push(context.summary);
-  }
-
-  if (context.recentMessages.length > 0) {
-    sections.push("Recent session messages:");
-    for (const message of context.recentMessages) {
-      sections.push(`${message.role}: ${message.content}`);
-    }
-  }
-
-  return sections.join("\n\n");
 }

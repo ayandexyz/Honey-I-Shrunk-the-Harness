@@ -3,7 +3,7 @@ import { ProviderId } from "./config.js";
 
 export interface ProviderDefinition {
   info: ProviderInfo;
-  create(apiKey: string): AIProvider;
+  create(): AIProvider;
 }
 
 const registry = new Map<ProviderId, ProviderDefinition>();
@@ -21,7 +21,7 @@ export function getProvider(id: ProviderId): AIProvider {
     const available = Array.from(registry.keys()).join(", ");
     throw new Error(`Provider "${id}" not registered. Available: ${available}`);
   }
-  return def.create("");
+  return def.create();
 }
 
 export function listProviders(): ProviderInfo[] {

@@ -50,13 +50,10 @@ test("PromptCompiler.compileDynamicContext carries file tree and clock", () => {
   const text = compiler.compileDynamicContext(
     "📄 index.js",
     "abc12345",
-    "",
-    "Some memory summary",
   );
   assert.ok(text.includes("my-project"));
   assert.ok(text.includes("/path/to/project"));
   assert.ok(text.includes("📄 index.js"));
-  assert.ok(text.includes("Some memory summary"));
   assert.ok(text.includes("Current Time"));
 });
 

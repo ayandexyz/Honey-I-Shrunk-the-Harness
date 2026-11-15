@@ -95,22 +95,6 @@ function validateToolInput(
 }
 
 // =============================================================================
-// checkToolPermissions()
-// Call per-tool checkPermissions hook if present
-// =============================================================================
-
-async function checkToolPermissions(
-  tool: Tool,
-  params: unknown,
-  ctx: ToolContext,
-): Promise<{ allowed: boolean; reason?: string } | null> {
-  if (tool.checkPermissions) {
-    return await tool.checkPermissions(params as any, ctx);
-  }
-  return null;
-}
-
-// =============================================================================
 // Default tool context for standalone, projectless calls. Session execution
 // must always pass an explicit context rooted at its projectPath.
 // =============================================================================
@@ -186,19 +170,7 @@ export function createToolOrchestrator(): ToolOrchestrator {
         };
       }
 
-      // 3. Per-tool permission check
-      const permResult = await checkToolPermissions(toolDef, args, ctx);
-      if (permResult && !permResult.allowed) {
-        return {
-          id: `result-${Date.now()}`,
-          toolCallId: toolId,
-          tool,
-          title: toolDef.description,
-          error: `Permission denied: ${permResult.reason ?? "check failed"}`,
-        };
-      }
-
-      // 4. Execute — with the Phase 4 tool retry rule: non-mutating tools
+      // 3. Execute — with the Phase 4 tool retry rule: non-mutating tools
       // (isDestructive=false) retry a transient failure once; mutating tools
       // never retry (re-running a write/edit/bash is not safe).
       const maxAttempts = toolDef.behavior?.isDestructive === false ? 2 : 1;

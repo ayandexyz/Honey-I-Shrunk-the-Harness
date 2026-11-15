@@ -48,7 +48,6 @@ export const ReadTool: Tool<ReadParams> = buildTool({
 | `behavior.userFacingName` | the id | UI labels |
 | `permissions.operations` | `[]` | the unattended-run envelope (`freecode night`), which hides a tool whose operations it will never allow |
 | `validateInput` | — | the orchestrator, before execute |
-| `checkPermissions` | — | the orchestrator — but no tool implements it |
 
 Defaults fail closed in the direction that matters: an unfamiliar tool is
 sequential and non-destructive, so it gets its own batch and never claims to
@@ -97,12 +96,10 @@ every tool call takes, built-in or MCP:
 
 ```mermaid
 graph TD
-    A["0. profile check<br/>isToolAllowed(tool, profile) — only if a profile was passed"] --> B["1. lookup<br/>getTool(name) — unknown ⇒ error result"]
-    B --> C["2. coerce<br/>coerceArgs(schema, args) — &quot;30&quot; → 30, &quot;false&quot; → false"]
+    B["1. lookup<br/>getTool(name) — unknown ⇒ error result"] --> C["2. coerce<br/>coerceArgs(schema, args) — &quot;30&quot; → 30, &quot;false&quot; → false"]
     C --> D["3. validate<br/>tool.validateInput(args)"]
-    D --> E["4. permission hook<br/>tool.checkPermissions(args, ctx)"]
-    E --> F["5. execute<br/>tool.execute(args, ctx) — retried once if non-destructive"]
-    F --> G["6. shape<br/>store full output, truncate the model's copy"]
+    D --> F["4. execute<br/>tool.execute(args, ctx) — retried once if non-destructive"]
+    F --> G["5. shape<br/>store full output, truncate the model's copy"]
 ```
 
 Note what is *not* here: the mode/rule permission gauntlet and the
@@ -344,13 +341,6 @@ string is the tool result the model reads as text.
    object-with-properties shape; anything using JSON Schema composition tells
    the model the tool takes no parameters. Needs a real resolver, not just
    more cases.
-8. **`checkPermissions` has no implementers.** The orchestrator calls it if
-   present (`orchestrator.ts:107`); no tool defines it.
-9. **Permission profiles are unreachable.** `createToolOrchestrator()` is called
-   with no arguments in all three production sites (`loop.ts:331`,
-   `effect/layers.ts:63`, `:179`), so `permissionProfile` is always `undefined`
-   and the `isToolAllowed` branch never runs. `CLAUDE.md` describes profiles as
-   "used for subagents"; they are not used at all.
 10. **The todo list is in-memory only** (`todo.ts:25`). It survives compaction
     (it is re-rendered from the store each turn rather than read out of history)
     but not a restart or a `session.resume` — and the loop's todo-completion

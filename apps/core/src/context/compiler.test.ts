@@ -117,7 +117,7 @@ test("an absent section yields an empty segment, not a blank gap", async () => {
 
 test("compileDynamicContext prints the git head it is given", () => {
   const compiler = new PromptCompiler("/p", "proj");
-  const out = compiler.compileDynamicContext("src/", "abc123def", "");
+  const out = compiler.compileDynamicContext("src/", "abc123def");
   assert.ok(
     out.includes("Git HEAD: abc123def"),
     "the head was computed and frozen every turn but never reached the model",
@@ -126,7 +126,7 @@ test("compileDynamicContext prints the git head it is given", () => {
 
 test("a project with no git repository gets no git line", () => {
   const compiler = new PromptCompiler("/p", "proj");
-  const out = compiler.compileDynamicContext("src/", "no-git", "");
+  const out = compiler.compileDynamicContext("src/", "no-git");
   assert.ok(!out.includes("Git HEAD"), "tree-cache's marker is not a value");
   assert.ok(!out.includes("no-git"));
 });
@@ -137,8 +137,6 @@ test("background context is delimited and stable with a frozen clock", () => {
     compiler.compileDynamicContext(
       "dev.sh\nDocuments/ticketDesk/",
       "no-git",
-      "",
-      undefined,
       "2026-09-21T00:00:00Z",
     );
   const context = compile();

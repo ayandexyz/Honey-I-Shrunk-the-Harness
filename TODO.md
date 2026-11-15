@@ -101,8 +101,6 @@ Each is also listed in that page's **Known gaps** section. Deliberate behaviour 
 - [ ] **Dangling wikilinks are invisible** — skipped correctly (`builder.ts:78`),
       but a typo'd `[[link]]` never surfaces anywhere. The explorer should list
       unresolved links.
-- [ ] **Dead export: `renderPromptMemoryContext()`** (`selector.ts:64`) —
-      referenced only by `loop.ts` comments explaining why it must not be used.
 - [ ] **`getContextLimit(model)` ignores its argument** (`tokens.ts:20`) and
       returns the constant floor. Rename or drop the parameter.
 - [ ] **Blocked-compaction retry threshold is hardcoded** — fixed 5,000 tokens
@@ -201,16 +199,6 @@ that page's **Known gaps**.
       `CACHING_PROVIDERS` (`cache-awareness.ts:24`) is a one-element set, but
       `minimax` and `zai` use the same Anthropic endpoint shape and carry the same
       `cacheControl` markers, so their users never see the cold-cache warning.
-- [ ] **`ProviderRegistryTag` has no consumer.** Defined at
-      `effect/context.ts:60` and wired into both live and test layers
-      (`effect/layers.ts:68`, `:182`), but nothing resolves it — the loop calls
-      `getProvider()` directly, so the seam that would let a test swap providers
-      is inert.
-- [ ] **`ProviderDefinition.create(apiKey)` takes an argument nothing uses.**
-      The type still declares it (`registry.ts:6`) and `getProvider` passes `""`,
-      but the one registration left is `create: () => createGenericProvider(entry)`
-      (`registry.ts:94`), which reads the key itself on first request. Drop the
-      parameter.
 - [ ] **`ExecuteResult.thinking` is dead for every provider.** The generic driver
       sets `thinking: undefined` in `execute()` (`generic-provider.ts:357`);
       reasoning reaches the loop only as
@@ -229,8 +217,6 @@ page's **Known gaps**.
 
 ### Real fixes
 
-- [ ] **`checkPermissions` has no implementers.** The orchestrator calls it when
-      present (`orchestrator.ts:107`); no tool defines it.
 - [ ] **`read`'s image path pays before the visibility check.** The tool
       base64-encodes any supported image up to 10 MB and returns it as
       `metadata.image`; whether the model can see images is only decided later in
@@ -272,11 +258,6 @@ that page's **Known gaps**.
 
 ### Real fixes
 
-- [ ] **`compileDynamicContext`'s `memoryContext` and `ignorePatterns` are
-      permanently dead parameters** (`compiler.ts:185`). Both are always passed
-      empty by the only caller. `memoryContext` is load-bearing in reverse — the
-      comment explaining why it must never be used is the real documentation — so
-      keep the comment, drop the parameter.
 - [ ] **The prompt's "file tree" is a single non-recursive `readdirSync` of the
       project root** (`tree-cache.ts:29`). That is a defensible floor, but the word
       "tree" in `CLAUDE.md`, in the compiler's own output header, and in the docs

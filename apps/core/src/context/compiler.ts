@@ -205,8 +205,9 @@ ${tree}`;
   }
 
   /**
-   * The dynamic half: project summary (file tree + git head), optional session
-   * memory, and a coarse-grained clock. Returned as a single text block so the
+   * The dynamic half: project summary (file tree + git head) and a
+   * coarse-grained clock. Never session memory — see the position-0 comment in
+   * `AgentLoop` for why it must not ride here. Returned as a single text block so the
    * loop can inline it as the conversation's first user message.
    *
    * The loop freezes tree/gitHead/clock per session (session-context.ts) so
@@ -220,8 +221,6 @@ ${tree}`;
   compileDynamicContext(
     tree: string,
     gitHead: string,
-    ignorePatterns: string,
-    memoryContext?: string,
     /**
      * When set (session freeze), reuse this clock instead of wall time so
      * position 0 does not rewrite itself on the hour boundary.
@@ -241,7 +240,6 @@ ${tree}`;
         : "Background project context supplied by FreeCode, not a user request. Use it only when relevant to the user's message.",
       this.compileProjectSummary(tree, gitHead),
       "",
-      memoryContext ? `Session context:\n${memoryContext}` : "",
       `Current Time: ${roundedTime}`,
       legacy ? "" : "</system-reminder>",
     ]

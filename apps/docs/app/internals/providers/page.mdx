@@ -379,19 +379,11 @@ an explicit `type`.
 
 ## Known gaps
 
-1. **`ProviderRegistryTag` has no consumer.** It is defined
-   (`effect/context.ts:60`) and wired into both the live and test layers
-   (`effect/layers.ts:68`, `:182`), but nothing ever resolves it — the loop calls
-   `getProvider()` directly, so the DI seam that would let a test swap the
-   provider registry is inert.
 2. **`getProvider()` constructs a new client on every call**
    (`registry.ts:24`), and each constructor calls `getApiKey()`, which does a
    synchronous `readFileSync` + `JSON.parse` of `~/.freecode/config.json`. That
    is a blocking disk read per provider call — at least once per turn, plus once
    per compaction. Memoizing per id would be a few lines.
-3. **`ProviderDefinition.create(apiKey)` ignores its argument.** All six
-   adapters take `_apiKey` and call `getApiKey()` themselves, and `getProvider`
-   passes `""`. The parameter is vestigial and misleading.
 4. **`summarizeCache`'s hit ratio is wrong and unused.** It computes
    `read / (read + inputTokens)` (`cache-awareness.ts:71`) treating `inputTokens`
    as the fresh portion — but the normalized shape makes it *inclusive* of cache

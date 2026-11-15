@@ -243,7 +243,7 @@ export function buildPrompt(messages: Message[], tools?: ToolDef[]): string {
   return parts.join("\n\n");
 }
 
-function createGeminiWebProvider(_apiKey: string): AIProvider {
+function createGeminiWebProvider(): AIProvider {
   // With the bridge opted out, `opts.system` and `opts.tools` are received
   // and discarded — see the header. Bare `opts.prompt` is the internal
   // callers' path (memory extraction, title generation), never the agent

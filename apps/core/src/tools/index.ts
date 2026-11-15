@@ -36,7 +36,6 @@ import type {
   ToolPermissions,
   ToolExecutionResult,
   ValidationResult,
-  PermissionCheckResult,
 } from "./tool.types.js";
 import {
   buildTool,
@@ -56,7 +55,6 @@ export type {
   ToolPermissions,
   ToolExecutionResult,
   ValidationResult,
-  PermissionCheckResult,
 };
 export type { ToolOrchestrator };
 

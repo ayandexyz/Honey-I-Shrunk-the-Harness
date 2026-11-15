@@ -68,16 +68,6 @@ export type ValidationResult =
   | { valid: false; error: string; errorCode?: number };
 
 // =============================================================================
-// PermissionCheckResult - Result of permission check
-// =============================================================================
-
-export interface PermissionCheckResult {
-  allowed: boolean;
-  reason?: string;
-  updatedInput?: Record<string, unknown>;
-}
-
-// =============================================================================
 // Tool - Rich tool definition
 // This is the main interface that all tools should implement
 // =============================================================================
@@ -104,12 +94,6 @@ export interface Tool<P = unknown, R = unknown> {
 
   // Optional: Validate input before execution
   validateInput?(params: unknown): ValidationResult;
-
-  // Optional: Check permissions before execution
-  checkPermissions?(
-    params: P,
-    ctx: ToolContext,
-  ): Promise<PermissionCheckResult>;
 }
 
 // =============================================================================

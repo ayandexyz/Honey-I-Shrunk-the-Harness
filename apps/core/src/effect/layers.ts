@@ -21,8 +21,6 @@ import { bus } from "../bus/index.js";
 import { MemoryService } from "../compaction/service.js";
 import type { MemoryState } from "../compaction/types.js";
 import { createRecorder } from "../rollout/recorder.js";
-import { getProvider, listProviders } from "../providers/registry.js";
-import type { ProviderId } from "../providers/config.js";
 import { createSessionManager } from "../session/manager.js";
 import {
   createRecoveryManager,
@@ -34,14 +32,12 @@ import {
   ToolOrchestratorTag,
   SessionStoreTag,
   BusTag,
-  ProviderRegistryTag,
   MemoryFactoryTag,
   RecorderFactoryTag,
   SessionManagerTag,
   RecoveryManagerTag,
   type MemoryFactory,
   type RecorderFactory,
-  type ProviderRegistry,
 } from "./context.js";
 
 // Re-export: the loop-health evaluator lived here before this file became the
@@ -64,11 +60,6 @@ export const ToolOrchestratorLive = Layer.sync(ToolOrchestratorTag, () =>
 );
 
 export const BusLive = Layer.succeed(BusTag, bus);
-
-export const ProviderRegistryLive = Layer.succeed(ProviderRegistryTag, {
-  get: (id: string) => getProvider(id as ProviderId),
-  list: () => listProviders(),
-} satisfies ProviderRegistry);
 
 const SESSION_BASE_DIR = join(homedir(), ".freecode");
 
@@ -108,7 +99,6 @@ export const AppLayerLive = Layer.mergeAll(
   HookRuntimeLive,
   ToolOrchestratorLive,
   BusLive,
-  ProviderRegistryLive,
   SessionStoreLive,
   MemoryFactoryLive,
   RecorderFactoryLive,
@@ -126,7 +116,6 @@ export interface TestLayerOverrides {
   sessionStore?: SessionStore;
   memoryFactory?: MemoryFactory;
   recorderFactory?: RecorderFactory;
-  providerRegistry?: ProviderRegistry;
   recoveryManager?: RecoveryManager;
 }
 
@@ -167,11 +156,6 @@ export function makeTestLayer(overrides: TestLayerOverrides = {}) {
         ),
       );
 
-  const providerRegistry: ProviderRegistry = overrides.providerRegistry ?? {
-    get: (id: string) => getProvider(id as ProviderId),
-    list: () => listProviders(),
-  };
-
   return Layer.mergeAll(
     Layer.succeed(HookRuntimeTag, hooks),
     Layer.succeed(
@@ -179,7 +163,6 @@ export function makeTestLayer(overrides: TestLayerOverrides = {}) {
       overrides.orchestrator ?? createToolOrchestrator(),
     ),
     Layer.succeed(BusTag, bus),
-    Layer.succeed(ProviderRegistryTag, providerRegistry),
     sessionStoreLayer,
     Layer.succeed(MemoryFactoryTag, memoryFactory),
     Layer.succeed(RecorderFactoryTag, recorderFactory),

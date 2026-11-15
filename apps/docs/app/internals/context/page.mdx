@@ -148,18 +148,16 @@ below the breakpoint, by the loop — see [Memory](/internals/memory).
 ## The dynamic half
 
 ```ts
-compileDynamicContext(tree, gitHead, ignorePatterns, memoryContext?, clock?)
+compileDynamicContext(tree, gitHead, clock?)
 ```
 
-Three parameters carry their own history:
+Session memory is deliberately **not** a parameter. It used to be, always
+passed empty, with a warning above the call site: rendering `recentMessages`
+here rewrote position 0 on every request and invalidated the whole conversation
+prefix — and it was redundant, because those same messages are already in the
+history immediately below. The warning is still there; the parameter (and a dead
+`ignorePatterns`) were removed on 2026-11-15.
 
-- **`ignorePatterns`** is always `""` from the loop. It survives as a cache-key
-  component.
-- **`memoryContext`** is always `undefined`, deliberately. The comment above the
-  call site is a warning: rendering `recentMessages` here rewrote position 0 on
-  every request and invalidated the whole conversation prefix — and it was
-  redundant, because those same messages are already in the history immediately
-  below.
 - **`clock`** is rounded to the hour and frozen with the tree, so position 0
   doesn't rewrite itself when the clock ticks over.
 
@@ -291,11 +289,6 @@ there is what the tools are for.
    hierarchy, expands bounded imports, and applies matching `.freecode/rules/`
    files. Static source ordering is frozen for the session to preserve
    prompt-cache stability.
-9. **`compileDynamicContext`'s `memoryContext` and `ignorePatterns` parameters
-   are permanently dead.** Both are always passed empty. `memoryContext` is
-   load-bearing in reverse — the comment explaining why it must stay unused is
-   the real documentation — but a parameter that must never be used is better
-   expressed as no parameter.
 
 ## Where to look
 

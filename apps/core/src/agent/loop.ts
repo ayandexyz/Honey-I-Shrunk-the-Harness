@@ -2135,9 +2135,9 @@ export class AgentLoop {
       );
 
       // The compaction summary — how the model knows what happened before a
-      // compaction trimmed the history. Deliberately NOT
-      // renderPromptMemoryContext(), which also renders `recentMessages`: those
-      // grow every turn and are already present in the history verbatim, so
+      // compaction trimmed the history. Deliberately the summary ALONE, never
+      // with `recentMessages` beside it (the deleted renderPromptMemoryContext
+      // rendered both): those grow every turn and are already present in the history verbatim, so
       // including them both duplicates content and rewrites the prefix on every
       // request. The summary alone changes only when compaction runs.
       const compactionSummary = this.memory.getPromptContext().summary;
@@ -2795,8 +2795,8 @@ export class AgentLoop {
     // byte after it depends on it. So it must contain ONLY things that are
     // stable across a session.
     //
-    // In particular it must NOT carry the memory context. renderPromptMemoryContext
-    // renders `recentMessages`, which grows every turn — putting that here
+    // In particular it must NOT carry the memory context's `recentMessages`
+    // (what the deleted renderPromptMemoryContext rendered), which grows every turn — putting that here
     // rewrote position 0 on every request and invalidated the entire
     // conversation prefix, which is exactly what the anchors are trying to
     // reuse. It is also redundant: those same messages are already in the
@@ -2811,8 +2811,6 @@ export class AgentLoop {
           content: this.compiler.compileDynamicContext(
             context.tree,
             context.gitHead,
-            "",
-            undefined,
             context.clock,
           ),
         },

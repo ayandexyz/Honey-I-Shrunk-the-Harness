@@ -164,8 +164,6 @@ export async function buildContextBreakdown(
         compiler.compileDynamicContext(
           frozen.ctx.tree,
           frozen.ctx.gitHead,
-          "",
-          undefined,
           frozen.clock,
         ),
     ),

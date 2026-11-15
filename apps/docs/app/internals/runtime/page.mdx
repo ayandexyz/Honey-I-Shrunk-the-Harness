@@ -35,9 +35,8 @@ export class SessionStoreTag extends Context.Tag("freecode/SessionStore")<
 ```
 
 `apps/core/src/effect/context.ts` declares one tag per service: `HookRuntimeTag`,
-`ToolOrchestratorTag`, `SessionStoreTag`, `BusTag`, `ProviderRegistryTag`,
-`MemoryFactoryTag`, `RecorderFactoryTag`, `SessionManagerTag`, and
-`RecoveryManagerTag`. Code that needs the session store never imports
+`ToolOrchestratorTag`, `SessionStoreTag`, `BusTag`, `MemoryFactoryTag`,
+`RecorderFactoryTag`, `SessionManagerTag`, and `RecoveryManagerTag`. Code that needs the session store never imports
 `session/store.js` directly — it asks the runtime for `SessionStoreTag` and
 gets back whatever layer is currently providing it.
 
