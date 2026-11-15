@@ -16,6 +16,9 @@ export const SESSION_LOGIN_TIMEOUT_MS = 10 * 60_000;
 
 interface Pending {
   url: Promise<string>;
+  cancel: () => void;
+  /** Settles once the sign-in has stopped writing to the store. */
+  settled: Promise<void>;
 }
 
 const pending = new Map<string, Pending>();
@@ -45,22 +48,50 @@ export function startBackgroundLogin(opts: BackgroundLoginOptions): Promise<stri
     resolveUrl = resolve;
     rejectUrl = reject;
   });
-  pending.set(server.name, { url });
+  let cancelled = false;
+  let cancelWait!: (err: Error) => void;
+  const cancelledWait = new Promise<never>((_, reject) => {
+    cancelWait = reject;
+  });
+  cancelledWait.catch(() => undefined);
 
-  void loginMcpServer({
+  const settled = loginMcpServer({
     server,
     file: opts.file,
     requireCallback: true,
     onAuthorizationUrl: (authUrl) => resolveUrl(authUrl.href),
     waitForCode: (callback, state) =>
-      callback!.waitForCode(state, opts.timeoutMs ?? SESSION_LOGIN_TIMEOUT_MS),
+      Promise.race([
+        callback!.waitForCode(state, opts.timeoutMs ?? SESSION_LOGIN_TIMEOUT_MS),
+        cancelledWait,
+      ]),
   })
     .then(() => opts.onSignedIn())
     .catch((err) => {
       rejectUrl(err); // no-op once the URL was handed out
-      opts.onFailed(err);
+      if (!cancelled) opts.onFailed(err);
     })
     .finally(() => pending.delete(server.name));
 
+  pending.set(server.name, {
+    url,
+    settled,
+    cancel: () => {
+      cancelled = true;
+      cancelWait(new Error("sign-in cancelled"));
+    },
+  });
   return url;
+}
+
+/**
+ * Stop a sign-in that is waiting for the browser (its callback port closes),
+ * resolving once it has stopped writing to the store. An eval fixture's
+ * teardown needs this: a waiting sign-in holds a timer for 10 minutes.
+ */
+export async function cancelBackgroundLogin(server: string): Promise<void> {
+  const entry = pending.get(server);
+  if (!entry) return;
+  entry.cancel();
+  await entry.settled;
 }

@@ -10,7 +10,13 @@ import * as fs from "fs";
 import * as path from "path";
 import { assertSafeRelativePath, SandboxError } from "./sandbox.js";
 import { FAILURE_CATEGORIES } from "./types.js";
-import type { EvalCase, EvalMemory, FailureCategory, KnownGap } from "./types.js";
+import type {
+  EvalCase,
+  EvalMcpServer,
+  EvalMemory,
+  FailureCategory,
+  KnownGap,
+} from "./types.js";
 
 export class DatasetError extends Error {}
 
@@ -182,6 +188,7 @@ function validate(raw: unknown, where: string): EvalCase {
   }
   const followUps = validateFollowUps(o.followUps, where);
   const answers = validateAnswers(o.answers, where);
+  const mcpServers = validateMcpServers(o.mcpServers, where);
   const env = validateEnv(o.env, where);
   // Structural, not a matter of tuning: `selectForCompaction` refuses while
   // `countUserTurns <= preserveRecentTurns` (2), and only a prompt creates a
@@ -282,6 +289,7 @@ function validate(raw: unknown, where: string): EvalCase {
     expectCompaction: o.expectCompaction as number | undefined,
     followUps,
     answers,
+    mcpServers,
     env,
     forbidTools: Array.isArray(o.forbidTools)
       ? (o.forbidTools as string[])
@@ -515,6 +523,38 @@ export const EVAL_ENV_ALLOWLIST = new Set([
   // compaction/tokens.ts getCompactTarget()
   "FREECODE_COMPACT_TARGET_TOKENS",
 ]);
+
+/** A tool id is `mcp__<name>__<tool>`, so a fixture name may not contain `__`. */
+const MCP_FIXTURE_NAME = /^[a-z][a-z0-9-]*$/;
+
+function validateMcpServers(
+  value: unknown,
+  where: string,
+): EvalMcpServer[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new DatasetError(`${where}: 'mcpServers' must be a non-empty array`);
+  }
+  const names = new Set<string>();
+  for (const entry of value) {
+    const e = entry as Record<string, unknown> | null;
+    if (typeof e?.name !== "string" || !MCP_FIXTURE_NAME.test(e.name)) {
+      throw new DatasetError(
+        `${where}: every 'mcpServers' entry needs a 'name' matching ${MCP_FIXTURE_NAME}`,
+      );
+    }
+    if (e.kind !== "needs-auth") {
+      throw new DatasetError(
+        `${where}: 'mcpServers' entry '${e.name}' has unknown kind ${JSON.stringify(e.kind)} (only "needs-auth")`,
+      );
+    }
+    if (names.has(e.name)) {
+      throw new DatasetError(`${where}: 'mcpServers' names '${e.name}' twice`);
+    }
+    names.add(e.name);
+  }
+  return value as EvalMcpServer[];
+}
 
 function validateAnswers(
   value: unknown,

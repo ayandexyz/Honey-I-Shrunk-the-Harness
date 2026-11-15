@@ -11,17 +11,6 @@ be "fixed" → `docs/DECISIONS.md`.
 
 ## Small known limitations
 
-### MCP `authenticate` tool has no eval case (added 2026-11-15)
-
-**Status:** owed. Spec `2026-11-15-mcp-oauth.md` Phase 2 adds a tool the model can
-call (`mcp__<name>__authenticate`), which the eval rule says needs a trajectory case:
-a needs-auth server present → the model offers the sign-in link rather than saying it
-has no such tool. It cannot be written yet: `eval/runner.ts` `initRunner` boots the
-user's own MCP config once per suite, and a case has no way to declare an MCP server.
-The fix is a per-case MCP fixture (a local fake that answers 401, as
-`mcp/oauth/fake-oauth-server.test.ts` does); until then the behaviour is covered only
-by `mcp/oauth/session.test.ts`, which proves the plumbing, not what a model does with it.
-
 ### Three timing tests fail only under full-suite load (added 2026-11-15)
 
 **Status:** flaky, not yet diagnosed. Both pass when run alone.

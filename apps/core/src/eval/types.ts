@@ -93,6 +93,16 @@ export interface EvalMemory {
 
 export type EvalMemoryPolicy = "empty" | "fixture" | "learning";
 
+/**
+ * A per-trial MCP server. `needs-auth`: a remote server that answers every
+ * request with 401 until the user signs in, so the model sees only its
+ * `mcp__<name>__authenticate` tool. The only kind so far.
+ */
+export interface EvalMcpServer {
+  name: string;
+  kind: "needs-auth";
+}
+
 export interface EvalCase {
   id: string;
   prompt: string;
@@ -195,6 +205,13 @@ export interface EvalCase {
    * can only observe what a model does with a refusal, never with an answer.
    */
   answers?: string[];
+  /**
+   * MCP servers that exist for this trial only (`eval/mcp-fixture.ts`), on top
+   * of the operator's config. Without this no case can put the model in front
+   * of a particular MCP situation — the runner otherwise boots whatever the
+   * operator has configured.
+   */
+  mcpServers?: EvalMcpServer[];
 
   // --- environment (spec `2026-08-29-eval-case-registry.md` §9.1) ---------
   /**

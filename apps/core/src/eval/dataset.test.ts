@@ -517,15 +517,15 @@ test("case ids are unique ACROSS suites, not just within one", () => {
 //   compaction-boundary  needs a turn long enough to compact — not deterministic
 //   memory-recall        needs a seeded memory dir; `files` cannot escape the sandbox
 //   resume               needs a prior session to resume from
-//   mcp-failure          needs a fixture MCP server; `initMcpServers()` reads real config
 const CATEGORIES_WITHOUT_CASES: FailureCategory[] = [
   // `compaction-boundary` left this list once `env` + `expectCompaction` made
   // the path reachable on purpose rather than by accident (spec
   // `2026-08-29-eval-case-registry.md` §9.1). `memory-recall` left it with
   // `evals/memory.jsonl`, once cases could carry a frozen `memories` fixture
   // (spec `2026-09-25-memory-efficiency-and-graph-explorer.md` §6).
+  // `mcp-failure` left it once cases could declare per-trial MCP servers
+  // (`EvalCase.mcpServers`, `eval/mcp-fixture.ts`; spec 2026-11-15-mcp-oauth).
   "resume",
-  "mcp-failure",
 ];
 
 test("coverage by failure category is what we think it is", () => {
@@ -643,6 +643,23 @@ test("answers must be a non-empty array of non-empty strings", () => {
       DatasetError,
       v,
     );
+  }
+});
+
+test("mcpServers takes named needs-auth fixtures, nothing else", () => {
+  const base = `{"id":"m","prompt":"p",${REQUIRED},"expectTool":"mcp__tracker__authenticate",`;
+  assert.deepEqual(
+    parseSuite(`${base}"mcpServers":[{"name":"tracker","kind":"needs-auth"}]}`)[0].mcpServers,
+    [{ name: "tracker", kind: "needs-auth" }],
+  );
+  for (const v of [
+    "[]",
+    '[{"name":"tracker"}]',
+    '[{"name":"tracker","kind":"stdio"}]',
+    '[{"name":"bad__name","kind":"needs-auth"}]',
+    '[{"name":"t","kind":"needs-auth"},{"name":"t","kind":"needs-auth"}]',
+  ]) {
+    assert.throws(() => parseSuite(`${base}"mcpServers":${v}}`), DatasetError, v);
   }
 });
 

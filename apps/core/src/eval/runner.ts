@@ -30,6 +30,7 @@ import { runConsolidationIfDue } from "../memory/consolidate-run.js";
 import type { ConsolidationResult } from "../memory/consolidate.js";
 import { subscriptionAuth } from "../providers/config.js";
 import { traceCost, traceCostByOperation } from "../rollout/cost.js";
+import { startMcpFixtures, type McpFixtures } from "./mcp-fixture.js";
 
 export interface RunnerConfig {
   provider: string;
@@ -155,12 +156,17 @@ export async function runTrial(
   // is frozen during teaching, so the forced pass below is genuinely the
   // FIRST one, not one of several the production per-turn gate already ran.
   const restoreMemoryEnv = applyEnv(memoryEnvironmentForCase(kase));
+  // Per-trial MCP servers, torn down even on the throw path: a fixture's
+  // pending sign-in and its entry in mcp-auth.json must not outlive the trial.
+  let mcpFixtures: McpFixtures | undefined;
   try {
     if (kase.memories && sandbox) {
       await seedMemories(projectPath, kase.memories);
     }
+    if (kase.mcpServers) mcpFixtures = await startMcpFixtures(kase.mcpServers);
     return await runTrialIn(kase, config, sandbox, originalConsolidationGate);
   } finally {
+    await mcpFixtures?.stop();
     restoreMemoryEnv();
     restoreEnv();
     memoryIsolation.cleanup();

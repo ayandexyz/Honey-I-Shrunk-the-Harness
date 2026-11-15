@@ -18,7 +18,7 @@ import {
 import { BusEvents } from "../bus/index.js";
 import type { McpServer } from "./types.js";
 import { createAuthFetch, McpNeedsAuthError } from "./oauth/auth-fetch.js";
-import { hasMcpLogin } from "./oauth/store.js";
+import { deleteMcpAuth, hasMcpLogin } from "./oauth/store.js";
 import { staticClientFor } from "./oauth/login.js";
 import {
   clearNeedsAuth,
@@ -28,6 +28,7 @@ import {
   noteMcpAuth,
 } from "./oauth/needs-auth.js";
 import { createMcpAuthTool } from "./oauth/auth-tool.js";
+import { cancelBackgroundLogin } from "./oauth/session-login.js";
 import { stopWatchingForLogins, watchForLogins } from "./oauth/watch.js";
 
 function getConfigDir(): string {
@@ -175,6 +176,40 @@ export async function reconnectAfterLogin(name: string): Promise<void> {
   } finally {
     reconnecting.delete(name);
   }
+}
+
+/**
+ * Connect a server that is not in any config file, for exactly as long as the
+ * caller holds it — an eval case's fixture (`eval/mcp-fixture.ts`). Same path
+ * as a configured server, so a fixture that needs a login gets the
+ * `authenticate` tool a real one would.
+ */
+export async function connectEphemeralMcpServer(
+  server: McpServer,
+): Promise<{ name: string; toolCount: number } | null> {
+  const result = await connectServer(server);
+  if (result) BusEvents.mcpToolsChanged(server.name);
+  return result;
+}
+
+/**
+ * Undo `connectEphemeralMcpServer` completely: client, tools, pending sign-in,
+ * needs-auth state, and — given its `url` — anything a sign-in stored for it,
+ * which would otherwise linger in the user's real `mcp-auth.json`.
+ */
+export async function forgetMcpServer(name: string, url?: string): Promise<void> {
+  const client = getClient(name);
+  if (client) {
+    await client.close().catch(() => undefined);
+    removeClient(name);
+  }
+  await cancelBackgroundLogin(name);
+  if (url) deleteMcpAuth(name, url);
+  unregisterMcpTools(`mcp__${name}__`);
+  clearMcpToolKinds(`mcp__${name}__`);
+  clearNeedsAuth(name);
+  if (needsAuthServers().length === 0) stopWatchingForLogins();
+  BusEvents.mcpToolsChanged(name);
 }
 
 export async function initMcpServers(): Promise<void> {

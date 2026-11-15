@@ -253,6 +253,9 @@ export async function startCallbackServer(
           server.removeListener("request", onRequest);
           reject(new Error("Timed out waiting for the OAuth callback."));
         }, timeoutMs);
+        // The listening server is what keeps a login process alive; once it
+        // is closed (an abandoned MCP sign-in), this timer must not.
+        timer.unref();
 
         function finish(err: Error | undefined, code?: string): void {
           clearTimeout(timer);
