@@ -381,13 +381,10 @@ Found while writing this page; each is also tracked in `TODO.md`.
 - **`session` CLI covers 2 of 12 operations.** `fork`, `switch`, `archive`,
   `export`, `import`, `upload`, `download` all exist over IPC and none has a CLI
   surface, so scripting session management means speaking JSON-RPC by hand.
-- **`eval` only works from the repo root.** `evalsDir()` is
-  `path.resolve("evals")` (`eval/dataset.ts:19`), so the suite is found relative
-  to the current working directory and `freecode eval` from anywhere else fails
-  with "no such suite". The shipped cases also reference FreeCode's own source
-  paths, which nothing in `--help` says.
-- **`eval --gate` does not imply `--trials 3`.** The default is one trial, which
-  is `pass@1` — the statistic the gate's own design calls too noisy to block on.
+- **`eval` only works inside a FreeCode checkout.** `evalRoot()` walks up from the
+  working directory to the first `evals/` (`eval/dataset.ts:33`), so it works from
+  anywhere in the repo; outside one, set `FREECODE_EVALS_DIR`. The shipped cases
+  also reference FreeCode's own source paths, which nothing in `--help` says.
 - **MCP config is user-scope only.** `getConfigDir()` is hard-wired to
   `~/.freecode`, so a repository cannot ship the MCP servers its contributors need
   the way it can ship permission rules and hooks.

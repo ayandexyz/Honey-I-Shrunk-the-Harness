@@ -84,13 +84,15 @@ Each is also listed in that page's **Known gaps** section. Deliberate behaviour 
 - [ ] **`Contradicts` edges are never produced** — the kind, its zero weight, and
       the cascade skip are implemented and tested (`graph-types.ts:17`,
       `cascade.ts:59`), but nothing detects that two memories disagree. Contradiction
-      handling is `supersedes:` only, which requires the writer to already know.
+      handling is `supersedes:` only, which requires the writer to already know —
+      consolidation emits `Supersedes` only, too.
 - [ ] **VectorStore rewrites everything on every write** — `put()`/`remove()` call
       `persist()`, re-serializing all vectors + both files (`vector-store.ts:181`).
       ~768 KB rewritten per save at 500 memories.
 - [ ] **VectorStore lookups are linear scans** — `hasFresh`/`has`/`remove` `find()`
-      over the array (`vector-store.ts:129`), and `syncVectors()` calls them per
-      entry → O(n²) per full sync. Add an id→index `Map`.
+      over the array (`vector-store.ts:130`), and `syncVectors()` calls them per
+      entry → O(n²) per full sync. Add an id→index `Map`. Matters more since
+      consolidation's pairwise-cosine candidate selection.
 - [ ] **Cluster ids are positional** — adding one memory can renumber every
       cluster (`clusters.ts:139`), so cluster identity doesn't survive a rebuild and
       anything the explorer persists about one is meaningless afterwards.
@@ -111,10 +113,6 @@ Each is also listed in that page's **Known gaps** section. Deliberate behaviour 
       even though `bus/bridge.ts` stamps `sessionId` specifically to allow
       multiplexing. Blocks any multi-session UI over one core process.
 
-        One thing I checked and didn't report as a bug: manual /compact builds its own MemoryService separate from the loop's. That would be a divergence risk,
-
-  except a fresh loop (and service) is constructed per turn at server.ts:199 and reloads state from disk, so they stay consistent.
-
 ## Docs-audit findings (reference: CLI, settings, env, IPC, hooks — 2026-08-23)
 
 Found while writing `apps/docs/app/reference/{cli,settings,env,ipc-methods,hook-events}`.
@@ -129,11 +127,13 @@ earlier audit are not repeated here.
       the difference and `/getting-started/configuration` claims a single "project
       wins" rule that only holds for hooks. One loader that parses the file once and
       hands each subsystem its section would make one answer true.
-- [ ] **`FREECODE_HOME` is read in exactly one place** — the updater's
-      `builds/stable/freecode` lookup (`apps/tui/src/entry.ts:101`). Every data path
-      (`config.json`, `sessions/`, `projects/`, `rollout/`, `history.jsonl`) builds
-      from `os.homedir()` directly, so setting it produces a half-relocated install.
-      Honour it through one `freecodeHome()` helper, or rename it.
+- [ ] **`FREECODE_HOME` is honoured by checkpoints and nothing else** —
+      `checkpoint/store.ts:33`, `checkpoint/shadow-git.ts:46` and
+      `scripts/uninstall.sh` read it (the TUI updater no longer does, re-checked
+      2026-11-15). Every other data path (`config.json`, `sessions/`, `projects/`,
+      `rollout/`, `history.jsonl`, `mcp-auth.json`) builds from `os.homedir()`
+      directly, so setting it produces a half-relocated install. Honour it through
+      one `freecodeHome()` helper, or rename it.
 - [ ] **Six env vars need a process restart and nothing says so** —
       `FREECODE_TOOL_RESULT_BUDGET_CHARS` (`loop.ts:152`) and the five
       `FREECODE_OUTPUT_*` values (`tools/output-store/config.ts`) are module-load
@@ -180,13 +180,15 @@ that page's **Known gaps**.
 
 ### Real fixes
 
-- [ ] **`getProvider()` builds a fresh SDK client per call and reads config from
-      disk each time.** `registry.ts:24` calls `def.create("")` on every lookup;
-      each adapter's factory calls `getApiKey()`, which does a synchronous
-      `readFileSync` + `JSON.parse` of `~/.freecode/config.json`. That is a
-      blocking disk read at least once per turn (`callProviderOnce`) plus once per
-      compaction (`compactOptions`). Memoize per provider id, invalidating when
-      config changes.
+- [ ] **`getProvider()` builds a fresh provider per call and reads config from
+      disk each time.** `registry.ts:24` calls `def.create("")` on every lookup,
+      and since the catalogue refactor that is `createGenericProvider(entry)`
+      (`registry.ts:94`) — a new instance whose SDK memo (`sdkPromise`) starts
+      empty, so its first request re-imports the SDK factory and calls
+      `getApiKey()` (a synchronous `readFileSync` + `JSON.parse` of
+      `~/.freecode/config.json`). At least once per turn (`callProviderOnce`)
+      plus once per compaction. Memoize the instance per provider id,
+      invalidating when config changes.
 - [ ] **`summarizeCache`'s hit ratio is both wrong and unused.**
       `read / (read + inputTokens)` (`cache-awareness.ts:71`) treats `inputTokens`
       as the fresh portion, but `NormalizedUsage.inputTokens` is inclusive of
@@ -204,11 +206,14 @@ that page's **Known gaps**.
       (`effect/layers.ts:68`, `:182`), but nothing resolves it — the loop calls
       `getProvider()` directly, so the seam that would let a test swap providers
       is inert.
-- [ ] **`ProviderDefinition.create(apiKey)` ignores its argument.** All six
-      adapters take `_apiKey` and call `getApiKey()` themselves; `getProvider`
-      passes `""`. Drop the parameter or actually thread the key through it.
-- [ ] **`ExecuteResult.thinking` is dead for every provider.** All six set
-      `thinking: undefined` in `execute()`; reasoning reaches the loop only as
+- [ ] **`ProviderDefinition.create(apiKey)` takes an argument nothing uses.**
+      The type still declares it (`registry.ts:6`) and `getProvider` passes `""`,
+      but the one registration left is `create: () => createGenericProvider(entry)`
+      (`registry.ts:94`), which reads the key itself on first request. Drop the
+      parameter.
+- [ ] **`ExecuteResult.thinking` is dead for every provider.** The generic driver
+      sets `thinking: undefined` in `execute()` (`generic-provider.ts:357`);
+      reasoning reaches the loop only as
       `thinking_delta` on the streaming path, so a non-streaming turn loses
       extended thinking silently. Related: there is no thinking-budget or
       reasoning-effort field anywhere in `ExecuteOptions`.
@@ -217,10 +222,6 @@ that page's **Known gaps**.
       `resolveMaxOutputTokens()` (models.dev ∧ `OUTPUT_TOKEN_CAP`). The field is
       only a fallback for callers that omit `maxTokens`, and it is 4096 for four
       of the six providers.
-- [ ] **`session/normalize/` is unreachable dead code.** The v4 spec describes a
-      `ProviderResponseNormalizer` layer with per-provider modules; nothing
-      imports it. Real normalization is `streaming.ts` + `mapUsage`. It also holds
-      a second `[TOOL_CALLS]` parser duplicating `loop.ts:1959`.
 - [ ] **`browser/` has zero importers.** `CLAUDE.md` calls the Playwright path
       "legacy / not wired into the primary path"; it is actually unreachable — no
       file outside the directory imports it, and `chatgpt` is not registered.
@@ -314,11 +315,13 @@ that page's **Known gaps**.
 From releasing `todowrite-for-multistep` and `review-mode-readonly` from
 `evals/quarantine.txt` (10/10 recent trials each; gate opened on the confirm run).
 
-- [ ] Three cases remain quarantined and are all deterministic M3 gaps, not
-      flakes: `frustrated-user-wants-one-line` (0/10), `ask-when-the-answer-is-
-      off-repo` (1/10), `greeting-uses-no-tools` (3/10, one 25-turn session on
-      `hi`). The first two share a cause (M3 answers from memory instead of
-      reaching for a tool). A fix is a prompt change measured by `eval ab`.
+- [ ] Four cases remain quarantined (`evals/quarantine.txt`, re-checked
+      2026-11-15): `frustrated-user-wants-one-line`, `ask-when-the-answer-is-
+      off-repo`, `greeting-uses-no-tools` (one 25-turn session on `hi`), and
+      `explicit-question-tool-once` (~45% on M3). The first three are
+      deterministic M3 gaps, not flakes; the first two share a cause (M3 answers
+      from memory instead of reaching for a tool). A fix is a prompt change
+      measured by `eval ab`.
 
 ## Harness signals — uncalibrated numbers (2026-09-22)
 
@@ -394,18 +397,6 @@ spec's §12; these are the parts that are actionable independently of it.
 
 ### Real fixes
 
-- [ ] **OTLP export has no session-level root span** (`rollout/otlp.ts`). Model
-      spans are emitted per call, so a multi-turn session renders in Langfuse as N
-      unrelated LLM calls. An `invoke_agent` root span plus
-      `gen_ai.conversation.id = sessionId` makes it one tree. Cheap — both are
-      attribute additions in a file that already builds spans by hand.
-- [ ] **Two specs promise a verifier that does not exist.**
-      `2026-08-10-autonomous-runs-design.md` says the "verifier/evaluator decides
-      completion when configured gates" are set, and
-      `2026-08-08-continual-harness-design.md` lets the agent rewrite its own
-      harness with no way to measure whether the rewrite helped. Both are blocked
-      on the eval spec's Phase 1, and both should say so.
-
 ### Docs findings (writing `/internals/eval` — 2026-08-23)
 
 
@@ -417,8 +408,8 @@ spec's §12; these are the parts that are actionable independently of it.
       explicitly). Cases are trusted fixtures, so this is a limit rather than a
       live hole — but it is why `danger` mode still has no eval coverage, and
       why an untrusted case would need a container (spec §13).
-- [ ] **Coding cases are synthetic and small.** Six dependency-free `.mjs`
-      fixtures, three-to-four turns each. They catch a harness change that
+- [ ] **Coding cases are synthetic and small.** 34 cases now (2026-11-15), still
+      dependency-free `.mjs` fixtures by rule. They catch a harness change that
       breaks editing outright; they will not catch one that degrades work on a
       real codebase. That is the Tier 2 sandbox, blocked on `node_modules`
       (spec §6.2).
@@ -459,31 +450,19 @@ spec's §12; these are the parts that are actionable independently of it.
       `usage/tracker.ts` still records tokens only — `recordDailyUsage` never
       receives the provider/model that spent them, so the `/usage` heatmap
       cannot be priced without threading that through.
-- [ ] **The built-in price table has no refresh path.** Six models, stamped
-      `PRICES_AS_OF = "2026-05"`. Nothing warns when it goes stale, and a stale
-      table is only safe because the contract is _comparison, not billing_ —
-      which holds only while everyone remembers it.
 - [ ] **`attrs()` in `rollout/otlp.ts` rounds numerics to integers**, with an
       explicit `FRACTIONAL` exception set. Adding a future rate-valued
       attribute outside that set silently reports 0.5 as 1 — this already
       happened once with the suite pass rate, caught only because a test was
       re-read rather than trusted.
-- [ ] **§12 item 2 (live OTLP export on turn end) is not built, on purpose.**
-      It reverses `2026-08-10-agent-observability.md` §7 and puts a network
-      call in the path of a normal run. Wants an explicit decision.
-
 ### Findings (eval Phase 3 — the judge, 2026-08-27)
 
 - [ ] **The judged thresholds are uncalibrated.** `JUDGE_MEAN_FLOOR = 3.5` and
       `JUDGE_CASE_FLOOR = 2` come from the spec, which itself says to set them
-      "from the first real run, not from this document". No real run has
-      happened — no second provider key is configured here. Until one does, a
-      judged `--gate` verdict is a guess with an exit code.
-- [ ] **No judged run has ever executed.** Everything is unit-tested through the
-      `complete` seam, and the unconfigured + same-model paths are verified
-      live, but no rubric has been graded by a real judge model. The rubric
-      wording in `evals/rubrics/answer-quality.md` is therefore untested against
-      an actual grader.
+      "from the first real run, not from this document". Real runs have happened
+      since — `evals/calibration/samples.jsonl` holds 327 judged samples — but
+      **none has a human label** (re-checked 2026-11-15), and calibration needs
+      those. Until then, a judged `--gate` verdict is a guess with an exit code.
 - [ ] **The same-model check cannot see through a gateway route.** It compares
       normalised ids and refuses on same-provider-with-no-model, which catches
       the obvious cases. An OpenRouter path or a vanity alias serving the same
@@ -497,17 +476,17 @@ spec's §12; these are the parts that are actionable independently of it.
 Closes the four items above that stood between "the harness runs" and "the
 harness can block a release". Remaining:
 
-- [ ] **`evalsDir()` is still CWD-relative.** `pnpm eval` covers a checkout and
-      the CI workflow sets nothing, but an _installed_ binary run from anywhere
-      but a repo root still needs `FREECODE_EVALS_DIR`.
 - [ ] **No shipped case pins `model`**, though spec §11 says every one should.
       The hazard — comparing across models — is now caught by `baselineFor`
       refusing a cross-model baseline, so this is belt-and-braces rather than an
       open hole.
-- [ ] **The CI workflow has never run.** It needs `secrets.*_API_KEY` and
-      `vars.FREECODE_EVAL_MODEL` set on the repo, and is `workflow_dispatch`
-      only by choice — every case is a real paid agent turn, so billing should
-      scale with releases, not pushes. Uncomment `schedule:` to go nightly.
+- [ ] **The eval CI workflow fails every night without running a case.** It is
+      on a nightly `schedule` on the `mirror` repo, and every run since at least
+      2026-11-13 fails in ~30s with "No provider configured": every
+      `secrets.*_API_KEY`, `vars.FREECODE_EVAL_MODEL` and the judge vars are empty
+      there. No spend (it dies before a model call), but the workflow is red every
+      day, which trains everyone to ignore it. Either set the secrets/vars on the
+      repo, or put the trigger back to `workflow_dispatch` only.
 
 ### Docs findings (rewriting `/internals/eval` — 2026-08-31)
 
@@ -532,19 +511,9 @@ debounce on a short-lived process. Both are fixed; the fixes are in
 
 ### Still open
 
-- [ ] **Measure the judge with a real model.** Every judge figure so far is from
-      `--judge=oracle`, a perfect reader, and is therefore a ceiling.
-- [ ] **Watch the judge degradation rate.** It fails closed, so a provider
-      outage silently turns memory off. `isDegradation()` marks the cases; if
-      they fire often, revisit the direction.
 - [ ] **Backfill the rollout archive.** Hundreds of historical session
       directories have never been mined; the end-of-session flush only covers
       live sessions.
-- [ ] **`Contradicts` edges are still never produced.** Consolidation emits
-      `Supersedes` (the writer-knows case) only.
-- [ ] **VectorStore id→index `Map`.** O(n²) full sync matters more now that
-      consolidation does pairwise-cosine candidate selection.
-
 ## Findings (gemini-web provider — 2026-08-29)
 
 Found while writing `docs/specs/2026-08-29-gemini-web-provider.md`.
@@ -552,12 +521,6 @@ Ranked by value. Full context in §8 of that spec.
 
 ### Real fixes
 
-- [ ] **E1–E5 are not eval cases.** Every measurement behind the provider's
-      design (no tools, mention inlining across turns) was run by hand, so
-      nothing detects a regression that re-introduces tools here or breaks
-      cross-turn `@mention` collection. The `evals/` sandbox landed 2026-08-27
-      and could hold at least E2 (tools vs inlining) and E5 (turn-1 file still
-      present on turn 2).
 - [ ] **A stale model id degrades silently.** `resolveGeminiWebModel` falls back
       to the default rather than erroring (deliberate — see D8), but the user is
       then served a different model than the one they picked with no signal.
@@ -574,8 +537,10 @@ Ranked by value. Full context in §8 of that spec.
       configs written before the `web` block existed, with no removal plan.
       Dropping it would surface as Pro quietly serving Flash, not as an error,
       so it needs a migration rather than a deletion.
-- [ ] **`ProviderCredentials.model` is declared and read by nothing** —
-      pre-existing dead field, noticed while designing the `web` block.
+- [ ] **`ProviderCredentials.model` is declared and only echoed back** —
+      `redactConfig` (`providers/config.ts:470`) copies it into the redacted view;
+      nothing uses it to choose a model. Pre-existing, noticed while designing
+      the `web` block.
 
 ## Findings (OpenHands comparison — 2026-09-01)
 
@@ -646,7 +611,11 @@ anchors). Detector gained a one-sample deferral for provider blips
       claims without reading any files") that Gemini scored 5/5 seventeen
       times; the rubric says to penalise only a claim the tool list
       _contradicts_. Do not use it as the judged-gate judge until
-      `freecode eval calibrate` has human labels showing it agrees.
+      `freecode eval calibrate` has human labels showing it agrees. **Overtaken
+      but not resolved:** Haiku became the primary judge on 2026-10-13 (Gemini
+      Flash-Lite gave 5/5 to replies Haiku scored 3.75), yet the calibration
+      samples still carry no human labels — so the condition this entry set has
+      not been met.
 - [ ] **`frustrated-user-gets-no-padding` answers from `CLAUDE.md` without
       reading.** 3/3 tool-free with memory recall off too, occasionally wrong
       ("nothing is written to history") or self-contradicting ("No… Yes") —

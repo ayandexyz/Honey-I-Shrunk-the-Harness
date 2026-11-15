@@ -400,7 +400,6 @@ an explicit `type`.
    destructures only `readTokens` and `writeTokens`. The test asserts the old
    non-inclusive semantics.
 5. **Only `anthropic` counts as a caching provider for the cold warning.**
-5. **Only `anthropic` counts as a caching provider for the cold warning.**
    `CACHING_PROVIDERS` (`cache-awareness.ts:24`) is a one-element set, yet
    `minimax` and `zai` go through the same Anthropic endpoint shape and carry the
    same `cacheControl` markers. Their users never see the cold-cache warning.
@@ -414,12 +413,7 @@ an explicit `type`.
     compaction actually subtracts `resolveMaxOutputTokens()`, which reads
     models.dev and caps at 32K. The field is only a fallback for callers that
     omit `maxTokens`, and it is 4096 for four of the six providers.
-8. **`session/normalize/` is unreachable.** The v4 spec describes a
-    `ProviderResponseNormalizer` as a separate layer with per-provider modules;
-    nothing in the codebase imports it. Normalization actually happens in
-    `streaming.ts` plus `mapUsage`. The directory includes a second, independent
-    `[TOOL_CALLS]` parser that duplicates the one in `loop.ts`.
-9. **`browser/` has zero importers.** `CLAUDE.md` calls the Playwright path
+8. **`browser/` has zero importers.** `CLAUDE.md` calls the Playwright path
     "legacy / not wired into the primary path" — it is in fact unreachable: no
     file outside the directory imports anything from it, and `chatgpt` is not in
     the provider registry. It is dead code, not a fallback.
