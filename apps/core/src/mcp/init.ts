@@ -20,7 +20,15 @@ import type { McpServer } from "./types.js";
 import { createAuthFetch, McpNeedsAuthError } from "./oauth/auth-fetch.js";
 import { hasMcpLogin } from "./oauth/store.js";
 import { staticClientFor } from "./oauth/login.js";
-import { clearNeedsAuth, isNeedsAuthError, markNeedsAuth } from "./oauth/needs-auth.js";
+import {
+  clearNeedsAuth,
+  isNeedsAuthError,
+  markNeedsAuth,
+  needsAuthServers,
+  noteMcpAuth,
+} from "./oauth/needs-auth.js";
+import { createMcpAuthTool } from "./oauth/auth-tool.js";
+import { stopWatchingForLogins, watchForLogins } from "./oauth/watch.js";
 
 function getConfigDir(): string {
   return path.join(os.homedir(), ".freecode");
@@ -110,14 +118,62 @@ async function connectServer(
 
     return { name: server.name, toolCount: tools.length };
   } catch (err) {
-    if (isNeedsAuthError(err)) {
+    if (isNeedsAuthError(err) && server.url) {
       markNeedsAuth(
         server.name,
+        server.url,
         err instanceof McpNeedsAuthError ? err.reason : "not signed in",
       );
+      offerAuthenticate(server);
     }
     BusEvents.mcpServerError(server.name, String(err));
     return null;
+  }
+}
+
+/**
+ * A server that needs a login offers the model one `authenticate` tool in
+ * place of its real ones (spec Phase 2), and the daemon starts watching for a
+ * login made from another terminal.
+ */
+function offerAuthenticate(server: McpServer): void {
+  registerMcpTool(
+    createMcpAuthTool({
+      server,
+      onSignedIn: () => reconnectAfterLogin(server.name),
+      onFailed: (err) =>
+        noteMcpAuth(
+          `Sign-in to MCP server "${server.name}" did not finish: ${err instanceof Error ? err.message : String(err)}`,
+        ),
+    }),
+  );
+  BusEvents.mcpToolsChanged(server.name);
+  watchForLogins(reconnectAfterLogin);
+}
+
+const reconnecting = new Set<string>();
+
+/**
+ * Connect a server that was waiting on a login, now that one is stored. Its
+ * real tools replace the `authenticate` tool (same `mcp__<name>__` prefix);
+ * the tool-set change is journaled for the cache-miss detector like any other.
+ * Both the in-session sign-in and the file watcher land here, so it is
+ * idempotent.
+ */
+export async function reconnectAfterLogin(name: string): Promise<void> {
+  if (reconnecting.has(name) || getClient(name)) return;
+  reconnecting.add(name);
+  try {
+    const server = (await loadMcpConfig(getConfigDir())).servers.find((s) => s.name === name);
+    if (!server) return;
+    unregisterMcpTools(`mcp__${name}__`);
+    const result = await connectServer(server);
+    BusEvents.mcpToolsChanged(name);
+    if (result) {
+      noteMcpAuth(`Signed in to MCP server "${name}" — ${result.toolCount} tools available.`);
+    }
+  } finally {
+    reconnecting.delete(name);
   }
 }
 
@@ -160,6 +216,13 @@ export async function stopMcpServers(): Promise<void> {
   for (const name of names) {
     unregisterMcpTools(`mcp__${name}__`);
     clearMcpToolKinds(`mcp__${name}__`);
+  }
+
+  // Servers that never connected still hold their `authenticate` tool.
+  stopWatchingForLogins();
+  for (const { name } of needsAuthServers()) {
+    unregisterMcpTools(`mcp__${name}__`);
+    clearNeedsAuth(name);
   }
 }
 

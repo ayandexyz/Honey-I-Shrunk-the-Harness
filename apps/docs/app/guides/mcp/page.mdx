@@ -82,12 +82,19 @@ MCP server "figma" needs a login (not signed in) — run: freecode mcp login fig
 
 `freecode mcp login figma` opens the browser, registers FreeCode with the server's
 authorization server when it supports dynamic registration, and stores the tokens in
-`~/.freecode/mcp-auth.json` (mode `0600`). Restart FreeCode and the server's tools
-appear; from then on the access token is refreshed on its own.
+`~/.freecode/mcp-auth.json` (mode `0600`). A running FreeCode notices the login
+within a couple of seconds and the server's tools appear — no restart; from then on
+the access token is refreshed on its own.
 
-- **A connection never opens a browser.** Only `mcp login` does. A background
-  connect, `freecode run` or an overnight run just reports the server as needing a
-  login.
+**Or let the agent start it.** Until you sign in, the server offers the agent a single
+`mcp__figma__authenticate` tool, so asking "use Figma" gets you a sign-in link in the
+conversation instead of "I have no such tool". Open it, approve, and the server's real
+tools replace that one. The link is good for 10 minutes.
+
+- **A connection never opens a browser.** Only `mcp login`, or you opening the link
+  the agent gives you. A background connect, `freecode run` or an overnight run just
+  reports the server as needing a login — and in an overnight run the `authenticate`
+  tool refuses, since nobody is there to approve.
 - **Over SSH**, use `--no-browser`: open the printed URL anywhere, then paste the
   address-bar URL of the page that fails to load at the end.
 - **Servers imported from Claude Code need their own FreeCode login.** Claude Code's
@@ -157,9 +164,8 @@ cached system prefix, and a changed tool set necessarily changes that prefix.
 - **No live health check.** `mcp status` only prints config; there's no way to
   ask "is this server actually connected right now" outside a running
   `freecode serve` process.
-- **A login needs a restart to take effect.** `mcp login` runs in its own process,
-  so a running FreeCode loads the server's tools on its next start. The model cannot
-  start a login mid-session yet (spec `2026-11-15-mcp-oauth.md` Phase 2).
+- **"Signed in" shows on your next message.** A login that finishes while you are
+  idle is announced with your next send, not the moment it lands.
 - **A server asking for more permissions** (`insufficient_scope`) is reported as
   needing a login; re-running `mcp login` does not yet add the new scope to the old
   one (Phase 3).

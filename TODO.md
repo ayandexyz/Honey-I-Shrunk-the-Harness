@@ -11,7 +11,18 @@ be "fixed" → `docs/DECISIONS.md`.
 
 ## Small known limitations
 
-### Two timing tests fail only under full-suite load (added 2026-11-15)
+### MCP `authenticate` tool has no eval case (added 2026-11-15)
+
+**Status:** owed. Spec `2026-11-15-mcp-oauth.md` Phase 2 adds a tool the model can
+call (`mcp__<name>__authenticate`), which the eval rule says needs a trajectory case:
+a needs-auth server present → the model offers the sign-in link rather than saying it
+has no such tool. It cannot be written yet: `eval/runner.ts` `initRunner` boots the
+user's own MCP config once per suite, and a case has no way to declare an MCP server.
+The fix is a per-case MCP fixture (a local fake that answers 401, as
+`mcp/oauth/fake-oauth-server.test.ts` does); until then the behaviour is covered only
+by `mcp/oauth/session.test.ts`, which proves the plumbing, not what a model does with it.
+
+### Three timing tests fail only under full-suite load (added 2026-11-15)
 
 **Status:** flaky, not yet diagnosed. Both pass when run alone.
 
@@ -24,8 +35,11 @@ be "fixed" → `docs/DECISIONS.md`.
   the late push is not lost" — `waited 55375071ms` (~15 h) inside a 3.3s test
   (`:83`), so the wall-clock measurement is being skewed, plausibly by a test that
   patches timers or `Date`.
+- `eval/runner-timeout.test.ts` "a timed-out trial stops its loop and reports what
+  it spent" — `turns before the timeout were dropped` (`:59`); took 14.9s in the
+  full run against 2.6s alone, so the trial's timeout landed before its first turns.
 
-Seen once each in four full `pnpm test` runs on 2026-11-15 (branch
+Seen once each in five full `pnpm test` runs on 2026-11-15 (branch
 `feat/mcp-tool-search` and merged `main`). A red full run with only these is not a
 regression; fix them so it never needs saying.
 

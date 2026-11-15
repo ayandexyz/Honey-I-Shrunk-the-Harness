@@ -36,6 +36,8 @@ export interface McpLoginOptions {
    * bound) or from a pasted redirect URL. The CLI races the two.
    */
   waitForCode: (callback: CallbackServer | undefined, state: string) => Promise<string>;
+  /** Fail before any URL is produced when no loopback listener can be bound (no paste fallback). */
+  requireCallback?: boolean;
   file?: string;
   fetchFn?: FetchLike;
   now?: () => number;
@@ -90,6 +92,11 @@ export async function loginMcpServer(opts: McpLoginOptions): Promise<McpLoginRes
   // configured `callbackPort` is fixed on purpose and is not second-guessed.
   if (!callback && port !== undefined && !server.oauth?.callbackPort) {
     callback = await startCallbackServer({ path: CALLBACK_PATH });
+  }
+  if (!callback && opts.requireCallback) {
+    throw new Error(
+      `could not open a local callback port; run \`freecode mcp login ${name}\` in a terminal instead`,
+    );
   }
   const redirectUrl =
     callback?.redirectUri ?? `http://localhost:${port ?? UNBOUND_PORT}${CALLBACK_PATH}`;
