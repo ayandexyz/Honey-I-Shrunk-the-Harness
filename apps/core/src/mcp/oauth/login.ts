@@ -48,6 +48,12 @@ export interface McpLoginResult {
   expiresAt?: number;
 }
 
+/** Every scope in any of the lists, each once; `undefined` when there are none. */
+export function mergeScopes(...lists: (string | undefined)[]): string | undefined {
+  const merged = [...new Set(lists.flatMap((s) => s?.split(/\s+/).filter(Boolean) ?? []))];
+  return merged.length > 0 ? merged.join(" ") : undefined;
+}
+
 /** A pre-registered client from config (`oauth.clientId`), never stored in `mcp-auth.json`. */
 export function staticClientFor(server: McpServer): OAuthClientInformationMixed | undefined {
   if (!server.oauth?.clientId) return undefined;
@@ -101,14 +107,28 @@ export async function loginMcpServer(opts: McpLoginOptions): Promise<McpLoginRes
   const redirectUrl =
     callback?.redirectUri ?? `http://localhost:${port ?? UNBOUND_PORT}${CALLBACK_PATH}`;
 
+  // A server that asked for more scope gets it on top of what was granted —
+  // the challenge may list only the missing scopes (pi's `stepUpScope`) — and
+  // on top of the configured scope. Read before the tokens are dropped below.
+  const scope = mergeScopes(
+    server.oauth?.scope,
+    stored?.stepUpScope ? stored.tokens?.scope : undefined,
+    stored?.stepUpScope,
+  );
+
   // An explicit login is a fresh grant. Keep a registered client only if it
-  // can use this redirect URI; its tokens belong to it either way.
+  // can use this redirect URI; its tokens belong to it either way. A pending
+  // step-up survives until a sign-in actually succeeds.
   updateMcpAuth(
     name,
     url,
     (e) => {
       const keepClient = !!e.client && registeredRedirect(e.client) === redirectUrl;
-      return { discovery: e.discovery, client: keepClient ? e.client : undefined };
+      return {
+        discovery: e.discovery,
+        client: keepClient ? e.client : undefined,
+        stepUpScope: e.stepUpScope,
+      };
     },
     file,
   );
@@ -154,7 +174,13 @@ export async function loginMcpServer(opts: McpLoginOptions): Promise<McpLoginRes
     saveClientInformation: (client) => save((e) => ({ ...e, client })),
     tokens: () => entry().tokens,
     saveTokens: (tokens) =>
-      save((e) => ({ ...e, tokens, expiresAt: expiresAtFor(tokens, now()), codeVerifier: undefined })),
+      save((e) => ({
+        ...e,
+        tokens,
+        expiresAt: expiresAtFor(tokens, now()),
+        codeVerifier: undefined,
+        stepUpScope: undefined,
+      })),
     redirectToAuthorization: (authorizationUrl) => opts.onAuthorizationUrl(authorizationUrl),
     saveCodeVerifier: (codeVerifier) => save((e) => ({ ...e, codeVerifier })),
     codeVerifier: () => {
@@ -177,7 +203,6 @@ export async function loginMcpServer(opts: McpLoginOptions): Promise<McpLoginRes
   };
 
   try {
-    const scope = server.oauth?.scope;
     const first = await auth(provider, { serverUrl: url, scope, fetchFn });
     if (first === "REDIRECT") {
       const code = await opts.waitForCode(callback, state);

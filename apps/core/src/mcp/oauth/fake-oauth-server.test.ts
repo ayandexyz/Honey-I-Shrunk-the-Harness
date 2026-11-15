@@ -28,7 +28,16 @@ export interface Fake {
   refreshes: number;
   /** Makes every refresh answer invalid_grant. */
   revoke(): void;
+  /** The `scope` each /authorize request asked for, in order. */
+  authorizeScopes: (string | null)[];
+  /** Tokens posted to the revocation endpoint (only with `{ revocation: true }`). */
+  revoked: { token: string; hint: string | null }[];
   close(): Promise<void>;
+}
+
+export interface FakeOptions {
+  /** Advertise an RFC 7009 revocation endpoint. */
+  revocation?: boolean;
 }
 
 async function body(req: http.IncomingMessage): Promise<string> {
@@ -42,7 +51,7 @@ function json(res: http.ServerResponse, status: number, value: unknown): void {
   res.end(JSON.stringify(value));
 }
 
-export async function startFake(): Promise<Fake> {
+export async function startFake(opts: FakeOptions = {}): Promise<Fake> {
   const server = http.createServer();
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -60,6 +69,8 @@ export async function startFake(): Promise<Fake> {
     revoke: () => {
       revoked = true;
     },
+    authorizeScopes: [],
+    revoked: [],
     close: () => new Promise((r) => server.close(() => r())),
   };
   const issue = (res: http.ServerResponse) => {
@@ -86,7 +97,17 @@ export async function startFake(): Promise<Fake> {
         grant_types_supported: ["authorization_code", "refresh_token"],
         code_challenge_methods_supported: ["S256"],
         token_endpoint_auth_methods_supported: ["none"],
+        ...(opts.revocation ? { revocation_endpoint: `${base}/revoke` } : {}),
       });
+    }
+    if (url.pathname === "/revoke" && opts.revocation) {
+      const form = new URLSearchParams(await body(req));
+      const token = form.get("token")!;
+      fake.revoked.push({ token, hint: form.get("token_type_hint") });
+      fake.valid.delete(token);
+      refreshTokens.delete(token);
+      res.writeHead(200);
+      return res.end();
     }
     if (url.pathname === "/register") {
       // Like the MCP demo server: RFC 7591's default method is
@@ -105,6 +126,7 @@ export async function startFake(): Promise<Fake> {
     }
     if (url.pathname === "/authorize") {
       // Stands in for the user approving in a browser.
+      fake.authorizeScopes.push(url.searchParams.get("scope"));
       const code = `code-${challenges.size + 1}`;
       const redirect = url.searchParams.get("redirect_uri")!;
       challenges.set(code, { challenge: url.searchParams.get("code_challenge")!, redirect });

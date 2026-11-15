@@ -302,7 +302,7 @@ freecode mcp logout <name>
 | `remove` | `<name>` | |
 | `start` / `stop` / `status` | `<name>` | `status` shows whether a remote server is signed in |
 | `login` | `<name>` | OAuth sign-in for a remote server; `--no-browser` prints the URL and asks for the redirect URL instead. Tokens go to `~/.freecode/mcp-auth.json`. See [MCP servers](/guides/mcp#servers-that-need-a-login-oauth) |
-| `logout` | `<name>` | deletes the stored tokens and client registration |
+| `logout` | `<name>` | revokes the tokens at the server when it offers revocation (RFC 7009), then deletes them and the client registration either way |
 
 Servers are written to `~/.freecode/config.json` under `mcp.servers`, with
 `enabled: true` and `timeout: 5000` defaults. There is no project-scoped MCP

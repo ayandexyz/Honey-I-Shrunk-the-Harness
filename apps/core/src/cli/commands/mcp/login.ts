@@ -3,8 +3,9 @@
 
 import type { CommandModule } from "yargs";
 import { loadMcpConfig } from "../../../mcp/config.js";
-import { loginMcpServer } from "../../../mcp/oauth/login.js";
-import { deleteMcpAuth } from "../../../mcp/oauth/store.js";
+import { loginMcpServer, staticClientFor } from "../../../mcp/oauth/login.js";
+import { revokeMcpTokens } from "../../../mcp/oauth/revoke.js";
+import { deleteMcpAuth, readMcpAuth } from "../../../mcp/oauth/store.js";
 import { parseAuthCodeInput } from "../../../providers/anthropic-oauth-login.js";
 import { getConfigDir } from "../../utils/config.js";
 import { openBrowser, prompt } from "../auth.js";
@@ -93,10 +94,23 @@ export const logoutCommand: CommandModule<object, { name: string }> = {
   builder: (yargs) => yargs.positional("name", { type: "string", demandOption: true }),
   handler: async (argv) => {
     const server = await findServer(argv.name);
-    if (server.type !== "remote" || !server.url || !deleteMcpAuth(server.name, server.url)) {
+    if (server.type !== "remote" || !server.url || !readMcpAuth(server.name, server.url)) {
       console.log(`No sign-in stored for ${server.name}.`);
       return;
     }
-    console.log(`Signed out of ${server.name}.`);
+    // Best-effort: the local entry goes whatever the server says.
+    const outcome = await revokeMcpTokens({
+      name: server.name,
+      url: server.url,
+      client: staticClientFor(server),
+    });
+    deleteMcpAuth(server.name, server.url);
+    const note = {
+      revoked: "tokens revoked at the server",
+      unsupported: "the server offers no revocation; its tokens expire on their own",
+      "nothing-to-revoke": "no tokens were stored",
+      failed: "revoking at the server failed; its tokens expire on their own",
+    }[outcome];
+    console.log(`Signed out of ${server.name} (${note}).`);
   },
 };

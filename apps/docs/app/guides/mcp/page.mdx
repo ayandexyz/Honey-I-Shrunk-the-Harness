@@ -166,6 +166,6 @@ cached system prefix, and a changed tool set necessarily changes that prefix.
   `freecode serve` process.
 - **"Signed in" shows on your next message.** A login that finishes while you are
   idle is announced with your next send, not the moment it lands.
-- **A server asking for more permissions** (`insufficient_scope`) is reported as
-  needing a login; re-running `mcp login` does not yet add the new scope to the old
-  one (Phase 3).
+- **More permissions need a new sign-in.** A server that answers "insufficient
+  scope" is reported as needing a login; `mcp login` then asks for what you already
+  granted plus what it asked for. A token refresh can never widen scope.

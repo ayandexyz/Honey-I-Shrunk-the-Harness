@@ -30,6 +30,12 @@ export interface McpAuthEntry {
   discovery?: OAuthDiscoveryState;
   /** Only between the authorize redirect and the code exchange. */
   codeVerifier?: string;
+  /**
+   * Scope a server asked for in an `insufficient_scope` challenge. Stored, not
+   * held in memory, because the login that satisfies it usually runs in
+   * another process (`freecode mcp login`). Cleared by the next sign-in.
+   */
+  stepUpScope?: string;
 }
 
 export function storeKey(name: string, url: string): string {

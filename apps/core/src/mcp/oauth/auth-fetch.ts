@@ -14,6 +14,7 @@
 
 import {
   discoverOAuthServerInfo,
+  extractWWWAuthenticateParams,
   refreshAuthorization,
 } from "@modelcontextprotocol/sdk/client/auth.js";
 import { OAuthError, ServerError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
@@ -157,9 +158,20 @@ export function createAuthFetch(opts: AuthFetchOptions): FetchLike {
   return async (input, init) => {
     const token = await currentToken();
     const res = await send(input, init, token);
-    if (res.status === 403 && /insufficient_scope/.test(res.headers.get("www-authenticate") ?? "")) {
-      await res.body?.cancel();
-      throw new McpNeedsAuthError(name, "the server asks for more permissions");
+    if (res.status === 403) {
+      const challenge = extractWWWAuthenticateParams(res);
+      if (challenge.error === "insufficient_scope") {
+        await res.body?.cancel();
+        // A refresh keeps the granted scope, so only a new sign-in can widen
+        // it; record what was asked for so that sign-in requests it too.
+        if (challenge.scope) {
+          updateMcpAuth(name, url, (e) => ({ ...e, stepUpScope: challenge.scope }), file);
+        }
+        throw new McpNeedsAuthError(
+          name,
+          `the server asks for more permissions${challenge.scope ? ` (${challenge.scope})` : ""}`,
+        );
+      }
     }
     if (res.status !== 401) return res;
     await res.body?.cancel();
