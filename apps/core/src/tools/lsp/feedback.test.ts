@@ -78,9 +78,12 @@ test("a slow server costs the drain at most its cap, and the late push is not lo
   const file = join(dir, "c.fk");
   writeFileSync(file, "SLOW\nERR: late\n");
   noteEdit("s3", file, dir);
-  const started = Date.now();
+  // Monotonic: Date.now() is the wall clock, and a clock correction (NTP after
+  // a suspend) once made this report a 55,375,071ms wait in a 3s test.
+  const started = performance.now();
   assert.equal(await drainEditDiagnostics("s3"), undefined);
-  assert.ok(Date.now() - started < 2_500, `waited ${Date.now() - started}ms`);
+  const waited = Math.round(performance.now() - started);
+  assert.ok(waited < 2_500, `waited ${waited}ms`);
   await sleep(2_000);
   assert.match((await drainEditDiagnostics("s3"))?.text ?? "", /late/);
 });

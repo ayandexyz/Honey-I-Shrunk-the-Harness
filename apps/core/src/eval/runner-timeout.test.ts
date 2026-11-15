@@ -20,8 +20,12 @@ const info = {
 };
 
 test("a timed-out trial stops its loop and reports what it spent", async () => {
-  // Read once at module load; the floor is 1s.
-  process.env.FREECODE_EVAL_TRIAL_TIMEOUT_MS = "1000";
+  // Read once at module load; the floor is 1s. The budget includes trial
+  // setup, so at 1s a loaded machine (full parallel suite: 14.9s for this
+  // test) could spend it all before the first 100ms turn finished, and
+  // `turns > 0` failed with nothing actually dropped. 5s leaves room for
+  // turns to happen; the fake still never stops, so the timeout still ends it.
+  process.env.FREECODE_EVAL_TRIAL_TIMEOUT_MS = "5000";
   const { runTrial } = await import("./runner.js");
 
   let calls = 0;
@@ -55,7 +59,7 @@ test("a timed-out trial stops its loop and reports what it spent", async () => {
   );
 
   assert.equal(result.passed, false);
-  assert.match(result.reason, /trial exceeded 1000ms/);
+  assert.match(result.reason, /trial exceeded 5000ms/);
   assert.ok(result.turns > 0, "turns before the timeout were dropped");
   assert.ok(result.inputTokens > 0, "tokens before the timeout were dropped");
 

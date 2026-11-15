@@ -40,10 +40,13 @@ test("a finished trial leaves no trial-length timer pending", async () => {
   const pending = new Set<unknown>();
   const realSet = globalThis.setTimeout;
   const realClear = globalThis.clearTimeout;
-  (globalThis as { setTimeout: unknown }).setTimeout = ((fn: () => void, ms?: number, ...rest: unknown[]) => {
-    const timer = realSet(() => {
+  (globalThis as { setTimeout: unknown }).setTimeout = ((fn: (...args: unknown[]) => void, ms?: number, ...rest: unknown[]) => {
+    // Forward the timer's own arguments: undici schedules its HTTP/2 idle
+    // timeout as setTimeout(cb, ms, session), and calling cb() bare made it
+    // read undefined[Symbol(client)] whenever one fired mid-trial.
+    const timer = realSet((...args: unknown[]) => {
       pending.delete(timer);
-      fn();
+      fn(...args);
     }, ms, ...rest);
     if ((ms ?? 0) >= 60_000) pending.add(timer);
     return timer;
