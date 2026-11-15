@@ -11,6 +11,24 @@ be "fixed" → `docs/DECISIONS.md`.
 
 ## Small known limitations
 
+### Two timing tests fail only under full-suite load (added 2026-11-15)
+
+**Status:** flaky, not yet diagnosed. Both pass when run alone.
+
+- `eval/runner-retention.test.ts` "a finished trial leaves no trial-length timer
+  pending" — `TypeError: Cannot read properties of undefined (reading
+  'Symbol(client)')` from undici's `onHttp2SessionIdleTimeout`, fired by the test's
+  own patched `setTimeout` (`:46`). The test replaces the global `setTimeout` and
+  runs timers itself, so it can catch another test's HTTP/2 idle timer.
+- `tools/lsp/feedback.test.ts` "a slow server costs the drain at most its cap, and
+  the late push is not lost" — `waited 55375071ms` (~15 h) inside a 3.3s test
+  (`:83`), so the wall-clock measurement is being skewed, plausibly by a test that
+  patches timers or `Date`.
+
+Seen once each in four full `pnpm test` runs on 2026-11-15 (branch
+`feat/mcp-tool-search` and merged `main`). A red full run with only these is not a
+regression; fix them so it never needs saying.
+
 ### The compaction eval cases are 20KB JSONL lines (added 2026-09-08, updated 2026-09-29)
 
 **Status:** known, cosmetic, needs a paid run to fix.
