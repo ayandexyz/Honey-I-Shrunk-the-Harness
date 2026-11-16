@@ -106,6 +106,8 @@ mod image_pane;
 mod image_pane_tests;
 #[path = "panel_image_preview.rs"]
 mod image_preview;
+#[path = "panel_context_modal.rs"]
+mod context_modal;
 #[path = "panel_latest.rs"]
 mod latest;
 #[path = "panel_login.rs"]
@@ -508,6 +510,8 @@ pub struct Panel {
     turn_change_token: usize,
     /// The open "N changed files" summary's file list and diff viewer.
     pub(crate) turn_change_modal: Option<turn_change_modal::State>,
+    /// The `/context` breakdown while its modal is open.
+    context_modal: Option<context_modal::ContextStats>,
     /// Running session totals of input/cache-read tokens, from each
     /// `TokenUsage` event (already per-request deltas, see
     /// `freecode_events.rs`). Backs the composer's cache-hit readout
@@ -1000,6 +1004,7 @@ impl Panel {
             turn_change_baseline: None,
             turn_change_token: 0,
             turn_change_modal: None,
+            context_modal: None,
             session_input_tokens: 0,
             session_cache_read_tokens: 0,
             last_cache_hit_pct: None,
@@ -2905,13 +2910,21 @@ impl Panel {
             crate::sounds::play(cue, cx);
         }
         match event {
-            ApiEvent::RuntimeCommandResult { message, data, .. } => {
+            ApiEvent::RuntimeCommandResult {
+                command, message, data, ..
+            } => {
+                // `/context` opens its modal; a reply that is not a breakdown
+                // falls through to the plain summary below.
+                if *command == jcode_sdk::api::RuntimeCommand::Context
+                    && let Some(stats) = context_modal::ContextStats::from_data(data)
+                {
+                    self.context_modal = Some(stats);
                 // A `question` tool ask smuggled through this carrier (see
                 // panel_question_card.rs) is not a real runtime command
                 // reply — question_requests.observe already queued it above,
                 // and pushing it here too would show it as a stray assistant
                 // message as well as the answer card.
-                if jcode_sdk::QuestionPayload::from_data(data).is_none() {
+                } else if jcode_sdk::QuestionPayload::from_data(data).is_none() {
                     self.items.push(Item::Assistant(message.clone()));
                     self.stick_to_bottom = true;
                 }
@@ -5238,6 +5251,9 @@ impl Render for Panel {
                     this.close_login_picker(cx);
                     this.focus_input(window, cx);
                     cx.stop_propagation();
+                } else if this.context_modal.is_some() && event.keystroke.key == "escape" {
+                    this.close_context_modal(cx);
+                    cx.stop_propagation();
                 } else if this.recovery_picker_open && event.keystroke.key == "escape" {
                     this.recovery_picker_open = false;
                     this.focus_input(window, cx);
@@ -5501,6 +5517,7 @@ impl Render for Panel {
             .children(self.render_diff_review(cx))
             .children(self.render_login_picker(window, cx))
             .children(self.render_turn_change_modal(cx))
+            .children(self.render_context_modal(cx))
             .into_any_element();
 
         // Inline mode retains the existing chat layout and event ancestry.
