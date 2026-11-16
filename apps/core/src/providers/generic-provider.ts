@@ -105,14 +105,15 @@ function appendEphemeralTail(
  *   set for `@ai-sdk/openai` alone — it is OpenAI's own cache-routing
  *   parameter, and openai-compatible endpoints reject unknown fields.
  *
- * `effortFamily` gates `applyEffort`, and is set only for the providers whose
- * reasoning-effort parameter has been verified (currently anthropic, gemini,
- * minimax, openai). It is deliberately not inferred from the SDK package:
- * `zai` also speaks `@ai-sdk/anthropic` but has not been verified to accept
- * Anthropic's `effort`, so keying effort off the package would risk sending a
- * field that endpoint rejects. `defaultEffort` is sent in place of an
- * unset `opts.effort` for providers (minimax) whose own undeclared-effort
- * default is known to be worse than guessing.
+ * `effortFamily` gates `applyEffort`, and is set only for providers whose
+ * reasoning-effort parameter has been verified — see each entry's comment in
+ * `catalogue.ts`'s `OVERRIDES` for the source. It is deliberately not
+ * inferred from the SDK package: `zai` also speaks `@ai-sdk/anthropic` but
+ * has not been verified to accept Anthropic's `effort` (conflicting vendor
+ * docs), so keying effort off the package would risk sending a field that
+ * endpoint rejects. `defaultEffort` is sent in place of an unset
+ * `opts.effort` only for providers (minimax, moonshotai) whose own
+ * undeclared-effort default is confirmed to be worse than guessing.
  */
 export function buildGenerateOptions(
   entry: ProviderCatalogueEntry,
@@ -198,7 +199,7 @@ export function buildGenerateOptions(
   }
 
   if (entry.effortFamily) {
-    applyEffort(generateOptions, entry.effortFamily, opts.effort ?? entry.defaultEffort);
+    applyEffort(generateOptions, entry, opts.effort ?? entry.defaultEffort);
   }
 
   return generateOptions;

@@ -25,7 +25,24 @@ import { canonicalProviderId } from "./canonical-id.js";
 import { OUTPUT_TOKEN_CAP } from "./utils.js";
 import type { EffortLevel } from "@thisisayande/freecode-shared";
 
-export type EffortFamily = "anthropic" | "openai" | "gemini";
+/**
+ * Which `applyEffort()` wire shape a provider's reasoning-effort parameter
+ * uses, verified per family against either the AI SDK package's own source
+ * (anthropic, openai, gemini, deepseek, groq, xai) or the vendor's own docs
+ * (minimax, and the openai-compatible-shaped vendors named in `OVERRIDES`).
+ * "openai-compatible" is the one dynamic case: the field lands under
+ * `providerOptions[entry.id]`, so it works for any catalogue entry on
+ * `@ai-sdk/openai-compatible` that has actually been verified to accept
+ * `reasoning_effort` — see the `moonshotai` entry below for how to add one.
+ */
+export type EffortFamily =
+  | "anthropic"
+  | "openai"
+  | "gemini"
+  | "deepseek"
+  | "groq"
+  | "xai"
+  | "openai-compatible";
 
 export interface ProviderCatalogueEntry {
   id: string;
@@ -58,6 +75,14 @@ export interface ProviderCatalogueEntry {
    * was burning 10-30k chars of hidden reasoning per tool call.
    */
   defaultEffort?: EffortLevel;
+  /**
+   * The exact levels this provider's API accepts natively, ordered low to
+   * high. Undefined means it accepts freecode's full five-tier scale as-is.
+   * `applyEffort()` snaps anything outside this set to the nearest member,
+   * preferring the cheaper neighbor when a value sits exactly between two
+   * supported levels — the same direction `defaultEffort` already leans.
+   */
+  effortValues?: readonly EffortLevel[];
 }
 
 /**
@@ -86,6 +111,9 @@ const OVERRIDES: Record<string, Partial<ProviderCatalogueEntry>> = {
     // it breaks the provider for anyone who does not name a model.
     defaultModel: "gemini-3.6-flash",
     effortFamily: "gemini",
+    // thinkingLevel tops out at "high" — the generic clamp in effort.ts snaps
+    // xhigh/max down to it, replacing what used to be a one-off inline check.
+    effortValues: ["low", "medium", "high"],
   },
   minimax: {
     defaultModel: "MiniMax-M2",
@@ -122,6 +150,66 @@ const OVERRIDES: Record<string, Partial<ProviderCatalogueEntry>> = {
     npm: "@ai-sdk/deepseek",
     baseURL: undefined,
     defaultModel: "deepseek-chat",
+    // Verified in @ai-sdk/deepseek's own source (dist/index.mjs): it declares
+    // `reasoningEffort: z.enum(["low","medium","high","xhigh","max"])` and
+    // remaps "medium"->"high"/"xhigh"->"max" itself before the request goes
+    // out, logging a warning either way. No `defaultEffort`: unlike minimax
+    // and moonshotai, DeepSeek's own undeclared-effort default has not been
+    // checked, so an unset session leaves the field unsent rather than guess.
+    effortFamily: "deepseek",
+  },
+  groq: {
+    // Verified in @ai-sdk/groq's own source: `reasoningEffort` accepts
+    // "none"|"default"|"low"|"medium"|"high" — no xhigh/max — mapped onto the
+    // wire as `reasoning_effort`. No `defaultEffort`: Groq's own
+    // undeclared-effort default has not been checked.
+    effortFamily: "groq",
+    effortValues: ["low", "medium", "high"],
+  },
+  xai: {
+    // Verified in @ai-sdk/xai's own source: `reasoningEffort` accepts
+    // "none"|"low"|"medium"|"high"|"xhigh" — no "max" — mapped onto the wire
+    // as `reasoning_effort`. No `defaultEffort`: xAI's own undeclared-effort
+    // default has not been checked.
+    effortFamily: "xai",
+    effortValues: ["low", "medium", "high", "xhigh"],
+  },
+  moonshotai: {
+    // Moonshot's own docs (platform.kimi.ai/docs/guide/use-reasoning-effort,
+    // 2026-11-17): Kimi K3 takes a top-level `reasoning_effort` on Chat
+    // Completions — exactly what @ai-sdk/openai-compatible's generic
+    // `reasoningEffort` field already sends — accepting only low|high|max,
+    // defaulting to **max** when the request omits it (same bug shape as
+    // minimax/MiniMax-M3.1-Flash: K3 always reasons, there is no "off").
+    // `providerOptionsName` for this package is the catalogue id ("moonshotai"),
+    // which is what makes this entry's effort land at all.
+    effortFamily: "openai-compatible",
+    effortValues: ["low", "high", "max"],
+    defaultEffort: "medium",
+  },
+  "zai-coding-plan": {
+    // Live-verified 2026-11-17 against the real API (not just docs): the
+    // same "grep this repo" prompt at effort "low" vs "max" produced 0 vs
+    // ~95 thinkingChars, no error either side. This is a DIFFERENT baseURL
+    // than the plain `zai` entry below (openai-compatible .../coding/paas/v4,
+    // not the anthropic-shaped endpoint `zai` is forced onto), so it is not
+    // affected by that entry's unresolved ambiguity.
+    effortFamily: "openai-compatible",
+    effortValues: ["low", "high", "max"],
+  },
+  "zhipuai-coding-plan": {
+    // Same vendor and npm package as `zai-coding-plan`, baseURL differing
+    // only by domain (open.bigmodel.cn vs api.z.ai) — also live-verified
+    // 2026-11-17, effort "low" ran clean with no error.
+    effortFamily: "openai-compatible",
+    effortValues: ["low", "high", "max"],
+  },
+  zhipuai: {
+    // Same API family as `zhipuai-coding-plan`, minus the /coding path — not
+    // independently live-tested, but no reason to expect this one param to
+    // behave differently on the same vendor's base endpoint.
+    effortFamily: "openai-compatible",
+    effortValues: ["low", "high", "max"],
   },
   zai: {
     // models.dev lists zai as openai-compatible against .../paas/v4. z.ai also
@@ -131,6 +219,15 @@ const OVERRIDES: Record<string, Partial<ProviderCatalogueEntry>> = {
     npm: "@ai-sdk/anthropic",
     baseURL: "https://api.z.ai/api/anthropic",
     defaultModel: "glm-5.2",
+    // Checked 2026-11-17, deliberately left without an effortFamily: z.ai's
+    // own docs and third-party references disagree on the shape — some say a
+    // top-level `reasoning_effort` field (which @ai-sdk/anthropic has no way
+    // to send; it only knows `output_config.effort`/`thinking.budget_tokens`),
+    // others say `output_config.effort` works. Unlike minimax, where the
+    // vendor's own docs state the exact same shape @ai-sdk/anthropic already
+    // sends, this one is not verified — sending the wrong shape risks a
+    // rejected request, which is worse than the current no-op. Do not set
+    // effortFamily here without a live confirmed call against the real API.
   },
 };
 
