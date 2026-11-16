@@ -7,6 +7,7 @@ pub(crate) enum WorkspaceCommand {
     Machines(Option<String>),
     Resume { active: bool, query: String },
     Catchup(bool),
+    Clear,
     Back,
     Workspace,
     Quit,
@@ -39,6 +40,7 @@ pub(crate) fn parse(content: &str) -> Option<WorkspaceCommand> {
         "/transfer" if tail.is_empty() => Transfer,
         "/transfer" => Invalid("Usage: /transfer"),
         "/selfdev" => Selfdev(tail.into()),
+        "/clear" if tail.is_empty() => Clear,
         "/back" if tail.is_empty() => Back,
         "/workspace" if tail.is_empty() => Workspace,
         "/quit" if tail.is_empty() => Quit,
@@ -53,7 +55,8 @@ pub(crate) fn parse(content: &str) -> Option<WorkspaceCommand> {
         {
             Publish
         }
-        "/back"
+        "/clear"
+        | "/back"
         | "/workspace"
         | "/quit"
         | "/reload"
@@ -115,6 +118,7 @@ mod tests {
             "active",
             "catchup",
             "back",
+            "clear",
             "fork",
             "split",
             "transfer",

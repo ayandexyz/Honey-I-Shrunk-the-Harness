@@ -111,6 +111,7 @@ impl Workspace {
                     self.open_resume(&OpenResume, window, cx);
                 }
             }
+            WorkspaceCommand::Clear => self.replace_with_draft(index, cx),
             WorkspaceCommand::Back => {
                 if self.single_panel {
                     self.single_panel_back(window, cx);

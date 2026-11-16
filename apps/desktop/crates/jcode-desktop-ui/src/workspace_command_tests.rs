@@ -148,3 +148,50 @@ fn workspace_resume_preserves_search_and_active_filter(cx: &mut gpui::TestAppCon
         })
     });
 }
+
+#[gpui::test]
+fn clear_moves_the_panel_onto_a_new_session_in_the_same_folder(cx: &mut gpui::TestAppContext) {
+    let (bridge, commands) = harness::spawn_recording();
+    let (workspace, vcx) = cx.add_window_view(|window, cx| {
+        let mut workspace = Workspace::for_test(learning::Coach::new(), cx);
+        workspace.bridge = bridge;
+        workspace.push_test_panel("source", cx);
+        workspace.slots[0]
+            .panel
+            .update(cx, |panel, _| panel.working_dir = Some("/tmp/project".into()));
+        workspace.restore_focus(window, cx);
+        workspace
+    });
+    while commands.try_recv().is_ok() {}
+    vcx.update(|window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            let source = workspace.slots[0].panel.entity_id();
+            workspace.workspace_slash_command(
+                &WorkspaceSlashCommand {
+                    source,
+                    content: "/clear".into(),
+                },
+                window,
+                cx,
+            );
+            assert_eq!(workspace.slots.len(), 1);
+            let panel = workspace.slots[0].panel.read(cx);
+            assert!(Panel::is_pending_session_id(&panel.session_id));
+            assert_eq!(panel.working_dir.as_deref(), Some("/tmp/project"));
+        })
+    });
+    assert!(matches!(
+        commands.try_recv(),
+        Ok(Command::Unwatch { session_id }) if session_id == "source"
+    ));
+    let draft = workspace.read_with(vcx, |workspace, cx| {
+        workspace.slots[0].panel.read(cx).session_id.clone()
+    });
+    assert!(matches!(
+        commands.try_recv(),
+        Ok(Command::CreateSession { working_dir, request_id })
+            if working_dir.as_deref() == Some("/tmp/project")
+                && request_id.as_deref() == Some(draft.as_str())
+    ));
+    assert!(commands.try_recv().is_err(), "/clear is not a model prompt");
+}

@@ -69,6 +69,47 @@ impl Workspace {
         });
     }
 
+    /// `/clear`: the panel at `index` moves onto a fresh session in the same
+    /// folder. The old conversation is left untouched and stays in /resume.
+    pub(super) fn replace_with_draft(&mut self, index: usize, cx: &mut Context<Self>) {
+        let (old_id, old_entity, directory) = {
+            let old = self.slots[index].panel.read(cx);
+            (old.session_id.clone(), self.slots[index].panel.entity_id(), old.working_dir.clone())
+        };
+        let directory = directory.or_else(|| self.default_working_dir());
+        if !Panel::is_pending_session_id(&old_id) {
+            self.bridge.send(Command::Unwatch { session_id: old_id });
+        }
+        let request_id = next_draft_id();
+        let bridge = self.bridge.clone();
+        let panel = cx.new(|cx| {
+            Panel::new(
+                request_id.clone(),
+                Some("New session".into()),
+                directory.clone(),
+                bridge,
+                cx,
+            )
+        });
+        Panel::connect_input(&panel, cx);
+        let new_entity = panel.entity_id();
+        self.slots[index].panel = panel;
+        for focus in self.row_focus.iter_mut() {
+            if *focus == Some(old_entity) {
+                *focus = Some(new_entity);
+            }
+        }
+        if self.previous == Some(old_entity) {
+            self.previous = None;
+        }
+        self.bridge.send(Command::CreateSession {
+            working_dir: directory,
+            request_id: Some(request_id),
+        });
+        self.focus_pending = true;
+        cx.notify();
+    }
+
     pub(super) fn open_remote_draft(&mut self, host: String, cx: &mut Context<Self>) {
         // The old Cloud button stored a personal AWS alias. New drafts must
         // never turn that legacy preference into an implicit AWS operation.

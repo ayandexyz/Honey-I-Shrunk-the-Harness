@@ -110,7 +110,7 @@ pub(crate) const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     RegisteredCommand::hidden("/thinking", "Alias for /thinking-display"),
     RegisteredCommand::hidden("/reasoning", "Alias for /thinking-display"),
     RegisteredCommand::hidden("/cancel", "Cancel the current prompt or operation"),
-    RegisteredCommand::public("/clear", "Clear conversation history"),
+    RegisteredCommand::public("/clear", "Start a new session in this folder"),
     RegisteredCommand::hidden("/cls", "Clear the view only, keeping context"),
     RegisteredCommand::hidden("/clear-view", "Alias for /cls"),
     RegisteredCommand::public("/rewind", "Rewind conversation to previous message"),

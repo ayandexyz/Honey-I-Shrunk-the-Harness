@@ -2209,10 +2209,6 @@ impl Panel {
                     self.streaming_text.clear();
                     self.streaming_reasoning.clear();
                 }
-                "/clear" => self.run_session_operation(
-                    SessionOperation::Clear,
-                    "Conversation history cleared.",
-                ),
                 "/compact" => self.run_session_operation(
                     SessionOperation::Compact,
                     "Context compacted.",
@@ -9244,13 +9240,13 @@ mod tests {
             }) if session_id == "session-a" && effort == "xhigh"
         ));
 
-        vcx.simulate_input("/clear");
+        vcx.simulate_input("/compact");
         vcx.simulate_keystrokes("enter");
         assert!(matches!(
             commands.recv_timeout(std::time::Duration::from_millis(100)),
             Ok(Command::SessionOperation {
                 session_id,
-                operation: SessionOperation::Clear,
+                operation: SessionOperation::Compact,
             }) if session_id == "session-a"
         ));
     }

@@ -307,12 +307,12 @@ fn startup_slash_command_stays_in_editor_until_explicit_ready_submission(
         let handle = panel.read(cx).input.read(cx).focus_handle.clone();
         window.focus(&handle, cx);
     });
-    vcx.simulate_input("/clear");
+    vcx.simulate_input("/compact");
     vcx.simulate_keystrokes("enter");
     assert!(commands.try_recv().is_err());
     panel.read_with(vcx, |p, cx| {
         assert!(p.prompt_queue.prompts.is_empty());
-        assert_eq!(p.input.read(cx).content.as_ref(), "/clear");
+        assert_eq!(p.input.read(cx).content.as_ref(), "/compact");
     });
     vcx.simulate_keystrokes("ctrl-enter");
     assert!(commands.try_recv().is_err());
@@ -325,7 +325,7 @@ fn startup_slash_command_stays_in_editor_until_explicit_ready_submission(
         "commands also wait for history"
     );
     panel.read_with(vcx, |p, cx| {
-        assert_eq!(p.input.read(cx).content.as_ref(), "/clear");
+        assert_eq!(p.input.read(cx).content.as_ref(), "/compact");
         assert!(p.prompt_queue.prompts.is_empty());
     });
     panel.update(vcx, |p, cx| {
@@ -338,7 +338,7 @@ fn startup_slash_command_stays_in_editor_until_explicit_ready_submission(
     );
     vcx.simulate_keystrokes("enter");
     assert!(matches!(commands.try_recv(), Ok(Command::SessionOperation {
-        session_id, operation: SessionOperation::Clear,
+        session_id, operation: SessionOperation::Compact,
     }) if session_id == "session-ready"));
     assert!(
         commands.try_recv().is_err(),
