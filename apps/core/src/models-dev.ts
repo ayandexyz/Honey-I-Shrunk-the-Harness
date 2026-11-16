@@ -72,6 +72,18 @@ export interface ModelCost {
   cacheWrite?: number;
 }
 
+/**
+ * A model's reasoning-effort capability, as models.dev publishes it per
+ * model (not per provider) — the same field opencode's `supports()` reads
+ * to drive its own effort dispatch. "effort" is the only type freecode's
+ * `EffortLevel` scale currently maps onto; "toggle"/"budget_tokens" are
+ * carried through for completeness but nothing yet consumes them.
+ */
+export type ReasoningOption =
+  | { readonly type: "effort"; readonly values: readonly string[] }
+  | { readonly type: "toggle" }
+  | { readonly type: "budget_tokens"; readonly min?: number; readonly max?: number };
+
 export interface ProviderModel {
   id: string;
   name: string;
@@ -82,6 +94,17 @@ export interface ProviderModel {
   cost?: ModelCost;
   /** Input modalities, e.g. ["text", "image", "pdf"]. Absent if unreported. */
   inputModalities?: string[];
+  /** Whether this specific model supports reasoning at all. */
+  reasoning?: boolean;
+  /**
+   * How to drive that reasoning, with the exact accepted values when the
+   * type is "effort" — e.g. a specific GLM version may only take
+   * ["none","high","xhigh"], not the full low..max scale. Absent or empty
+   * means models.dev has nothing more specific than `reasoning` itself; a
+   * caller resolving an effort value falls back to its own hand-verified
+   * default for that case rather than treating absence as "no reasoning".
+   */
+  reasoningOptions?: readonly ReasoningOption[];
 }
 
 export interface Provider {
@@ -166,6 +189,33 @@ export function readCachedProvidersWrittenAt(): Date | null {
 }
 
 /**
+ * A model's reasoning-effort options straight off the in-memory/disk cache
+ * `readCachedProviders` already reads for provider identity — synchronous
+ * and network-free on purpose. `buildGenerateOptions` calls this on every
+ * single model request; routing it through the TTL-respecting async
+ * `getProviderModels` path would put a network round trip on freecode's
+ * hottest path, which is exactly the kind of per-call latency this whole
+ * effort-tuning feature exists to cut. A stale answer here is still better
+ * than a live one that cost the request a few hundred extra milliseconds.
+ *
+ * Exact match first, then case-insensitive — same lookup shape as
+ * `findModelLimit`/`modelSupportsImages`.
+ */
+export function findModelReasoningOptions(
+  providerId: string,
+  modelId: string,
+): readonly ReasoningOption[] | undefined {
+  const providers = readCachedProviders();
+  const provider = providers?.find((p) => p.id === providerId);
+  if (!provider) return undefined;
+  const exact = provider.models.find((m) => m.id === modelId);
+  if (exact) return exact.reasoningOptions;
+  const lower = modelId.toLowerCase();
+  return provider.models.find((m) => m.id.toLowerCase() === lower)
+    ?.reasoningOptions;
+}
+
+/**
  * One attempt: GET the catalogue as text, or throw.
  *
  * `fetch` rather than `https.get` — it carries a real timeout via
@@ -204,6 +254,42 @@ async function fetchFromNetwork(): Promise<Provider[]> {
   }
   if (body === undefined) throw lastError;
   return parseCatalogue(body);
+}
+
+/**
+ * `modelData.reasoning_options` -> `ReasoningOption[]`, dropping anything
+ * that doesn't match a recognized `type` rather than throwing — models.dev
+ * is a third party, and a field it adds or reshapes later should degrade to
+ * "no options" here, not take the whole provider list down with it. For an
+ * "effort" entry, `null`/"null" values are filtered the same way opencode's
+ * own ingestion does (models.dev's effort arrays use a literal null to mark
+ * an unsupported slot in some models' lists).
+ */
+function parseReasoningOptions(raw: unknown): ReasoningOption[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const options: ReasoningOption[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const type = (entry as any).type;
+    if (type === "effort") {
+      const values = Array.isArray((entry as any).values)
+        ? (entry as any).values.filter(
+            (v: unknown): v is string =>
+              typeof v === "string" && v !== "null",
+          )
+        : [];
+      options.push({ type: "effort", values });
+    } else if (type === "toggle") {
+      options.push({ type: "toggle" });
+    } else if (type === "budget_tokens") {
+      options.push({
+        type: "budget_tokens",
+        min: typeof (entry as any).min === "number" ? (entry as any).min : undefined,
+        max: typeof (entry as any).max === "number" ? (entry as any).max : undefined,
+      });
+    }
+  }
+  return options.length > 0 ? options : undefined;
 }
 
 /** models.dev's api.json -> the shape the rest of freecode reads. */
@@ -258,6 +344,11 @@ function parseCatalogue(body: string): Provider[] {
         inputModalities: Array.isArray(modelData.modalities?.input)
           ? (modelData.modalities.input as string[])
           : undefined,
+        reasoning:
+          typeof modelData.reasoning === "boolean"
+            ? modelData.reasoning
+            : undefined,
+        reasoningOptions: parseReasoningOptions(modelData.reasoning_options),
       });
     }
 

@@ -1,11 +1,36 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { buildGenerateOptions } from "./generic-provider.js";
 
 // These assertions describe the API-key request shape; pin the auth mode so
 // they don't flip on a machine whose config resolves anthropic to OAuth.
 // The OAuth shape has its own tests in anthropic-oauth.test.ts.
 process.env.FREECODE_ANTHROPIC_AUTH = "api-key";
+
+// applyEffort() now consults models.dev's cached per-model reasoning_options
+// (effort.ts's modelsDevEffortValues) before falling back to a catalogue
+// entry's static effortValues — and buildGenerateOptions always resolves
+// *some* model id (opts.model or entry.defaultModel) to look that up with.
+// Without this redirect, every effort assertion below would silently read
+// whatever happens to be in the developer's real ~/.freecode/cache —
+// exactly the non-hermetic failure mode models-dev-vision.test.ts's own
+// comment describes. An empty fixture means "models.dev has no opinion",
+// so these tests exercise only the catalogue-level fallback, as written.
+const modelsDevCacheDir = fs.mkdtempSync(
+  path.join(os.tmpdir(), "freecode-generic-provider-"),
+);
+process.env.FREECODE_MODELS_CACHE_FILE = path.join(
+  modelsDevCacheDir,
+  "models-dev.json",
+);
+fs.writeFileSync(
+  process.env.FREECODE_MODELS_CACHE_FILE,
+  JSON.stringify({ timestamp: Date.now(), data: [] }),
+);
+
 import { resolveCatalogue } from "./catalogue.js";
 import type { ProviderCatalogueEntry } from "./catalogue.js";
 

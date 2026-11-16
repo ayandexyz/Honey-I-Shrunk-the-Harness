@@ -114,6 +114,9 @@ function appendEphemeralTail(
  * endpoint rejects. `defaultEffort` is sent in place of an unset
  * `opts.effort` only for providers (minimax, moonshotai) whose own
  * undeclared-effort default is confirmed to be worse than guessing.
+ * `resolvedModel` is threaded into `applyEffort` so it can prefer
+ * models.dev's own per-model accepted values over the catalogue entry's
+ * hand-maintained fallback — see `effort.ts`'s `modelsDevEffortValues`.
  */
 export function buildGenerateOptions(
   entry: ProviderCatalogueEntry,
@@ -199,7 +202,7 @@ export function buildGenerateOptions(
   }
 
   if (entry.effortFamily) {
-    applyEffort(generateOptions, entry, opts.effort ?? entry.defaultEffort);
+    applyEffort(generateOptions, entry, opts.effort ?? entry.defaultEffort, resolvedModel);
   }
 
   return generateOptions;

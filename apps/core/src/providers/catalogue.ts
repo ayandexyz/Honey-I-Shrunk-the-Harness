@@ -76,11 +76,15 @@ export interface ProviderCatalogueEntry {
    */
   defaultEffort?: EffortLevel;
   /**
-   * The exact levels this provider's API accepts natively, ordered low to
-   * high. Undefined means it accepts freecode's full five-tier scale as-is.
-   * `applyEffort()` snaps anything outside this set to the nearest member,
-   * preferring the cheaper neighbor when a value sits exactly between two
-   * supported levels — the same direction `defaultEffort` already leans.
+   * The hand-maintained FALLBACK for which levels this provider's API
+   * accepts, ordered low to high. `applyEffort()` prefers models.dev's own
+   * per-model `reasoning_options` when that model has one (see effort.ts's
+   * `modelsDevEffortValues`) — this field only matters for a model
+   * models.dev has no opinion on, or when its data is stale/missing. Either
+   * way, anything outside the resolved set snaps to the nearest member,
+   * preferring the cheaper neighbor on a tie, the same direction
+   * `defaultEffort` already leans. Undefined means "accepts freecode's full
+   * five-tier scale as-is" at this fallback layer.
    */
   effortValues?: readonly EffortLevel[];
 }
