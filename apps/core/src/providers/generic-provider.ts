@@ -105,11 +105,14 @@ function appendEphemeralTail(
  *   set for `@ai-sdk/openai` alone — it is OpenAI's own cache-routing
  *   parameter, and openai-compatible endpoints reject unknown fields.
  *
- * `effortFamily` gates `applyEffort`, and is set only for the three providers
- * whose reasoning-effort parameter has been verified. It is deliberately not
- * inferred from the SDK package: `minimax` and `zai` speak
- * `@ai-sdk/anthropic` without accepting Anthropic's `effort`, so keying
- * effort off the package would send a field those endpoints reject.
+ * `effortFamily` gates `applyEffort`, and is set only for the providers whose
+ * reasoning-effort parameter has been verified (currently anthropic, gemini,
+ * minimax, openai). It is deliberately not inferred from the SDK package:
+ * `zai` also speaks `@ai-sdk/anthropic` but has not been verified to accept
+ * Anthropic's `effort`, so keying effort off the package would risk sending a
+ * field that endpoint rejects. `defaultEffort` is sent in place of an
+ * unset `opts.effort` for providers (minimax) whose own undeclared-effort
+ * default is known to be worse than guessing.
  */
 export function buildGenerateOptions(
   entry: ProviderCatalogueEntry,
@@ -195,7 +198,7 @@ export function buildGenerateOptions(
   }
 
   if (entry.effortFamily) {
-    applyEffort(generateOptions, entry.effortFamily, opts.effort);
+    applyEffort(generateOptions, entry.effortFamily, opts.effort ?? entry.defaultEffort);
   }
 
   return generateOptions;

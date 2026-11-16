@@ -23,6 +23,7 @@ import { readCachedProviders } from "../models-dev.js";
 import { hasSdkFactory } from "./sdk-factories.js";
 import { canonicalProviderId } from "./canonical-id.js";
 import { OUTPUT_TOKEN_CAP } from "./utils.js";
+import type { EffortLevel } from "@thisisayande/freecode-shared";
 
 export type EffortFamily = "anthropic" | "openai" | "gemini";
 
@@ -48,6 +49,15 @@ export interface ProviderCatalogueEntry {
    * understand a reasoning-effort parameter rejects the request outright.
    */
   effortFamily?: EffortFamily;
+  /**
+   * Effort to send when the session has not picked one and `effortFamily` is
+   * set. Only worth setting when the provider's own undeclared-effort default
+   * is known to be bad — see the `minimax` entry: its docs state
+   * `output_config.effort` defaults to `max` (and thinking cannot be disabled
+   * at all) when the field is omitted, which is how an un-configured session
+   * was burning 10-30k chars of hidden reasoning per tool call.
+   */
+  defaultEffort?: EffortLevel;
 }
 
 /**
@@ -89,6 +99,19 @@ const OVERRIDES: Record<string, Partial<ProviderCatalogueEntry>> = {
     // occupancy. OUTPUT_TOKEN_CAP keeps the write headroom while giving the
     // rest of the window back to the conversation.
     maxOutputTokens: OUTPUT_TOKEN_CAP,
+    // Verified against MiniMax's own docs (platform.minimax.io/docs/api-reference/
+    // text-anthropic-api, 2026-11-17): the Anthropic-compatible endpoint's
+    // `output_config.effort` field takes the exact same low|medium|high|xhigh|max
+    // scale Anthropic's own adaptive-effort models use, so the "anthropic"
+    // applyEffort() branch is the right shape here too. MiniMax-M3.1-Flash
+    // defaults that field to "max" when the request omits it entirely (and
+    // rejects "disabled" outright — thinking can't be turned off), which is
+    // why a session that never called /effort was sending every grep/read/bash
+    // turn through maximum reasoning depth: 10-30k+ chars of hidden thinking
+    // for a single tool call. `defaultEffort` only fires when the session has
+    // not chosen one itself.
+    effortFamily: "anthropic",
+    defaultEffort: "medium",
   },
   deepseek: {
     // models.dev routes deepseek through @ai-sdk/openai-compatible. freecode

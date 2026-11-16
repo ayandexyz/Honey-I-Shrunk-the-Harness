@@ -38,10 +38,24 @@ test("anthropic-family: system goes through buildAnthropicSystemParam, messages 
   assert.ok(Array.isArray(opts.messages));
 });
 
-test("minimax (anthropic npm family, no effortFamily): effort is never applied", () => {
+test("minimax (effortFamily verified): an explicit effort is routed under providerOptions.anthropic", () => {
   const opts = buildGenerateOptions(minimaxEntry, modelHandle, {
     prompt: "hi",
     effort: "high",
+  });
+  assert.deepEqual((opts.providerOptions as any).anthropic, { effort: "high" });
+});
+
+test("minimax: an unset effort falls back to the catalogue's defaultEffort, not the provider's own (max) default", () => {
+  const opts = buildGenerateOptions(minimaxEntry, modelHandle, {
+    prompt: "hi",
+  });
+  assert.deepEqual((opts.providerOptions as any).anthropic, { effort: "medium" });
+});
+
+test("anthropic: an unset effort stays unset — only minimax carries a defaultEffort fallback", () => {
+  const opts = buildGenerateOptions(anthropicEntry, modelHandle, {
+    prompt: "hi",
   });
   assert.equal(opts.providerOptions, undefined);
 });

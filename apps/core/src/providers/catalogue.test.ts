@@ -67,12 +67,25 @@ test("minimax reserves the shared output cap, not a copy of its number", async (
   assert.equal(minimax?.maxOutputTokens, OUTPUT_TOKEN_CAP);
 });
 
-test("effortFamily is set only for the three providers it was verified on", () => {
+test("effortFamily is set only for the providers it was verified on", () => {
   const withEffort = resolveCatalogue()
     .filter((e) => e.effortFamily)
     .map((e) => e.id)
     .sort();
-  assert.deepEqual(withEffort, ["anthropic", "gemini", "openai"]);
+  assert.deepEqual(withEffort, ["anthropic", "gemini", "minimax", "openai"]);
+});
+
+test("minimax defaults to medium effort when the session has not chosen one — its own API defaults the omitted field to max", () => {
+  const minimax = resolveCatalogue().find((e) => e.id === "minimax");
+  assert.equal(minimax?.effortFamily, "anthropic");
+  assert.equal(minimax?.defaultEffort, "medium");
+});
+
+test("no other provider carries a defaultEffort — only minimax's own undeclared default is known to be bad", () => {
+  const withDefaultEffort = resolveCatalogue()
+    .filter((e) => e.defaultEffort)
+    .map((e) => e.id);
+  assert.deepEqual(withDefaultEffort, ["minimax"]);
 });
 
 test("env keys come from the catalogue, so zai reads models.dev's name", () => {
