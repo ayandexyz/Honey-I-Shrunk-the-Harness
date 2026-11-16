@@ -57,6 +57,35 @@ but if it bites, evict the oldest settled shells past a retention count in
 `ShellRegistry.start()`. Do NOT evict running ones: nothing else holds a handle
 that can kill the process (same reason `remove()` refuses a running shell).
 
+### Eval/bench sessions are never deleted, only their sandbox dir (found 2026-11-16)
+
+**Status:** confirmed, unbounded growth, real fix needed.
+
+A coding-suite trial with a `files` fixture gets a real tmpdir via
+`eval/sandbox.ts createSandbox()` (named `freecode-eval-<random>`, same pattern
+for `agent-bench-<random>`), and `runner.ts` makes that tmpdir the trial's
+`projectPath` and opens a real session on it (`manager.start(projectPath,
+provider)`). `Sandbox.cleanup()` removes the tmpdir from disk and the trial's
+`cleanup()` disposes the agent registry, shell registry, and cache warmer for
+the session — but nothing ever calls `sessionStore.delete` /
+`updateStatus("deleted")` for the session record itself. The `meta.json` +
+`messages.jsonl` under `~/.freecode/sessions/<formatted-project-path>/<id>/`
+are left behind forever, pointing at a tmpdir that no longer exists.
+
+Confirmed on a long-lived machine: 4,202 orphaned `tmp__freecode_h_eval_h_*` /
+`tmp__agent_h_bench_h_*` / `tmp__freecode_h_nav_h_*` /
+`tmp__freecode_h_bang_h_*` / `tmp__freecode_h_finish_h_unwired_h_*` session
+dirs (294MB), dating back to the harness's first runs. Each renders as its own
+phantom "project" in any frontend that groups sessions by project path
+basename (e.g. the desktop sidebar), since the basename is the random suffix.
+
+Fix is either (a) have `runner.ts`'s `cleanup()` delete the session record
+whenever it created a `Sandbox` (mirroring what `Sandbox.cleanup()` already
+does for the tmpdir), or (b) a `freecode eval gc` / startup sweep that deletes
+any session whose `projectPath` no longer exists on disk. (a) is cheaper and
+scoped to the harness; (b) also cleans up the pile already on disk and covers
+`agent-bench`'s equivalent tmpdirs, which have the same bug.
+
 ### `@` mention fallback ignores .gitignore
 
 **Status:** Known limitation of the fd-less path (added 2026-09-01)
