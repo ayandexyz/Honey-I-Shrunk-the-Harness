@@ -41,6 +41,11 @@ export function createLlmSummarizer(
 ): LlmSummarize {
   return async (input) => {
     const parts: string[] = [];
+    if (input.goal) {
+      parts.push(
+        `The user's original request (kept verbatim in the conversation, not in the transcript below):\n\n${input.goal}`,
+      );
+    }
     if (input.previousSummary) {
       parts.push(
         `Previous summary (carry forward and update, don't repeat verbatim):\n\n${input.previousSummary}`,

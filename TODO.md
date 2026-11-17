@@ -11,18 +11,6 @@ be "fixed" → `docs/DECISIONS.md`.
 
 ## Small known limitations
 
-### The heuristic compaction summary records nothing learned (added 2026-11-18)
-
-**Status:** open; only reached when the LLM summarizer fails.
-
-Every compaction in 50f4745d / 8b4b7a32 / 181c471a fell back to it (Honey's
-bundled core still capped the summarizer at 1,024 tokens, which MiniMax spent
-on thinking — fixed in `f20d3f8f`). Its Goal reads "Continue the current coding
-session" because the head carve-out moved the prompt out of the summarized set;
-any tool line whose output contains "error" lands under Blocked; and nothing a
-read or grep found survives. Use the preserved head for Goal and drop the
-keyword buckets for tool lines.
-
 ### The compaction eval cases are 20KB JSONL lines (added 2026-09-08, updated 2026-09-29)
 
 **Status:** known, cosmetic, needs a paid run to fix.

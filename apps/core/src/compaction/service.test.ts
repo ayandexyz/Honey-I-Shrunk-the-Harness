@@ -211,3 +211,22 @@ test("the cooldown never blocks a session's first compaction", async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("compaction hands the carved-out founding request to the summarizer as the goal", async () => {
+  let seenGoal: string | undefined;
+  const service = new MemoryService(`session-goal-${Date.now()}`, {
+    storage: { save: () => {}, load: () => undefined, listSessions: () => [], delete: () => {} } as never,
+    config: { preserveRecentTurns: 2, maxPreserveRecentTokens: 50 },
+  });
+  service.addMessage("user", "can i have multiple sessions with multiple models??");
+  for (let i = 0; i < 6; i++) {
+    service.addToolTurn("", [{ tool: "read", args: { filePath: `f${i}.ts` }, output: "x".repeat(400) }]);
+  }
+  await service.compact({
+    llmSummarize: async (input) => {
+      seenGoal = input.goal;
+      return "## Goal\n- ok";
+    },
+  });
+  assert.equal(seenGoal, "can i have multiple sessions with multiple models??");
+});

@@ -149,3 +149,16 @@ test("a summary cut off at maxTokens is rejected, not kept", async () => {
   // Room for a reasoning model's thinking AND the summary.
   assert.ok((maxTokens ?? 0) >= 8_192);
 });
+
+test("the LLM summarizer is shown the founding request the selector kept aside", async () => {
+  let prompt = "";
+  const provider = {
+    info: { id: "anthropic", name: "Anthropic", supportsStreaming: false, supportsTools: false, maxOutputTokens: 1024 },
+    async execute(opts: { prompt?: string }) {
+      prompt = opts.prompt ?? "";
+      return { content: "## Goal\n- x", stopReason: "stop", provider: "anthropic", model: "m" };
+    },
+  } as unknown as AIProvider;
+  await createLlmSummarizer(provider, undefined)({ ...input, goal: "can i have multiple sessions with multiple models??" });
+  assert.match(prompt, /original request[\s\S]*multiple sessions with multiple models/);
+});
