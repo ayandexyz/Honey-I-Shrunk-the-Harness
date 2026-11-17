@@ -117,7 +117,19 @@ test("a turn that changed a file resets the counter", () => {
   assert.equal(health(loop).action, "continue");
 });
 
-test("stagnation never hard-stops a run — it escalates to force_text, not stop", () => {
+test("build mode only warns past 2x by default — force_text there is opt-in", () => {
+  const loop = createAgentLoop("test-stagnation-build-default");
+  for (let i = 0; i < DEFAULT_LOOP_HEURISTICS.stagnantTurnsThreshold * 4; i++) {
+    (loop as any).advanceStagnation(false);
+  }
+  // Reads and bash runs never reset the counter, so a debugging run reaches
+  // 2x before its first edit; taking its tools away is unmeasured.
+  assert.equal(health(loop).action, "warn");
+});
+
+test("stagnation never hard-stops a run — it escalates to force_text, not stop", (t) => {
+  process.env.FREECODE_STAGNATION_FORCE_TEXT = "1";
+  t.after(() => delete process.env.FREECODE_STAGNATION_FORCE_TEXT);
   const loop = createAgentLoop("test-stagnation-no-stop");
   for (let i = 0; i < DEFAULT_LOOP_HEURISTICS.stagnantTurnsThreshold * 4; i++) {
     (loop as any).advanceStagnation(false);
@@ -131,7 +143,9 @@ test("stagnation never hard-stops a run — it escalates to force_text, not stop
   assert.equal(health(loop).action, "force_text");
 });
 
-test("the warn tier (1x-2x threshold) still exists before force_text (2x+) takes over", () => {
+test("the warn tier (1x-2x threshold) still exists before force_text (2x+) takes over", (t) => {
+  process.env.FREECODE_STAGNATION_FORCE_TEXT = "1";
+  t.after(() => delete process.env.FREECODE_STAGNATION_FORCE_TEXT);
   const loop = createAgentLoop("test-stagnation-warn-tier");
   const threshold = DEFAULT_LOOP_HEURISTICS.stagnantTurnsThreshold;
   for (let i = 0; i < threshold; i++) {

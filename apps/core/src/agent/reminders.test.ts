@@ -60,12 +60,12 @@ test("oscillationReminder names the file and the revert count", () => {
   assert.match(text, /<system-reminder>/);
   assert.match(text, /src\/foo\.ts/);
   assert.match(text, /4 times/);
-  assert.match(text, /run will be stopped/);
+  assert.match(text, /tools will be taken away/);
 });
 
 test("repeatedReasoningReminder names the turn count", () => {
   const text = repeatedReasoningReminder(3);
   assert.match(text, /<system-reminder>/);
   assert.match(text, /3 turns/);
-  assert.match(text, /run will be stopped/);
+  assert.match(text, /tools will\s+be taken away/);
 });

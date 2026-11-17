@@ -1177,6 +1177,11 @@ export class AgentLoop {
                   this.state.loopHealth.repeatedReasoningScore,
                 ),
               );
+            } else if (healthAction.reason === "no_progress") {
+              // Not wrapUpReminder: that one blames the iteration limit.
+              this.pendingReminders.push(
+                noProgressReminder(this.state.loopHealth.stagnantTurns),
+              );
             } else {
               this.pendingReminders.push(wrapUpReminder());
             }
@@ -2986,8 +2991,9 @@ export class AgentLoop {
       // If either is missing, fall back to the one-shot execute() path so callers
       // and downstream code paths are unchanged.
       // The turn before the iteration cap trips (see the wrap-up reminder),
-      // OR signal B's `force_text` tier (see loop-health.ts — 2x stagnation
-      // in build mode, or readOnlyExplorationLimit in plan/review/explore):
+      // OR a loop-health `force_text` tier (see loop-health.ts — B's
+      // readOnlyExplorationLimit in plan/review/explore, 2x stagnation in
+      // build mode only with FREECODE_STAGNATION_FORCE_TEXT=1, and C/D at 2x):
       // tools stay defined but cannot be called, so the run ends on a
       // summary instead of looping indefinitely on varied-but-unproductive
       // exploration that never trips signal A's exact-repetition check.

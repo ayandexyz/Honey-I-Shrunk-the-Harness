@@ -71,7 +71,15 @@ export const createLoopHealthEvaluator = (): LoopHealthEvaluator => ({
         return { action: "force_text", reason: "no_progress" };
       }
     } else {
-      if (health.stagnantTurns >= heuristics.stagnantTurnsThreshold * 2) {
+      // Build mode: opt-in (FREECODE_STAGNATION_FORCE_TEXT=1, read per call
+      // so `eval ab` can flip it). Bash runs and reads never reset this
+      // counter, so a normal debugging run (read, grep, run the tests, read
+      // again) reaches 10 turns before its first edit — taking its tools
+      // away there is a behaviour change no eval has measured yet.
+      if (
+        process.env.FREECODE_STAGNATION_FORCE_TEXT === "1" &&
+        health.stagnantTurns >= heuristics.stagnantTurnsThreshold * 2
+      ) {
         return { action: "force_text", reason: "no_progress" };
       }
       if (health.stagnantTurns >= heuristics.stagnantTurnsThreshold) {
