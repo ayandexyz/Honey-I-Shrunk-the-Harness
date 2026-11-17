@@ -275,6 +275,43 @@ export class RolloutRecorder {
   }
 
   // ===========================================================================
+  // PUBLIC: recordPermissionAsked() / recordPermissionAnswered()
+  // ===========================================================================
+  recordPermissionAsked(
+    tool: string,
+    callId: string,
+    mode: string,
+    turnId: string,
+  ): void {
+    this.write(
+      this.makeEvent("permission.asked", {
+        aggregateID: this.sessionId,
+        tool,
+        turnId,
+        fields: { callId, mode },
+      }),
+    );
+  }
+
+  recordPermissionAnswered(
+    tool: string,
+    callId: string,
+    mode: string,
+    decision: string,
+    waitMs: number,
+    turnId: string,
+  ): void {
+    this.write(
+      this.makeEvent("permission.answered", {
+        aggregateID: this.sessionId,
+        tool,
+        turnId,
+        fields: { callId, mode, decision, wait_ms: waitMs },
+      }),
+    );
+  }
+
+  // ===========================================================================
   // PUBLIC: recordCompactOccurred()
   // ===========================================================================
   recordCompactOccurred(details: {

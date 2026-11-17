@@ -174,6 +174,17 @@ export function renderTrace(trace: Trace, opts: RenderOptions = {}): string {
       });
     }
   }
+  // Shown unconditionally, like denials: a wait on the user explains a slow
+  // session no model or tool span accounts for.
+  for (const span of trace.permissionSpans) {
+    rows.push({
+      at: span.at,
+      lines: [
+        `${dim(clock(span.at))} ${formatDuration(span.wait_ms).padStart(7)} ` +
+          `${dim("ask  ")} ${span.tool} ${dim(`(${span.mode} mode) ${span.decision}`)}`,
+      ],
+    });
+  }
   rows.sort((a, b) => a.at - b.at);
   for (const row of rows) out.push(...row.lines);
 
@@ -181,7 +192,11 @@ export function renderTrace(trace: Trace, opts: RenderOptions = {}): string {
   out.push(bold("where the time went"));
   const other = Math.max(
     0,
-    trace.wall_ms - trace.model_ms - trace.memory_ms - trace.tool_ms,
+    trace.wall_ms -
+      trace.model_ms -
+      trace.memory_ms -
+      trace.tool_ms -
+      trace.permission_ms,
   );
   out.push(
     `  model   ${formatDuration(trace.model_ms).padStart(8)}  ${pct(trace.model_ms, trace.wall_ms)}  ${dim(`${trace.modelSpans.length} calls`)}`,
@@ -207,6 +222,12 @@ export function renderTrace(trace: Trace, opts: RenderOptions = {}): string {
       dim(
         `  aux tokens  in=${count(trace.memoryInputTokens)} out=${count(trace.memoryOutputTokens)} cached=${count(trace.memoryCacheReadTokens)}`,
       ),
+    );
+  }
+  if (trace.permissionSpans.length > 0) {
+    const pending = trace.permissionSpans.filter((s) => s.decision === "pending").length;
+    out.push(
+      `  asks    ${formatDuration(trace.permission_ms).padStart(8)}  ${pct(trace.permission_ms, trace.wall_ms)}  ${dim(`${trace.permissionSpans.length} permission prompts${pending ? `, ${pending} waiting on you` : ""}`)}`,
     );
   }
   out.push(

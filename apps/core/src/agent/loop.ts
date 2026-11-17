@@ -3685,6 +3685,10 @@ export class AgentLoop {
             hookContext,
             "permission_prompt",
           );
+          const turnId = `turn-${this.state.turnCount}`;
+          const mode = this.state.agentMode ?? "build";
+          this.recorder.recordPermissionAsked(toolCall.tool, toolCall.id, mode, turnId);
+          const askedAt = Date.now();
           const outcome = this.permissionSettings
             ? await promptForPermission({
                 toolName: toolCall.tool,
@@ -3696,7 +3700,19 @@ export class AgentLoop {
                   evaluation.matchedRule ??
                   `${evaluation.source} (${this.state.agentMode} mode)`,
               })
-            : { allowed: false, reason: "Permission system unavailable" };
+            : {
+                allowed: false,
+                reason: "Permission system unavailable",
+                decision: "unavailable",
+              };
+          this.recorder.recordPermissionAnswered(
+            toolCall.tool,
+            toolCall.id,
+            mode,
+            outcome.decision,
+            Date.now() - askedAt,
+            turnId,
+          );
           if (!outcome.allowed) {
             return this.denyToolCall(
               toolCall,

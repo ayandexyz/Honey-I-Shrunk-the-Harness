@@ -30,6 +30,8 @@ export type RolloutEvent =
   | FunctionCallEvent
   | FunctionOutputEvent
   | FunctionDeniedEvent
+  | PermissionAskedEvent
+  | PermissionAnsweredEvent
   | CompactOccurredEvent
   | CompactRestoredEvent
   | SubagentStartEvent
@@ -145,6 +147,38 @@ export interface FunctionDeniedEvent extends BaseEvent {
   /** The message the model was handed back, so the trace says why. */
   reason: string;
   seq: number;
+}
+
+/**
+ * The loop stopped to ask the user before running a tool. Without these a
+ * wait was only a gap between `hook.triggered` and `function.call`, which
+ * `freecode trace` folded into "other" — sessions 50f4745d / 181c471a spent
+ * ~18 minutes each on prompts and the log could not show it. Shape follows
+ * grok-build's PermissionRequested / PermissionResolved and Claude Code's
+ * `waiting_for_user_permission_ms`; args are deliberately absent.
+ */
+export interface PermissionAskedEvent extends BaseEvent {
+  type: "permission.asked";
+  turnId: string;
+  tool: string;
+  /** The tool call's id, the same one its `function.call` carries. */
+  callId: string;
+  /** The agent mode the ask was made in. */
+  mode: string;
+}
+
+export interface PermissionAnsweredEvent extends BaseEvent {
+  type: "permission.answered";
+  turnId: string;
+  tool: string;
+  callId: string;
+  mode: string;
+  /**
+   * The user's answer (`allow-once` … `deny`), or why there was none:
+   * `timeout`, `headless` (no frontend to ask), `dismissed`.
+   */
+  decision: string;
+  wait_ms: number;
 }
 
 export interface CompactOccurredEvent extends BaseEvent {

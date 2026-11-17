@@ -73,11 +73,13 @@ session abc123de  anthropic/claude-opus-5   4m12s wall
 14:22:01    3.1s  model   ...
 14:22:04   12.0s  tool    read
 14:22:16       —  deny    write (mode) plan mode refuses a mutating tool
+14:22:30   2m55s  ask     bash (build mode) allow-once
 ...
 
 where the time went
   model      3m40s   87%   14 calls
   tools        18s    7%   9 calls, 1 denied
+  asks       2m55s   41%   1 permission prompts
   other        14s    6%   user input, idle
   tokens  in=48.2k out=6.1k cached=31.0k
   cost    $0.42 (est., prices as of …)
@@ -104,6 +106,13 @@ Other things the render will and won't say:
   nothing got done. It is folded into `Trace.deniedSpans` and **never** into
   `toolSpans`, which means "tools that ran" and has seven consumers depending
   on that.
+- **An `ask` row is a permission prompt**: how long the loop waited on the
+  user, the mode it asked in, and the answer (`allow-once` … `deny`, or
+  `timeout`/`headless`/`dismissed`). Like denials it is shown
+  unconditionally, and the `asks` total is not part of `tools` — the ask comes
+  before the tool runs. An unanswered one is `pending` and `asks` says
+  `waiting on you`. Logs from before 2026-11-18 have none, so a wait there is
+  still in `other`. Tool arguments are never recorded.
 - **The cost line is silent when nothing in the session is priced.** An
   unpriced model shows no line at all, because `cost $0.00` reads as free. A
   `*` marks a partially-priced trace. An auxiliary call (memory, compaction,

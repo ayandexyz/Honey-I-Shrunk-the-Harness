@@ -11,32 +11,6 @@ be "fixed" → `docs/DECISIONS.md`.
 
 ## Small known limitations
 
-### A permission prompt leaves no rollout event (added 2026-11-17)
-
-**Status:** open, observability gap.
-
-Sessions 50f4745d / 181c471a (desktop, `danger` mode) each waited ~18 min on
-bash permission prompts after a retry dropped them to `build` (fixed in
-`server.ts` `runSessionTurn`). The rollout log could not show it: an ask writes
-nothing, so the wait only appears as a gap between `hook.triggered`
-(PreToolUse) and `function.call`, and `freecode trace` folds it into the tool's
-time. It was found in the desktop's own log (`[debug permission]` lines).
-Record `permission.asked` / `permission.answered` (mode, tool, wait ms, no
-args) so a trace shows who was waiting on whom, and so a non-`danger` mode on a
-turn the user started in `danger` is visible.
-
-### Nothing stops the model reading freecode's own credential file (added 2026-11-18)
-
-**Status:** open, security.
-
-Session 8b4b7a32 ran `cat ~/.freecode/config.json` while answering a question
-about per-session models, which put the MiniMax API key into the transcript:
-sent to the provider, persisted in `messages.jsonl` and the rollout log, and
-kept in every later request's prefix. Nothing denies it: `bash`/`read` treat
-`~/.freecode/config.json` and `auth.json` like any other file. A default deny
-rule (or a redaction pass on tool output, as `config-redaction.ts` does for
-`config.get`) would close it.
-
 ### The heuristic compaction summary records nothing learned (added 2026-11-18)
 
 **Status:** open; only reached when the LLM summarizer fails.

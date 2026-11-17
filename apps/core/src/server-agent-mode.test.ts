@@ -111,3 +111,43 @@ test("a resume with no mode keeps the live session's danger mode", async () => {
     rmSync(project, { recursive: true, force: true });
   }
 });
+
+// TODO.md (2026-11-17): a permission prompt wrote nothing to the rollout log,
+// so ~18 minutes of waiting per session were invisible to `freecode trace`.
+test("a permission prompt is recorded in the rollout log, without args", async () => {
+  const { readFileSync } = await import("node:fs");
+  const project = mkdtempSync(join(tmpdir(), "freecode-agent-mode-project-"));
+  const unsubscribe = bus.subscribe("permission.asked", (event) => {
+    rejectPermission((event as { requestId: string }).requestId);
+  });
+  try {
+    const { sessionId } = (await methodHandlers["session.start"]!({
+      projectPath: project,
+      provider: "mode-fake",
+      model: "m",
+      agentMode: "build",
+    })) as { sessionId: string };
+    await methodHandlers["session.sendSystemReminder"]!({ sessionId, reminder: "go" });
+
+    const events = readFileSync(
+      join(home, ".freecode", "rollout", "sessions", sessionId, "events.jsonl"),
+      "utf8",
+    )
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const asked = events.find((e) => e.type === "permission.asked");
+    const answered = events.find((e) => e.type === "permission.answered");
+    assert.ok(asked, "permission.asked recorded");
+    assert.equal(asked.tool, "bash");
+    assert.equal(asked.mode, "build");
+    assert.equal(asked.args, undefined, "args stay out of the log");
+    assert.ok(answered, "permission.answered recorded");
+    assert.equal(answered.decision, "dismissed");
+    assert.equal(answered.callId, asked.callId);
+    assert.equal(typeof answered.wait_ms, "number");
+  } finally {
+    unsubscribe();
+    rmSync(project, { recursive: true, force: true });
+  }
+});

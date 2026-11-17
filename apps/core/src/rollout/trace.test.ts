@@ -595,3 +595,42 @@ test("a compaction that grew the transcript cannot cancel out a real saving", ()
   assert.equal(trace.compactions, 2);
   assert.equal(trace.compactedTokens, 22_000);
 });
+
+// Sessions 50f4745d / 181c471a waited ~18 minutes each on permission prompts,
+// and the trace put all of it under "other": an ask wrote nothing.
+test("a permission prompt folds to its own span, outside tool time", () => {
+  const trace = buildTrace("s1", [
+    event("permission.asked", 1_000, { turnId: "turn-3", tool: "bash", callId: "c1", mode: "build" }),
+    event("permission.answered", 176_000, {
+      turnId: "turn-3",
+      tool: "bash",
+      callId: "c1",
+      mode: "build",
+      decision: "allow-once",
+      wait_ms: 175_000,
+    }),
+    event("function.call", 176_010, { turnId: "turn-3", tool: "bash", args: {}, callId: "c1" }),
+    event("function.output", 176_500, { turnId: "turn-3", tool: "bash", output: "", duration_ms: 490, callId: "c1" }),
+  ]);
+  assert.deepEqual(
+    trace.permissionSpans.map((s) => [s.tool, s.mode, s.decision, s.wait_ms]),
+    [["bash", "build", "allow-once", 175_000]],
+  );
+  assert.equal(trace.permission_ms, 175_000);
+  assert.equal(trace.toolSpans.length, 1);
+  assert.ok(trace.tool_ms < 1_000, "the wait is not tool time");
+  const out = renderTrace(trace);
+  assert.match(out, /asks\s+2m55s/);
+  assert.match(out, /1 permission prompts/);
+});
+
+test("an unanswered prompt is pending and aged against the clock", () => {
+  const trace = buildTrace(
+    "s1",
+    [event("permission.asked", 1_000, { turnId: "turn-0", tool: "bash", callId: "c9", mode: "build" })],
+    61_000,
+  );
+  assert.equal(trace.permissionSpans[0].decision, "pending");
+  assert.equal(trace.permissionSpans[0].wait_ms, 60_000);
+  assert.match(renderTrace(trace), /1 waiting on you/);
+});

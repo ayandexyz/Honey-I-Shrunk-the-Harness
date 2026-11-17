@@ -155,6 +155,22 @@ export interface DeniedSpan {
   reason: string;
 }
 
+/**
+ * Time the loop spent waiting for the user to answer a permission prompt,
+ * from `permission.asked` / `permission.answered`. Never overlaps a tool span:
+ * the ask comes before `function.call`. An ask with no answer yet is
+ * `pending` and aged against the clock, so `--follow` shows who is waiting.
+ */
+export interface PermissionSpan {
+  tool: string;
+  callId: string;
+  mode: string;
+  at: number;
+  wait_ms: number;
+  /** The user's answer, `timeout`/`headless`/`dismissed`, or `pending`. */
+  decision: string;
+}
+
 /** A body-free description of one transcript compaction boundary. */
 export interface CompactionSpan {
   at: number;
@@ -182,6 +198,8 @@ export interface Trace {
   toolSpans: ToolSpan[];
   /** Calls refused before execution. Empty on logs predating the event. */
   deniedSpans: DeniedSpan[];
+  /** Permission prompts. Empty on logs predating the events. */
+  permissionSpans: PermissionSpan[];
   /** Compaction boundaries. Legacy events have token estimates only. */
   compactionSpans: CompactionSpan[];
   /** Sum of model call time; the number that usually explains a slow session. */
@@ -189,6 +207,8 @@ export interface Trace {
   /** Wall time spent in memory retrieval or maintenance model calls. */
   memory_ms: number;
   tool_ms: number;
+  /** Wall time waiting on permission prompts; not part of `tool_ms`. */
+  permission_ms: number;
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
@@ -256,6 +276,8 @@ export function buildTrace(
   const cacheWarmSpans: CacheWarmSpan[] = [];
   const toolSpans: ToolSpan[] = [];
   const deniedSpans: DeniedSpan[] = [];
+  const permissionSpans: PermissionSpan[] = [];
+  const pendingAsks = new Map<string, PermissionSpan>();
   const compactionSpans: CompactionSpan[] = [];
   const open: ModelSpan[] = [];
   let redirects = 0;
@@ -372,6 +394,37 @@ export function buildTrace(
           reason: event.reason,
         });
         break;
+      case "permission.asked": {
+        const span: PermissionSpan = {
+          tool: event.tool,
+          callId: event.callId,
+          mode: event.mode,
+          at: event.timestamp,
+          wait_ms: 0,
+          decision: "pending",
+        };
+        permissionSpans.push(span);
+        pendingAsks.set(event.callId, span);
+        break;
+      }
+      case "permission.answered": {
+        const span = pendingAsks.get(event.callId);
+        pendingAsks.delete(event.callId);
+        if (span) {
+          span.wait_ms = event.wait_ms;
+          span.decision = event.decision;
+        } else {
+          permissionSpans.push({
+            tool: event.tool,
+            callId: event.callId,
+            mode: event.mode,
+            at: event.timestamp - event.wait_ms,
+            wait_ms: event.wait_ms,
+            decision: event.decision,
+          });
+        }
+        break;
+      }
       case "memory.auxiliary":
         auxiliarySpans.push({
           ...(event.turnId ? { turnId: event.turnId } : {}),
@@ -477,6 +530,9 @@ export function buildTrace(
     span.duration_ms = Math.max(0, asOf - span.startedAt);
     if (span.duration_ms >= HANG_THRESHOLD_MS) span.status = "hung";
   }
+  for (const span of pendingAsks.values()) {
+    span.wait_ms = Math.max(0, asOf - span.at);
+  }
 
   // Spans were appended on `function.output`, so this array arrived in
   // COMPLETION order. Every consumer means "the tools it called, in order" —
@@ -495,10 +551,12 @@ export function buildTrace(
     cacheWarmSpans,
     toolSpans,
     deniedSpans,
+    permissionSpans,
     compactionSpans,
     model_ms: modelSpans.reduce((n, s) => n + s.duration_ms, 0),
     memory_ms: auxiliarySpans.reduce((n, s) => n + s.duration_ms, 0),
     tool_ms: toolSpans.reduce((n, s) => n + s.duration_ms, 0),
+    permission_ms: permissionSpans.reduce((n, s) => n + s.wait_ms, 0),
     inputTokens: sum(modelSpans, "inputTokens"),
     outputTokens: sum(modelSpans, "outputTokens"),
     cacheReadTokens: sum(modelSpans, "cacheReadTokens"),

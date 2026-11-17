@@ -15,6 +15,8 @@ import type { PermissionSettingsManager } from "./settings.js";
 export interface PermissionPromptOutcome {
   allowed: boolean;
   reason?: string;
+  /** What the rollout log records: the user's answer, or why there was none. */
+  decision: string;
 }
 
 export async function promptForPermission(opts: {
@@ -45,6 +47,11 @@ export async function promptForPermission(opts: {
     const message = error instanceof Error ? error.message : "unknown error";
     return {
       allowed: false,
+      decision: /timed out/.test(message)
+        ? "timeout"
+        : /No frontend/.test(message)
+          ? "headless"
+          : "dismissed",
       reason: `Permission not granted (${message}). You can continue without this action or try a different approach.`,
     };
   }
@@ -52,6 +59,7 @@ export async function promptForPermission(opts: {
   if (answer.decision === "deny") {
     return {
       allowed: false,
+      decision: "deny",
       reason:
         "User denied permission. You can continue without this action or try a different approach.",
     };
@@ -65,5 +73,5 @@ export async function promptForPermission(opts: {
   } else if (answer.decision === "allow-always") {
     settings.appendRule("user", "allow", rule);
   }
-  return { allowed: true };
+  return { allowed: true, decision: answer.decision };
 }
