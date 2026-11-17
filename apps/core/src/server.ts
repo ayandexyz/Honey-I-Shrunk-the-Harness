@@ -403,7 +403,17 @@ async function runSessionTurn(
         model: input.model,
         effort: input.effort,
         projectPath: session.projectPath,
-        agentMode: input.agentMode,
+        // The mode is the session's, not the caller's: a turn core starts
+        // itself (session.sendSystemReminder — jcode's retry after a
+        // transient model error) passed none, and AgentLoop defaults a
+        // missing mode to "build", so a danger session silently started
+        // prompting for every bash call after its first provider 5xx.
+        // opencode does the same (`session.agent` is the fallback).
+        agentMode:
+          input.agentMode ??
+          ((session as unknown as Record<string, unknown>).agentMode as
+            | AgentMode
+            | undefined),
         images: input.images,
         synthetic: input.synthetic,
       }),
@@ -477,7 +487,6 @@ async function runSessionTurn(
         provider: input.provider,
         model: input.model,
         effort: input.effort,
-        agentMode: input.agentMode,
       }).catch((err) => {
         const message = err instanceof Error ? err.message : String(err);
         logger.error("Queued session turn failed", { sessionId, message });
@@ -868,6 +877,12 @@ export const methodHandlers: Record<
           kind: "steer",
         });
         return { queued: true, id } as const;
+      }
+      // A mode switch riding a queued follow-up must stick too; the drain
+      // below runs the next turn in the session's mode, not this send's.
+      if (paramAgentMode) {
+        (session as unknown as Record<string, unknown>).agentMode =
+          paramAgentMode;
       }
       const id = getOrCreateQueue(sessionId).enqueue(message);
       BusEvents.stream(sessionId, {
