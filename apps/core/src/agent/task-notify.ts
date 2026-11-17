@@ -30,6 +30,7 @@
 
 import { envFlag } from "./signals/settings.js";
 import { isBool, pickSetting, settingsSections } from "../settings/load.js";
+import { redactKnownSecrets } from "../tools/known-secrets.js";
 
 export interface TaskNotification {
   taskId: string;
@@ -95,8 +96,15 @@ export function taskNotice(n: TaskNotification): string {
 }
 
 /** Hand a finished task to the session. False when nothing can deliver it. */
-export function notifyTask(sessionId: string, n: TaskNotification): boolean {
+export function notifyTask(sessionId: string, task: TaskNotification): boolean {
   if (!sink) return false;
+  // A shell's output tail reaches the model here without passing the
+  // orchestrator, so it is redacted here too (tools/known-secrets.ts).
+  const n = {
+    ...task,
+    summary: redactKnownSecrets(task.summary),
+    result: redactKnownSecrets(task.result),
+  };
   sink(sessionId, formatTaskNotification(n), taskNotice(n), n.isStale);
   return true;
 }

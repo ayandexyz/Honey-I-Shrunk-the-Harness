@@ -14,6 +14,11 @@
 
 import type { ShellReadResult, ShellStatus, ShellSummary } from "./types.js";
 import { spawnShell, type ShellSandbox, type SpawnedShell } from "./spawn.js";
+import {
+  heldSecretPrefix,
+  knownSecrets,
+  redactKnownSecrets,
+} from "../known-secrets.js";
 
 /** Per-shell ring-buffer cap. A dev server can log for hours; keep the tail. */
 export const SHELL_BUFFER_CHARS = 256_000;
@@ -208,13 +213,19 @@ export class ShellRegistry {
     if (!shell) return missing();
     const end = shell.droppedChars + shell.buf.length;
     const from = Math.max(cursor, shell.droppedChars);
+    // Both readers (the model's `bashoutput`, the `/shells` panel) see
+    // credentials redacted; while the shell runs, an end that may be the start
+    // of one is left for the next read (tools/known-secrets.ts).
+    const secrets = knownSecrets();
+    const raw = shell.buf.slice(from - shell.droppedChars);
+    const held = shell.status === "running" ? heldSecretPrefix(raw, secrets) : 0;
     return {
       found: true,
-      text: shell.buf.slice(from - shell.droppedChars),
+      text: redactKnownSecrets(raw.slice(0, raw.length - held), secrets),
       status: shell.status,
       exitCode: shell.exitCode,
       droppedChars: Math.max(0, shell.droppedChars - cursor),
-      nextCursor: end,
+      nextCursor: end - held,
     };
   }
 
