@@ -2221,14 +2221,6 @@ export class AgentLoop {
         systemBlocks.map((b) => b.text).join("\n"),
       );
 
-      // The compaction summary — how the model knows what happened before a
-      // compaction trimmed the history. Deliberately the summary ALONE, never
-      // with `recentMessages` beside it (the deleted renderPromptMemoryContext
-      // rendered both): those grow every turn and are already present in the history verbatim, so
-      // including them both duplicates content and rewrites the prefix on every
-      // request. The summary alone changes only when compaction runs.
-      const compactionSummary = this.memory.getPromptContext().summary;
-
       // Dynamic context (file tree + clock + memory) is inlined as the
       // first user message below, NOT as a system block — see the prepend in
       // callProviderOnce. Same shape as Claude Code's
@@ -2347,10 +2339,10 @@ export class AgentLoop {
       // gate) into this turn's prompt. Transient — never persisted to history.
       const reminderText = this.pendingReminders.join("\n\n");
       this.pendingReminders = [];
-      // Session-only system block: the compaction summary alone. It changes
-      // only when compaction runs, and compaction already documents its
-      // invalidation — so the system param stays byte-stable between
-      // compactions.
+      // Session-only system blocks, used only by the FREECODE_EPHEMERAL_TAIL=0
+      // measurement path below. The compaction summary is no longer one of
+      // them: it rides as a message (see compactionSummaryMessage), so the
+      // system param is byte-stable across compactions too.
       //
       // Memory / todos / reminders used to sit here too, which was the D2
       // "unexpected_creation" bug: system precedes every message, so any
@@ -2366,14 +2358,6 @@ export class AgentLoop {
       // turn — the ab runner flips it per side after boot.
       const tailEnabled = process.env.FREECODE_EPHEMERAL_TAIL !== "0";
       const sessionBlocks = [
-        ...(compactionSummary
-          ? [
-              {
-                text: `Compacted session summary:\n${compactionSummary}${this.restoredFiles ? `\n\n${this.restoredFiles}` : ""}`,
-                cache: false,
-              },
-            ]
-          : []),
         ...(!tailEnabled && memoryBlock
           ? [{ text: memoryBlock, cache: false }]
           : []),
@@ -2907,8 +2891,10 @@ export class AgentLoop {
       // every turn is the same prefix-invalidation bug in another guise.
       timestamp: 0,
     };
+    const summaryMessage = this.compactionSummaryMessage();
     const prunedMessages = this.pruneHistoryToolResults([
       dynamicUserMessage,
+      ...(summaryMessage ? [summaryMessage] : []),
       ...messages,
     ]);
     // Prompt-cache awareness (jcode #9): warn before a send that will likely
@@ -3943,6 +3929,31 @@ export class AgentLoop {
       // Created by this run.
     }
     this.preEditContent.set(abs, content);
+  }
+
+  /**
+   * The compaction summary (and the files restored beside it), as a user
+   * message right after the dynamic context — never a system block. opencode
+   * and pi both keep it out of the system prompt. MiniMax renders the system
+   * text before the tool definitions, so a summary system block cost the
+   * tools as well on the first request after every compaction: probed
+   * 2026-11-18, ~10K of an 18K shared prefix read back on the first tries,
+   * against the full 18K with the summary as a message. Built per request
+   * and never stored, as the system block was.
+   */
+  private compactionSummaryMessage(): Message | undefined {
+    const summary = this.memory.getPromptContext().summary;
+    if (!summary) return undefined;
+    const restored = this.restoredFiles ? `\n\n${this.restoredFiles}` : "";
+    return {
+      id: "compaction-summary",
+      role: "user",
+      parts: [
+        { type: "text", content: `Compacted session summary:\n${summary}${restored}` },
+      ],
+      // Fixed for the same reason as the dynamic context message.
+      timestamp: 0,
+    };
   }
 
   // ===========================================================================

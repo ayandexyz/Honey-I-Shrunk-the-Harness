@@ -48,6 +48,8 @@ let other = "";
 let reading = "";
 /** Every request's system text, in order. */
 const systems: string[] = [];
+/** Every request's message text, in order. */
+const requests: string[] = [];
 let calls = 0;
 
 registerProvider("restore-fake" as ProviderId, {
@@ -72,6 +74,12 @@ registerProvider("restore-fake" as ProviderId, {
               .map((b) => b.text)
               .join("\n"),
       );
+      requests.push(
+        (opts.messages ?? [])
+          .flatMap((m) => m.parts)
+          .map((p) => ("content" in p ? String(p.content) : ""))
+          .join("\n"),
+      );
       calls++;
       if (calls % 2 === 1) {
         yield {
@@ -90,6 +98,7 @@ registerProvider("restore-fake" as ProviderId, {
 
 async function scenario(restore: boolean) {
   systems.length = 0;
+  requests.length = 0;
   calls = 0;
   const sessionId = `restore-${restore}`;
   const rolloutDir = mkdtempSync(join(tmpdir(), "freecode-restore-rollout-"));
@@ -151,7 +160,10 @@ async function scenario(restore: boolean) {
     const before = systems.length;
     reading = target;
     await run("four");
-    const afterCompaction = systems[before]!;
+    // Where the summary must land (messages) and where it must not (system).
+    const afterCompaction = requests[before]!;
+    const systemBefore = systems[before - 1]!;
+    const systemAfter = systems[before]!;
     const file = join(rolloutDir, "events.jsonl");
     const events = existsSync(file)
       ? readFileSync(file, "utf-8")
@@ -162,7 +174,7 @@ async function scenario(restore: boolean) {
     const lastRead = events
       .filter((e) => e.type === "function.output" && e.tool === "read")
       .at(-1);
-    return { afterCompaction, lastRead, events };
+    return { afterCompaction, systemBefore, systemAfter, lastRead, events };
   } finally {
     if (prev === undefined) delete process.env.FREECODE_COMPACT_RESTORE;
     else process.env.FREECODE_COMPACT_RESTORE = prev;
@@ -176,8 +188,13 @@ async function scenario(restore: boolean) {
 }
 
 test("after compaction the recent file rides the summary, and a re-read is honestly 'unchanged'", async () => {
-  const { afterCompaction, lastRead, events } = await scenario(true);
+  const { afterCompaction, systemBefore, systemAfter, lastRead, events } =
+    await scenario(true);
   assert.match(afterCompaction, /Compacted session summary:/);
+  // MiniMax renders system text before the tools, so a summary there cost the
+  // tools' cache after every compaction; the system param must not move.
+  assert.equal(systemAfter, systemBefore, "compaction leaves the system param byte-identical");
+  assert.doesNotMatch(systemAfter, /Compacted session summary:/);
   assert.match(afterCompaction, /re-attached after compaction/);
   assert.ok(
     afterCompaction.includes(MARKER),

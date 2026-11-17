@@ -6,8 +6,9 @@
 // run came right after a compaction. claude-code re-attaches the most recently
 // read files instead (services/compact/compact.ts:122-124, 1415-1464); these
 // are its numbers. Files still shown whole in the kept recent messages are
-// skipped. The block rides the compaction summary's system block, which only
-// changes at a compaction, so it adds no cache break of its own.
+// skipped. The block rides the compaction summary's message (built per
+// request, AgentLoop.compactionSummaryMessage), which only changes at a
+// compaction, so it adds no cache break of its own.
 // =============================================================================
 
 import * as fs from "node:fs";

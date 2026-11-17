@@ -23,17 +23,6 @@ any tool line whose output contains "error" lands under Blocked; and nothing a
 read or grep found survives. Use the preserved head for Goal and drop the
 keyword buckets for tool lines.
 
-### The first request after a compaction is uncached on MiniMax (added 2026-11-18)
-
-**Status:** open, unexplained.
-
-In the same sessions the request after each compaction read 128 tokens from
-cache (2 of 6 read ~34K), so ~60K tokens were prefilled cold: time to first
-token 30–158s. The summary is a system block after the static ones, so the
-tools + system prefix should still hit. Not reproduced on the current core;
-check `cache_status` attribution on a forced compaction
-(`FREECODE_AUTO_COMPACT_TOKENS`) before assuming it is provider-side.
-
 ### The compaction eval cases are 20KB JSONL lines (added 2026-09-08, updated 2026-09-29)
 
 **Status:** known, cosmetic, needs a paid run to fix.
