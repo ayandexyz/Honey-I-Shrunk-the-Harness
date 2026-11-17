@@ -62,3 +62,33 @@ test("renderTurnForMemory with no text is the transcript alone", () => {
   const out = renderTurnForMemory("", [{ tool: "ls", output: "a b" }], 4_000);
   assert.equal(out, "Tool ls: -> a b");
 });
+
+// Sessions 50f4745d / 8b4b7a32: at 200 chars per result, read's envelope was
+// most of what reached the summarizer, so a summary named the files read but
+// held nothing that was in them, and the model re-read them after compacting.
+test("a read result reaches the summarizer as content, not its envelope", () => {
+  const body = "export function resolveProviderModel(session) {\n  return session.model;\n}";
+  const out = renderToolActivity(
+    [
+      {
+        tool: "read",
+        args: { filePath: "/p/apps/core/src/server.ts" },
+        output: `<path>/p/apps/core/src/server.ts</path>\n<type>file</type>\n<content>\n${body}\n\n(End of file - total 3 lines)\n</content>`,
+      },
+    ],
+    10_000,
+  );
+  assert.doesNotMatch(out, /<path>|<type>|<\/?content>/);
+  assert.match(out, /-> export function resolveProviderModel\(session\) \{ return session\.model; \}/);
+});
+
+test("a result up to 2,000 chars is kept whole", () => {
+  const output = `${"a".repeat(1_990)} TAIL`;
+  const out = renderToolActivity([{ tool: "grep", args: { pattern: "x" }, output }], 10_000);
+  assert.match(out, / TAIL$/);
+  const long = renderToolActivity(
+    [{ tool: "grep", args: { pattern: "x" }, output: "b".repeat(5_000) }],
+    10_000,
+  );
+  assert.ok(long.length < 2_100, `clipped, got ${long.length}`);
+});

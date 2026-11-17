@@ -25,6 +25,41 @@ Record `permission.asked` / `permission.answered` (mode, tool, wait ms, no
 args) so a trace shows who was waiting on whom, and so a non-`danger` mode on a
 turn the user started in `danger` is visible.
 
+### Nothing stops the model reading freecode's own credential file (added 2026-11-18)
+
+**Status:** open, security.
+
+Session 8b4b7a32 ran `cat ~/.freecode/config.json` while answering a question
+about per-session models, which put the MiniMax API key into the transcript:
+sent to the provider, persisted in `messages.jsonl` and the rollout log, and
+kept in every later request's prefix. Nothing denies it: `bash`/`read` treat
+`~/.freecode/config.json` and `auth.json` like any other file. A default deny
+rule (or a redaction pass on tool output, as `config-redaction.ts` does for
+`config.get`) would close it.
+
+### The heuristic compaction summary records nothing learned (added 2026-11-18)
+
+**Status:** open; only reached when the LLM summarizer fails.
+
+Every compaction in 50f4745d / 8b4b7a32 / 181c471a fell back to it (Honey's
+bundled core still capped the summarizer at 1,024 tokens, which MiniMax spent
+on thinking — fixed in `f20d3f8f`). Its Goal reads "Continue the current coding
+session" because the head carve-out moved the prompt out of the summarized set;
+any tool line whose output contains "error" lands under Blocked; and nothing a
+read or grep found survives. Use the preserved head for Goal and drop the
+keyword buckets for tool lines.
+
+### The first request after a compaction is uncached on MiniMax (added 2026-11-18)
+
+**Status:** open, unexplained.
+
+In the same sessions the request after each compaction read 128 tokens from
+cache (2 of 6 read ~34K), so ~60K tokens were prefilled cold: time to first
+token 30–158s. The summary is a system block after the static ones, so the
+tools + system prefix should still hit. Not reproduced on the current core;
+check `cache_status` attribution on a forced compaction
+(`FREECODE_AUTO_COMPACT_TOKENS`) before assuming it is provider-side.
+
 ### The compaction eval cases are 20KB JSONL lines (added 2026-09-08, updated 2026-09-29)
 
 **Status:** known, cosmetic, needs a paid run to fix.
