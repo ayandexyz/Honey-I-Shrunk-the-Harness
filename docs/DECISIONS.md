@@ -125,6 +125,22 @@ Grouped by subsystem. Open bugs are in `TODO.md`; unbuilt features in
   usage data" stays distinguishable from a real zero.
 - **`modelSupportsImages` fails closed on an unknown model.** An image part sent
   to a text-only model is a hard 400.
+- **No generic tool-calling-support flag sourced from models.dev**
+  (`capabilities.tools.supported`, which opencode reads). Investigated
+  2026-11-17: the one real incident on record (Gemini web-session provider,
+  `supportsTools: false` below) is a browser-automation path with no
+  models.dev entry at all — the flag that fixed it couldn't have come from
+  models.dev regardless. No API provider models.dev actually catalogues has
+  ever shown this failure. Revisit only with a second, API-provider incident.
+- **No generic temperature-support flag sourced from models.dev**
+  (`capabilities.temperature`, which opencode reads). Investigated
+  2026-11-17: the one real incident (`openai-oauth-body.ts`'s
+  `UNSUPPORTED_FIELDS`, the Codex OAuth backend 400ing on `temperature`) is a
+  backend-routing quirk, not a per-model capability — models.dev's entry for
+  the underlying model describes the standard API, which does accept
+  `temperature`, so a generic flag would not have caught this one either. The
+  existing targeted strip list is the right-sized fix. Revisit only with a
+  second, model-level incident.
 
 ## Tool system
 
