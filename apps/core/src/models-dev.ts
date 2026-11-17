@@ -123,7 +123,8 @@ export interface Provider {
   env?: string[];
 }
 
-let cache: { data: Provider[]; timestamp: number } | null = null;
+let cache: { data: Provider[]; timestamp: number; etag?: string } | null =
+  null;
 
 function ensureCacheDir(): void {
   if (!fs.existsSync(CACHE_DIR)) {
@@ -131,24 +132,38 @@ function ensureCacheDir(): void {
   }
 }
 
-function loadFromDisk(): Provider[] | null {
+/** The raw disk cache regardless of TTL — the only way to read a stale
+ *  entry's `etag` for a conditional refetch. */
+function loadRawFromDisk(): {
+  data: Provider[];
+  timestamp: number;
+  etag?: string;
+} | null {
   try {
     const file = cacheFile();
     if (!fs.existsSync(file)) return null;
-    const content = fs.readFileSync(file, "utf-8");
-    const cached = JSON.parse(content);
-    if (Date.now() - cached.timestamp > CACHE_TTL_MS) return null;
-    return cached.data;
+    const cached = JSON.parse(fs.readFileSync(file, "utf-8"));
+    return Array.isArray(cached?.data) ? cached : null;
   } catch {
     return null;
   }
 }
 
-function saveToDisk(providers: Provider[]): void {
+function loadFromDisk(): Provider[] | null {
+  const cached = loadRawFromDisk();
+  if (!cached || Date.now() - cached.timestamp > CACHE_TTL_MS) return null;
+  return cached.data;
+}
+
+function saveToDisk(providers: Provider[], etag?: string): void {
   ensureCacheDir();
   fs.writeFileSync(
     cacheFile(),
-    JSON.stringify({ data: providers, timestamp: Date.now() }, null, 2),
+    JSON.stringify(
+      { data: providers, timestamp: Date.now(), ...(etag ? { etag } : {}) },
+      null,
+      2,
+    ),
   );
 }
 
@@ -216,7 +231,10 @@ export function findModelReasoningOptions(
 }
 
 /**
- * One attempt: GET the catalogue as text, or throw.
+ * One attempt: GET the catalogue as text, or throw. `undefined` body means a
+ * 304 — `etag` sent and the server confirmed nothing changed, same
+ * conditional-request shape opencode's own models.dev client uses (its
+ * `fetchPath`, `packages/core/src/models-dev.ts`).
  *
  * `fetch` rather than `https.get` — it carries a real timeout via
  * `AbortSignal.timeout` instead of the socket-timeout dance, and it honours
@@ -224,24 +242,35 @@ export function findModelReasoningOptions(
  * mirror for an air-gapped install is as likely to be plain http on a private
  * network as it is to be https.
  */
-async function fetchOnce(url: string): Promise<string> {
+async function fetchOnce(
+  url: string,
+  etag?: string,
+): Promise<{ body: string | undefined; etag?: string }> {
   const res = await fetch(url, {
     signal: AbortSignal.timeout(fetchTimeoutMs()),
-    headers: { accept: "application/json" },
+    headers: {
+      accept: "application/json",
+      ...(etag ? { "if-none-match": etag } : {}),
+    },
   });
+  if (res.status === 304) return { body: undefined, etag };
   if (!res.ok) {
     throw new Error(`models.dev returned ${res.status}`);
   }
-  return await res.text();
+  return { body: await res.text(), etag: res.headers.get("etag") ?? undefined };
 }
 
-async function fetchFromNetwork(): Promise<Provider[]> {
+/** `undefined` providers means a 304 — the caller's existing cache still
+ *  holds the current catalogue. */
+async function fetchFromNetwork(
+  etag?: string,
+): Promise<{ providers: Provider[] | undefined; etag?: string }> {
   const url = modelsUrl();
   let lastError: unknown;
-  let body: string | undefined;
+  let result: { body: string | undefined; etag?: string } | undefined;
   for (let attempt = 0; attempt < FETCH_ATTEMPTS; attempt++) {
     try {
-      body = await fetchOnce(url);
+      result = await fetchOnce(url, etag);
       break;
     } catch (err) {
       lastError = err;
@@ -252,8 +281,9 @@ async function fetchFromNetwork(): Promise<Provider[]> {
       }
     }
   }
-  if (body === undefined) throw lastError;
-  return parseCatalogue(body);
+  if (result === undefined) throw lastError;
+  if (result.body === undefined) return { providers: undefined, etag: result.etag };
+  return { providers: parseCatalogue(result.body), etag: result.etag };
 }
 
 /**
@@ -377,15 +407,31 @@ export async function getProviders(forceRefresh = false): Promise<Provider[]> {
     return cache.data;
   }
 
+  // A stale (TTL-expired) disk cache still carries a usable `etag` — sending
+  // it means models.dev answers 304 and we skip re-downloading and
+  // re-parsing the multi-MB catalogue for a body that didn't change.
+  const staleCache = diskCache ? null : loadRawFromDisk();
+  const priorEtag = forceRefresh ? undefined : staleCache?.etag;
+
   try {
-    const providers = await fetchFromNetwork();
-    cache = { data: providers, timestamp: Date.now() };
-    saveToDisk(providers);
+    const { providers, etag } = await fetchFromNetwork(priorEtag);
+    if (providers === undefined) {
+      // 304: reuse the unchanged body, but refresh the timestamp so the next
+      // check doesn't immediately refetch, and re-save with the (possibly
+      // rotated) etag.
+      const unchanged = staleCache!.data;
+      cache = { data: unchanged, timestamp: Date.now(), etag };
+      saveToDisk(unchanged, etag);
+      return unchanged;
+    }
+    cache = { data: providers, timestamp: Date.now(), etag };
+    saveToDisk(providers, etag);
     return providers;
   } catch (err) {
     // If network fails but we have disk cache, use it
-    if (diskCache) {
-      cache = { data: diskCache, timestamp: Date.now() };
+    const fallback = diskCache ?? staleCache?.data;
+    if (fallback) {
+      cache = { data: fallback, timestamp: Date.now() };
       return cache.data;
     }
     throw err;

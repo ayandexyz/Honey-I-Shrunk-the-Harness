@@ -209,9 +209,12 @@ const OVERRIDES: Record<string, Partial<ProviderCatalogueEntry>> = {
     effortValues: ["low", "high", "max"],
   },
   zhipuai: {
-    // Same API family as `zhipuai-coding-plan`, minus the /coding path — not
-    // independently live-tested, but no reason to expect this one param to
-    // behave differently on the same vendor's base endpoint.
+    // Live-verified 2026-11-17 against the real API (not just assumed from
+    // zhipuai-coding-plan's sibling result): glm-4.6 at
+    // open.bigmodel.cn/api/paas/v4/chat/completions with `reasoning_effort`
+    // set — "low" produced 45 reasoning_content chars (8 reasoning tokens),
+    // "max" produced 11,517 chars (2,616 reasoning tokens), no error either
+    // side.
     effortFamily: "openai-compatible",
     effortValues: ["low", "high", "max"],
   },
@@ -221,17 +224,28 @@ const OVERRIDES: Record<string, Partial<ProviderCatalogueEntry>> = {
     // deliberately: that path accepts the cache breakpoints `applyMessageCaching`
     // sets, which the openai-compatible path has no way to express.
     npm: "@ai-sdk/anthropic",
-    baseURL: "https://api.z.ai/api/anthropic",
+    // Found 2026-11-17 running the trajectory suite against this entry for
+    // the first time (it had no credential configured before): @ai-sdk/
+    // anthropic appends `/messages` directly to `baseURL`, so this needs the
+    // `/v1` minimax's own entry already carries. Without it every real
+    // request hit `.../anthropic/messages` (no v1), which z.ai's gateway
+    // answers with HTTP 200 and a JSON error body
+    // (`{"code":500,"msg":"404 NOT_FOUND"}`) rather than a real 404 — the
+    // Anthropic SDK can't parse that as a response and silently produced an
+    // empty, zero-token assistant message instead of throwing. Confirmed
+    // live: curl against `.../anthropic/v1/messages` with the same body
+    // returns a real tool_use response; `.../anthropic/messages` 200s with
+    // the error payload above.
+    baseURL: "https://api.z.ai/api/anthropic/v1",
     defaultModel: "glm-5.2",
-    // Checked 2026-11-17, deliberately left without an effortFamily: z.ai's
-    // own docs and third-party references disagree on the shape — some say a
-    // top-level `reasoning_effort` field (which @ai-sdk/anthropic has no way
-    // to send; it only knows `output_config.effort`/`thinking.budget_tokens`),
-    // others say `output_config.effort` works. Unlike minimax, where the
-    // vendor's own docs state the exact same shape @ai-sdk/anthropic already
-    // sends, this one is not verified — sending the wrong shape risks a
-    // rejected request, which is worse than the current no-op. Do not set
-    // effortFamily here without a live confirmed call against the real API.
+    // Live-verified 2026-11-17 against the real API (not just docs, which
+    // disagreed): glm-5.2 against api.z.ai/api/anthropic with
+    // `output_config.effort` set — "low" produced 95 thinking chars, "max"
+    // produced 2129, same shape @ai-sdk/anthropic already sends for minimax.
+    // No `defaultEffort`: the undeclared default (no `thinking`/`output_config`
+    // at all) came back at 94 chars, so unlike minimax there is no vendor-max
+    // bug here to work around.
+    effortFamily: "anthropic",
   },
 };
 

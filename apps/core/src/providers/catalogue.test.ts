@@ -52,7 +52,7 @@ test("freecode's deliberate divergences from models.dev survive resolution", () 
   assert.equal(byId.get("deepseek")?.npm, "@ai-sdk/deepseek");
   assert.equal(byId.get("deepseek")?.baseURL, undefined);
   assert.equal(byId.get("zai")?.npm, "@ai-sdk/anthropic");
-  assert.equal(byId.get("zai")?.baseURL, "https://api.z.ai/api/anthropic");
+  assert.equal(byId.get("zai")?.baseURL, "https://api.z.ai/api/anthropic/v1");
 
   // minimax's baseURL is models.dev's, not an override — it must survive too.
   assert.equal(
@@ -81,13 +81,14 @@ test("effortFamily is set only for the providers it was verified on", () => {
     "moonshotai",
     "openai",
     "xai",
+    "zai",
     "zai-coding-plan",
     "zhipuai",
     "zhipuai-coding-plan",
   ]);
 });
 
-test("zai-coding-plan and zhipuai(-coding-plan) are live-verified, and distinct from the unresolved plain `zai` entry", () => {
+test("zai-coding-plan and zhipuai(-coding-plan) are live-verified as openai-compatible; the plain `zai` entry is live-verified separately as anthropic-shaped", () => {
   for (const id of ["zai-coding-plan", "zhipuai-coding-plan", "zhipuai"]) {
     const found = resolveCatalogue().find((e) => e.id === id);
     assert.equal(found?.effortFamily, "openai-compatible", id);
@@ -95,7 +96,7 @@ test("zai-coding-plan and zhipuai(-coding-plan) are live-verified, and distinct 
   }
   const zai = resolveCatalogue().find((e) => e.id === "zai");
   assert.equal(zai?.npm, "@ai-sdk/anthropic", "zai itself stays on the forced anthropic-shaped endpoint");
-  assert.equal(zai?.effortFamily, undefined, "zai itself stays unresolved");
+  assert.equal(zai?.effortFamily, "anthropic", "zai's effort shape matches minimax, verified live against api.z.ai/api/anthropic");
 });
 
 test("minimax defaults to medium effort when the session has not chosen one — its own API defaults the omitted field to max", () => {
@@ -124,11 +125,6 @@ test("deepseek, groq, xai get effortFamily (an explicit /effort choice is now ho
     assert.ok(found?.effortFamily, `${id} should carry an effortFamily`);
     assert.equal(found?.defaultEffort, undefined, `${id} should not carry a defaultEffort`);
   }
-});
-
-test("zai was investigated and deliberately left without effortFamily — conflicting vendor docs, not an oversight", () => {
-  const zai = resolveCatalogue().find((e) => e.id === "zai");
-  assert.equal(zai?.effortFamily, undefined);
 });
 
 test("groq and xai carry the effortValues their SDK package actually accepts", () => {
