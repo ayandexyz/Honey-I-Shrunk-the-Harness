@@ -125,22 +125,38 @@ Grouped by subsystem. Open bugs are in `TODO.md`; unbuilt features in
   usage data" stays distinguishable from a real zero.
 - **`modelSupportsImages` fails closed on an unknown model.** An image part sent
   to a text-only model is a hard 400.
-- **No generic tool-calling-support flag sourced from models.dev**
-  (`capabilities.tools.supported`, which opencode reads). Investigated
-  2026-11-17: the one real incident on record (Gemini web-session provider,
-  `supportsTools: false` below) is a browser-automation path with no
-  models.dev entry at all — the flag that fixed it couldn't have come from
-  models.dev regardless. No API provider models.dev actually catalogues has
-  ever shown this failure. Revisit only with a second, API-provider incident.
-- **No generic temperature-support flag sourced from models.dev**
-  (`capabilities.temperature`, which opencode reads). Investigated
-  2026-11-17: the one real incident (`openai-oauth-body.ts`'s
-  `UNSUPPORTED_FIELDS`, the Codex OAuth backend 400ing on `temperature`) is a
-  backend-routing quirk, not a per-model capability — models.dev's entry for
-  the underlying model describes the standard API, which does accept
-  `temperature`, so a generic flag would not have caught this one either. The
-  existing targeted strip list is the right-sized fix. Revisit only with a
-  second, model-level incident.
+- **`modelSupportsTemperature`/`modelSupportsToolCalls` (2026-11-17) read
+  models.dev's flat per-model `temperature`/`tool_call` booleans — the
+  *data-availability* case, not the *incident* case.** First investigated as
+  "is there an incident justifying this" (answer: no — see the Gemini
+  web-session and Codex-OAuth incidents, both outside models.dev's domain
+  entirely, both already fixed by scoped code) and rejected on that basis.
+  Then it turned out the raw data models.dev's v1 feed already carries
+  (`api.json`, what freecode already fetches) reports `temperature: false`
+  on 2,130 of 9,925 models and `tool_call: false` on 1,013 — substantial
+  enough on its own to justify reading it, independent of any specific
+  incident. Fail-open on absence (`!== false`), so this can only ever
+  suppress a param freecode already sends, never add one. This is the
+  bounded, data-only slice of the broader opencode `compatibility.*`
+  comparison below — not the hand-written-logic half of it.
+- **The rest of opencode's `compatibility.*` block (`reasoningField`,
+  `maxTokensField`, `cacheFormat`, `requireFinishReason`,
+  `requireAssistantAfterTool`, `supportsPromptCacheKey`, `streamUsage`,
+  `supportsThinkingBlockBinding`, `supportsEffortUpdates`, `mediaInput`) is
+  not portable from models.dev at all.** Checked opencode's own source
+  (2026-11-17): it reads that richer shape from `https://models.opencode.ai`
+  (`packages/core/src/models-dev.ts`'s `defaultSource`) — **opencode's own
+  private, "experimental" mirror**, not the public models.dev site freecode
+  fetches. The real models.dev has no such fields. Getting the rest of this
+  would mean either depending on a rival CLI's unversioned private
+  infrastructure (no stability contract, could change without notice), or
+  hand-writing the same enrichment opencode wrote (confirmed: even opencode
+  hand-writes dedicated protocol code for quirky vendors like z.ai —
+  `protocols/zai-chat.ts` — rather than trusting the generic field for them).
+  Either path is a cosmetic reshuffle of freecode's existing hand-maintained
+  knowledge (`effortFamily`, SDK-package branches), not a reduction in
+  maintenance burden. Do not revisit without a concrete reason one of those
+  two paths actually pays for itself.
 
 ## Tool system
 

@@ -35,6 +35,10 @@ import { mapUsage } from "./provider-shared.js";
 import { applyEffort } from "./effort.js";
 import { loadSdkFactory } from "./sdk-factories.js";
 import {
+  modelSupportsTemperature,
+  modelSupportsToolCalls,
+} from "../models-dev.js";
+import {
   baseURLFor,
   type ProviderCatalogueEntry,
 } from "./catalogue.js";
@@ -127,10 +131,21 @@ export function buildGenerateOptions(
   // supportsLongCacheTtl) — opts.model is absent when the caller relies on
   // the provider's own default.
   const resolvedModel = opts.model ?? entry.defaultModel;
-  const tools = buildToolsParam(opts.tools, entry.id, resolvedModel);
+  // models.dev's `temperature`/`tool_call` booleans, when it has an opinion —
+  // fail open (no resolved model, or models.dev silent on either field) so
+  // this can only ever suppress a param freecode already sends, never add
+  // one it didn't. See docs/DECISIONS.md's "Provider layer" entries for why
+  // this stays data-only rather than growing into per-provider logic.
+  const toolsSupported =
+    !resolvedModel || modelSupportsToolCalls(entry.id, resolvedModel);
+  const temperatureSupported =
+    !resolvedModel || modelSupportsTemperature(entry.id, resolvedModel);
+  const tools = toolsSupported
+    ? buildToolsParam(opts.tools, entry.id, resolvedModel)
+    : undefined;
   const generateOptions: any = {
     model: modelHandle,
-    temperature: opts.temperature,
+    temperature: temperatureSupported ? opts.temperature : undefined,
     maxOutputTokens: opts.maxTokens || entry.maxOutputTokens,
     tools: tools as any,
     ...(opts.toolChoice && tools ? { toolChoice: opts.toolChoice } : {}),

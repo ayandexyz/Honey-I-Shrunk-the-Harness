@@ -97,6 +97,19 @@ export interface ProviderModel {
   /** Whether this specific model supports reasoning at all. */
   reasoning?: boolean;
   /**
+   * Whether this model accepts a `temperature` parameter. Absent means
+   * models.dev has no opinion — treated as "accepts it", the existing
+   * default — so this can only ever suppress a param for a model that
+   * explicitly declares it unsupported, never wrongly add one.
+   */
+  temperature?: boolean;
+  /**
+   * Whether this model can be sent tool definitions at all. Same
+   * fail-open-on-absence rule as `temperature`: only ever suppresses tools
+   * for a model models.dev explicitly marks as `tool_call: false`.
+   */
+  toolCall?: boolean;
+  /**
    * How to drive that reasoning, with the exact accepted values when the
    * type is "effort" — e.g. a specific GLM version may only take
    * ["none","high","xhigh"], not the full low..max scale. Absent or empty
@@ -228,6 +241,48 @@ export function findModelReasoningOptions(
   const lower = modelId.toLowerCase();
   return provider.models.find((m) => m.id.toLowerCase() === lower)
     ?.reasoningOptions;
+}
+
+function findModelSync(
+  providerId: string,
+  modelId: string,
+): ProviderModel | undefined {
+  const providers = readCachedProviders();
+  const provider = providers?.find((p) => p.id === providerId);
+  if (!provider) return undefined;
+  const exact = provider.models.find((m) => m.id === modelId);
+  if (exact) return exact;
+  const lower = modelId.toLowerCase();
+  return provider.models.find((m) => m.id.toLowerCase() === lower);
+}
+
+/**
+ * Whether `providerId/modelId` accepts a `temperature` parameter, straight
+ * off the same synchronous cache `findModelReasoningOptions` reads — same
+ * hot-path reasoning: `buildGenerateOptions` is sync, and this must not add
+ * a network round trip to every request. Unknown model or no opinion from
+ * models.dev both default to `true` (the existing, pre-this-change
+ * behavior) — this can only ever suppress the field, never add it where it
+ * wasn't already being sent.
+ */
+export function modelSupportsTemperature(
+  providerId: string,
+  modelId: string,
+): boolean {
+  return findModelSync(providerId, modelId)?.temperature !== false;
+}
+
+/**
+ * Whether `providerId/modelId` can be sent tool definitions at all. Same
+ * fail-open-on-unknown rule as `modelSupportsTemperature` — this is for
+ * models.dev's `tool_call: false`, not for freecode's own tool-use gating
+ * (permission modes, `agentMode`), which stays exactly as it is.
+ */
+export function modelSupportsToolCalls(
+  providerId: string,
+  modelId: string,
+): boolean {
+  return findModelSync(providerId, modelId)?.toolCall !== false;
 }
 
 /**
@@ -379,6 +434,14 @@ function parseCatalogue(body: string): Provider[] {
             ? modelData.reasoning
             : undefined,
         reasoningOptions: parseReasoningOptions(modelData.reasoning_options),
+        temperature:
+          typeof modelData.temperature === "boolean"
+            ? modelData.temperature
+            : undefined,
+        toolCall:
+          typeof modelData.tool_call === "boolean"
+            ? modelData.tool_call
+            : undefined,
       });
     }
 
