@@ -1753,9 +1753,15 @@ export const methodHandlers: Record<
     };
     // Honor the caller's mode (a resumed plan/review session used to be
     // silently reverted to build); session.send's agentMode still overrides
-    // this per turn.
+    // this per turn. A resume with no mode keeps a live session's own: the
+    // desktop reloads history with a bare resume, which used to drop a
+    // danger session to build so the next turn core started itself asked
+    // permission again. Never falls back to a wider mode than build.
+    const liveMode = (
+      sessions.get(context.id) as unknown as Record<string, unknown> | undefined
+    )?.agentMode;
     (session as unknown as Record<string, unknown>).agentMode =
-      agentMode || "build";
+      agentMode || liveMode || "build";
     sessions.set(context.id, session);
     // A resumed session is active again; clear any earlier ended mark so its
     // next end runs the disposers and the final flush.

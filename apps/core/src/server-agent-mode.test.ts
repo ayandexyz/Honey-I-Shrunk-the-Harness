@@ -77,3 +77,37 @@ test("a hidden system-reminder turn runs in the session's danger mode", async ()
     rmSync(project, { recursive: true, force: true });
   }
 });
+
+// The desktop reloads history with a bare `session.resume` (no agentMode)
+// whenever its cache is empty (freecode_session.rs `history`). That used to
+// reset a live danger session to build, so the next turn core started itself
+// asked permission again.
+test("a resume with no mode keeps the live session's danger mode", async () => {
+  const project = mkdtempSync(join(tmpdir(), "freecode-agent-mode-project-"));
+  const asked: string[] = [];
+  const unsubscribe = bus.subscribe("permission.asked", (event) => {
+    asked.push((event as { toolName: string }).toolName);
+    rejectPermission((event as { requestId: string }).requestId);
+  });
+  try {
+    const { sessionId } = (await methodHandlers["session.start"]!({
+      projectPath: project,
+      provider: "mode-fake",
+      model: "m",
+      agentMode: "danger",
+    })) as { sessionId: string };
+    // A first turn persists the session so resume can load it.
+    await methodHandlers["session.sendSystemReminder"]!({ sessionId, reminder: "go" });
+
+    await methodHandlers["session.resume"]!({ sessionId });
+    await methodHandlers["session.sendSystemReminder"]!({
+      sessionId,
+      reminder: "[auto] The previous model request failed; continue.",
+    });
+
+    assert.deepEqual(asked, [], "danger mode must survive a bare resume");
+  } finally {
+    unsubscribe();
+    rmSync(project, { recursive: true, force: true });
+  }
+});
