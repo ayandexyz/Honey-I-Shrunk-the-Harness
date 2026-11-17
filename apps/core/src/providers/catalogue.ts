@@ -23,6 +23,7 @@ import { readCachedProviders } from "../models-dev.js";
 import { hasSdkFactory } from "./sdk-factories.js";
 import { canonicalProviderId } from "./canonical-id.js";
 import { OUTPUT_TOKEN_CAP } from "./utils.js";
+import { logger } from "../utils/logger.js";
 import type { EffortLevel } from "@thisisayande/freecode-shared";
 
 /**
@@ -329,10 +330,25 @@ function computeCatalogue(): ProviderCatalogueEntry[] {
   }
 
   const resolved: ProviderCatalogueEntry[] = [];
+  const skipped: string[] = [];
   for (const snapshot of byId.values()) {
     const entry = toEntry(snapshot);
-    if (!hasSdkFactory(entry.npm)) continue;
+    if (!hasSdkFactory(entry.npm)) {
+      skipped.push(`${entry.id} (${entry.npm})`);
+      continue;
+    }
     resolved.push(entry);
+  }
+  // opencode logs the same gap (`"Skipped models.dev APIs with entrypoints
+  // this build doesn't have"`) rather than dropping it silently — until now
+  // freecode's only sign a models.dev provider has no bundled SDK was reading
+  // this loop by hand. Debug-gated: this runs on every memo miss, which
+  // includes every `invalidateCatalogue()` refresh, not just process start.
+  if (skipped.length > 0) {
+    logger.debug(
+      `Skipped ${skipped.length} models.dev provider(s) with no bundled SDK`,
+      { providers: skipped },
+    );
   }
   return resolved;
 }
