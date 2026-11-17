@@ -194,13 +194,35 @@ export function readCachedProviders(): Provider[] | null {
   if (cache) return cache.data;
   try {
     const file = cacheFile();
-    if (!fs.existsSync(file)) return null;
+    // Memoised on mtime + size: this runs on every model request (effort,
+    // temperature, tool_call lookups), and the file is several MB — a
+    // process that never fetched (`freecode run`, eval, night) re-parsed it
+    // per call. A stat still sees another process's refresh.
+    const stat = fs.statSync(file, { throwIfNoEntry: false });
+    if (!stat) return null;
+    if (
+      diskMemo &&
+      diskMemo.file === file &&
+      diskMemo.mtimeMs === stat.mtimeMs &&
+      diskMemo.size === stat.size
+    ) {
+      return diskMemo.data;
+    }
     const cached = JSON.parse(fs.readFileSync(file, "utf-8"));
-    return Array.isArray(cached?.data) ? (cached.data as Provider[]) : null;
+    const data = Array.isArray(cached?.data) ? (cached.data as Provider[]) : null;
+    diskMemo = { file, mtimeMs: stat.mtimeMs, size: stat.size, data };
+    return data;
   } catch {
     return null;
   }
 }
+
+let diskMemo: {
+  file: string;
+  mtimeMs: number;
+  size: number;
+  data: Provider[] | null;
+} | null = null;
 
 /** When the disk cache was written, or null when there is none. */
 export function readCachedProvidersWrittenAt(): Date | null {

@@ -49,9 +49,11 @@ export class AbError extends Error {}
  *   FREECODE_CONFIDENCE_GATE           instance — and the runner builds a
  *   FREECODE_HILLCLIMB_GATE            fresh loop per trial
  *   FREECODE_REPEATED_ERROR            `updateLoopHealth`, every tool call
+ *   FREECODE_STAGNATION_FORCE_TEXT     loop-health `evaluate`, every iteration
  *   FREECODE_COMPACT_RESTORE           `restoreRecentFiles`, every compaction
  *   FREECODE_VERIFY_TESTS              `loadVerifySettings`, every finish
  *   FREECODE_UNWIRED_CHECK             the loop's no-callers gate, every finish
+ *   FREECODE_DEFAULT_EFFORT            `catalogueDefaultEffort`, every request
  *
  * A startup-read var (a provider key, a config path, a fetch timeout baked into
  * the client at `createTimeoutFetch`) would be swapped into `process.env` and
@@ -85,6 +87,7 @@ export const VARIABLE_ENV_KEYS = [
   "FREECODE_MODEL_OVERLAY",
   // Read per tool call in AgentLoop.updateLoopHealth (signal E).
   "FREECODE_REPEATED_ERROR",
+  "FREECODE_STAGNATION_FORCE_TEXT",
   // Read per compaction in AgentLoop.restoreRecentFiles.
   "FREECODE_COMPACT_RESTORE",
   // Read per finish in the loop's test and no-callers gates.
@@ -92,6 +95,8 @@ export const VARIABLE_ENV_KEYS = [
   "FREECODE_UNWIRED_CHECK",
   // Read per call in editDiagnosticsEnabled (tools/lsp/feedback.ts).
   "FREECODE_EDIT_DIAGNOSTICS",
+  // Read per request in catalogueDefaultEffort (providers/effort.ts).
+  "FREECODE_DEFAULT_EFFORT",
 ] as const;
 
 /**

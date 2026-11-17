@@ -11,6 +11,20 @@ be "fixed" → `docs/DECISIONS.md`.
 
 ## Small known limitations
 
+### A permission prompt leaves no rollout event (added 2026-11-17)
+
+**Status:** open, observability gap.
+
+Sessions 50f4745d / 181c471a (desktop, `danger` mode) each waited ~18 min on
+bash permission prompts after a retry dropped them to `build` (fixed in
+`server.ts` `runSessionTurn`). The rollout log could not show it: an ask writes
+nothing, so the wait only appears as a gap between `hook.triggered`
+(PreToolUse) and `function.call`, and `freecode trace` folds it into the tool's
+time. It was found in the desktop's own log (`[debug permission]` lines).
+Record `permission.asked` / `permission.answered` (mode, tool, wait ms, no
+args) so a trace shows who was waiting on whom, and so a non-`danger` mode on a
+turn the user started in `danger` is visible.
+
 ### The compaction eval cases are 20KB JSONL lines (added 2026-09-08, updated 2026-09-29)
 
 **Status:** known, cosmetic, needs a paid run to fix.
@@ -193,11 +207,11 @@ that page's **Known gaps**.
 ### Real fixes
 
 - [ ] **`ExecuteResult.thinking` is dead for every provider.** The generic driver
-      sets `thinking: undefined` in `execute()` (`generic-provider.ts:357`);
+      sets `thinking: undefined` in `execute()` (`generic-provider.ts:384`);
       reasoning reaches the loop only as
       `thinking_delta` on the streaming path, so a non-streaming turn loses
-      extended thinking silently. Related: there is no thinking-budget or
-      reasoning-effort field anywhere in `ExecuteOptions`.
+      extended thinking silently. (`ExecuteOptions.effort` now exists —
+      `providers/effort.ts` — but a thinking-budget field still does not.)
 ## Docs-audit findings (tool system — 2026-08-23)
 
 Found while writing `apps/docs/app/internals/tools`. Each is also listed in that
