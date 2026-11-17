@@ -42,12 +42,15 @@ test("consecutive reads inside a turn are not stagnation", () => {
 });
 
 // Found by the Phase 2 eval probe, not by reading the code: a 6-turn explore
-// case tripped `no_progress`. In a read-only mode nothing the agent is
-// PERMITTED to do can reset the counter, so it climbs to the threshold on any
-// exploration past five turns and stays there — and once redirection is on,
-// that is a model call billed for doing exactly what the mode is for.
+// case tripped the old undifferentiated `warn`. In a read-only mode nothing
+// the agent is PERMITTED to do can reset the counter, so the 1x `warn` tier
+// must never fire there — but a SEPARATE, much higher limit still applies
+// (readOnlyExplorationLimit), found the same way: a real review-mode session
+// ran 21 turns of varied read/grep/glob/webfetch with zero loop-health signal
+// at all, cut off only by the eval harness's own trial timeout, mid-generation,
+// with no chance to answer.
 for (const mode of ["plan", "review", "explore"] as const) {
-  test(`${mode} mode never accrues stagnation — it cannot change a file by design`, () => {
+  test(`${mode} mode never warns on stagnation — the 1x tier would fire every turn`, () => {
     const loop = createAgentLoop(`test-stagnation-${mode}`);
     (loop as any).state = { ...(loop as any).state, agentMode: mode };
 
@@ -58,8 +61,24 @@ for (const mode of ["plan", "review", "explore"] as const) {
     ) {
       (loop as any).advanceStagnation(false);
     }
-    assert.equal((loop as any).state.loopHealth.stagnantTurns, 0);
+    // The counter itself still advances (it is just a turn count once a mode
+    // can never reset it) — only the mid-tier `warn` is suppressed.
+    assert.ok((loop as any).state.loopHealth.stagnantTurns > 0);
     assert.equal(health(loop).action, "continue");
+  });
+
+  test(`${mode} mode still gets a safety valve — readOnlyExplorationLimit, not Infinity`, () => {
+    const loop = createAgentLoop(`test-stagnation-${mode}-limit`);
+    (loop as any).state = { ...(loop as any).state, agentMode: mode };
+
+    for (
+      let i = 0;
+      i < DEFAULT_LOOP_HEURISTICS.readOnlyExplorationLimit;
+      i++
+    ) {
+      (loop as any).advanceStagnation(false);
+    }
+    assert.equal(health(loop).action, "force_text");
   });
 }
 
@@ -98,10 +117,30 @@ test("a turn that changed a file resets the counter", () => {
   assert.equal(health(loop).action, "continue");
 });
 
-test("stagnation never hard-stops a run", () => {
+test("stagnation never hard-stops a run — it escalates to force_text, not stop", () => {
   const loop = createAgentLoop("test-stagnation-no-stop");
   for (let i = 0; i < DEFAULT_LOOP_HEURISTICS.stagnantTurnsThreshold * 4; i++) {
     (loop as any).advanceStagnation(false);
   }
+  // Never "stop" (an abrupt synthetic message, no model answer) — a
+  // read-only exploration task legitimately has no file change to show.
+  // At 2x the threshold it becomes "force_text": the existing toolChoice:
+  // "none" mechanism (opencode's MAX_STEPS_PROMPT pattern, already used by
+  // the iteration-cap safety valve) forces the model to answer with what it
+  // found instead of looping indefinitely.
+  assert.equal(health(loop).action, "force_text");
+});
+
+test("the warn tier (1x-2x threshold) still exists before force_text (2x+) takes over", () => {
+  const loop = createAgentLoop("test-stagnation-warn-tier");
+  const threshold = DEFAULT_LOOP_HEURISTICS.stagnantTurnsThreshold;
+  for (let i = 0; i < threshold; i++) {
+    (loop as any).advanceStagnation(false);
+  }
   assert.equal(health(loop).action, "warn");
+
+  for (let i = threshold; i < threshold * 2; i++) {
+    (loop as any).advanceStagnation(false);
+  }
+  assert.equal(health(loop).action, "force_text");
 });

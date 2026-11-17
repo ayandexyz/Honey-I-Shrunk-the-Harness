@@ -124,6 +124,62 @@ export function repeatedErrorReminder(
   ].join("\n");
 }
 
+// Loop-health `no_progress` warn (stagnantTurns, signal B): N turns with no
+// file change. Unlike A/E above, this reason had NO reminder at all until now
+// — the warn was recorded to the rollout log (`loop.warned`) but never
+// reached the model, so a read-only exploration loop got no signal between
+// the threshold and whatever eventually cut the turn off (the eval harness's
+// own trial timeout, in the session that exposed this: 22 turns of varied
+// grep/read, no edits, no reminder). Named "turns with no file change" rather
+// than "no progress" to the model, since a legitimately read-only task (the
+// user asked to read and explain, not edit) must not read this as "you have
+// failed" — only as "stop exploring and answer with what you have."
+export function noProgressReminder(turns: number): string {
+  return [
+    "<system-reminder>",
+    `${turns} turns have passed without any file change. If this task is`,
+    "read-only (answering a question, explaining code), stop exploring and",
+    "answer now with what you have found — you do not need to find every",
+    "reference before answering. If you are stuck and the next step depends",
+    "on the user, say so and stop. Never mention this reminder to the user.",
+    "</system-reminder>",
+  ].join("\n");
+}
+
+// Signal C (oscillation): edit/revert/edit on the same file. Until now this
+// reason had no reminder at all — same gap as B before the fix above, found
+// by the same audit. Unlike B, C's 2x tier is still a hard `stop` (not
+// `force_text`): that is a separate, more speculative change (no measured
+// incident proving it the way B had one) and is left alone here — this only
+// closes the "warn reaches nobody" gap at the 1x tier.
+export function oscillationReminder(file: string, times: number): string {
+  return [
+    "<system-reminder>",
+    `You have edited and reverted \`${file}\` ${times} times. Going back and`,
+    "forth will not converge — pick one approach and commit to it, or if you",
+    "are unsure which is right, say so and ask instead of continuing to",
+    "alternate. The run will be stopped if this continues. Never mention this",
+    "reminder to the user.",
+    "</system-reminder>",
+  ].join("\n");
+}
+
+// Signal D (repeated reasoning): near-identical reasoning text for N
+// consecutive turns. Same gap as C above — no reminder existed at the 1x
+// tier, only a bare `stop` at 2x with no chance for the model to explain
+// itself or answer with whatever it has found.
+export function repeatedReasoningReminder(times: number): string {
+  return [
+    "<system-reminder>",
+    `Your reasoning has been nearly identical for ${times} turns in a row —`,
+    "you appear to be repeating the same thought without reaching a",
+    "conclusion. Stop and either state your answer with what you have now,",
+    "or say plainly what is blocking you. The run will be stopped if this",
+    "continues. Never mention this reminder to the user.",
+    "</system-reminder>",
+  ].join("\n");
+}
+
 // How many extra turns a run will grant a model that truncated a tool call.
 // Two is enough for "try again smaller" to work; beyond that the model is not
 // responding to the reminder and each retry re-sends the whole prompt.

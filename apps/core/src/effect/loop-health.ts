@@ -16,6 +16,7 @@ import type {
   LoopHeuristics,
   LoopAction,
 } from "../agent/types.js";
+import { isReadOnlyMode } from "../permission/mode-policy.js";
 
 export interface LoopHealthEvaluator {
   evaluate(state: SessionState, heuristics: LoopHeuristics): LoopAction;
@@ -48,9 +49,34 @@ export const createLoopHealthEvaluator = (): LoopHealthEvaluator => ({
     }
 
     // B. No file change for N *turns* — the counter is advanced once per turn
-    // by AgentLoop.advanceStagnation(), never per tool call.
-    if (health.stagnantTurns >= heuristics.stagnantTurnsThreshold) {
-      return { action: "warn", reason: "no_progress" };
+    // by AgentLoop.advanceStagnation(), never per tool call. Unlike A/C/D,
+    // the 2x tier is `force_text` rather than `stop`: a read-only
+    // exploration task (varied grep/read, never identical, so A never
+    // trips) legitimately has no file change to show, so ending the run
+    // with a bare "Loop stopped" would discard real findings the model
+    // already has. Forcing a text-only reply lets it answer with what it
+    // found instead (session that exposed this: 22 turns of varied
+    // grep/read, no edits, cut off only by the eval harness's own trial
+    // timeout — see noProgressReminder's comment in reminders.ts).
+    //
+    // plan/review/explore modes: "no file changed" is always true there, so
+    // the 1x `warn` tier would fire every single turn — noise, not signal.
+    // Only `force_text`, against a much higher, mode-specific limit, applies
+    // (see readOnlyExplorationLimit's comment in types.ts for the session
+    // that exposed THIS gap: 21 turns, zero loop-health signal at all, only
+    // the eval harness's own trial timeout — and it cut the model off
+    // mid-generation, with no chance to answer).
+    if (isReadOnlyMode(state.agentMode)) {
+      if (health.stagnantTurns >= heuristics.readOnlyExplorationLimit) {
+        return { action: "force_text", reason: "no_progress" };
+      }
+    } else {
+      if (health.stagnantTurns >= heuristics.stagnantTurnsThreshold * 2) {
+        return { action: "force_text", reason: "no_progress" };
+      }
+      if (health.stagnantTurns >= heuristics.stagnantTurnsThreshold) {
+        return { action: "warn", reason: "no_progress" };
+      }
     }
 
     // C. Oscillation detected - edit/revert/edit pattern. The score counts
