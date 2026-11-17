@@ -1149,17 +1149,38 @@ export class AgentLoop {
             { kind: "stuck", reason: healthAction.reason },
           );
         }
-        // 2x stagnation: force a text-only reply instead of aborting (see
-        // loop-health.ts's comment on signal B's two tiers). Reuses the same
-        // one-reminder-per-run bookkeeping as the warn tier, under a distinct
-        // key so it still fires once even though the warn tier already used
-        // "no_progress" earlier in this same run.
-        if (
-          healthAction.action === "force_text" &&
-          !this.healthWarned.has("no_progress_force_text")
-        ) {
-          this.healthWarned.add("no_progress_force_text");
-          this.pendingReminders.push(wrapUpReminder());
+        // 2x tier (B/C/D): force a text-only reply instead of aborting —
+        // see each signal's comment in loop-health.ts for why. Reuses the
+        // same one-reminder-per-run bookkeeping as the warn tier, under a
+        // distinct per-reason key so it still fires once even though the
+        // warn tier already used the same reason earlier in this run. Each
+        // reason gets its own specific reminder where one exists (naming
+        // the file for oscillation, the turn count for the others);
+        // wrapUpReminder is the fallback for any reason without one.
+        if (healthAction.action === "force_text") {
+          const forceKey = `${healthAction.reason}_force_text`;
+          if (!this.healthWarned.has(forceKey)) {
+            this.healthWarned.add(forceKey);
+            if (healthAction.reason === "oscillation_detected") {
+              const lastEdit = this.recentEdits[this.recentEdits.length - 1];
+              this.pendingReminders.push(
+                lastEdit
+                  ? oscillationReminder(
+                      lastEdit.file,
+                      this.state.loopHealth.oscillationScore,
+                    )
+                  : wrapUpReminder(),
+              );
+            } else if (healthAction.reason === "repeated_reasoning") {
+              this.pendingReminders.push(
+                repeatedReasoningReminder(
+                  this.state.loopHealth.repeatedReasoningScore,
+                ),
+              );
+            } else {
+              this.pendingReminders.push(wrapUpReminder());
+            }
+          }
         }
         if (healthAction.action === "warn") {
           logger.debug(`[AgentLoop] Warning: ${healthAction.reason}`);

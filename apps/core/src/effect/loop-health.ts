@@ -81,8 +81,12 @@ export const createLoopHealthEvaluator = (): LoopHealthEvaluator => ({
 
     // C. Oscillation detected - edit/revert/edit pattern. The score counts
     // reverts inside the recent-edit window, so it can fall as well as rise.
+    // 2x tier is `force_text`, not `stop`, for the same reason as B: the
+    // model has made real edits (just contradictory ones), and a bare "Loop
+    // stopped" would discard whatever understanding led to them instead of
+    // asking it to explain the conflict or commit to one side.
     if (health.oscillationScore >= heuristics.oscillationScoreThreshold * 2) {
-      return { action: "stop", reason: "oscillation_detected" };
+      return { action: "force_text", reason: "oscillation_detected" };
     }
     if (health.oscillationScore >= heuristics.oscillationScoreThreshold) {
       return { action: "warn", reason: "oscillation_detected" };
@@ -90,8 +94,11 @@ export const createLoopHealthEvaluator = (): LoopHealthEvaluator => ({
 
     // D. Repeated reasoning similarity - near-identical reasoning text for N
     // consecutive turns, tracked by AgentLoop.advanceReasoningSimilarity().
+    // 2x tier is `force_text`: toolChoice:"none" removes the only other
+    // option, which can itself break a thought-loop that kept recurring
+    // only because tool calls gave it somewhere to go instead of concluding.
     if (health.repeatedReasoningScore >= heuristics.reasoningSimilarityTurns * 2) {
-      return { action: "stop", reason: "repeated_reasoning" };
+      return { action: "force_text", reason: "repeated_reasoning" };
     }
     if (health.repeatedReasoningScore >= heuristics.reasoningSimilarityTurns) {
       return { action: "warn", reason: "repeated_reasoning" };
