@@ -1,11 +1,36 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { buildGenerateOptions } from "./generic-provider.js";
 
 // These assertions describe the API-key request shape; pin the auth mode so
 // they don't flip on a machine whose config resolves anthropic to OAuth.
 // The OAuth shape has its own tests in anthropic-oauth.test.ts.
 process.env.FREECODE_ANTHROPIC_AUTH = "api-key";
+
+// applyEffort() now consults models.dev's cached per-model reasoning_options
+// (effort.ts's modelsDevEffortValues) before falling back to a catalogue
+// entry's static effortValues — and buildGenerateOptions always resolves
+// *some* model id (opts.model or entry.defaultModel) to look that up with.
+// Without this redirect, every effort assertion below would silently read
+// whatever happens to be in the developer's real ~/.freecode/cache —
+// exactly the non-hermetic failure mode models-dev-vision.test.ts's own
+// comment describes. An empty fixture means "models.dev has no opinion",
+// so these tests exercise only the catalogue-level fallback, as written.
+const modelsDevCacheDir = fs.mkdtempSync(
+  path.join(os.tmpdir(), "freecode-generic-provider-"),
+);
+process.env.FREECODE_MODELS_CACHE_FILE = path.join(
+  modelsDevCacheDir,
+  "models-dev.json",
+);
+fs.writeFileSync(
+  process.env.FREECODE_MODELS_CACHE_FILE,
+  JSON.stringify({ timestamp: Date.now(), data: [] }),
+);
+
 import { resolveCatalogue } from "./catalogue.js";
 import type { ProviderCatalogueEntry } from "./catalogue.js";
 
@@ -25,8 +50,15 @@ const anthropicEntry = entry("anthropic");
 const openaiEntry = entry("openai");
 const geminiEntry = entry("gemini");
 const minimaxEntry = entry("minimax");
+// groq now carries an effortFamily (see below) — mistral stays genuinely
+// unconfigured, so it's the right fixture for "no effortFamily" assertions.
 const openaiCompatibleEntry = entry("groq");
+const noEffortEntry = entry("mistral");
 const zaiEntry = entry("zai");
+const deepseekEntry = entry("deepseek");
+const groqEntry = entry("groq");
+const xaiEntry = entry("xai");
+const moonshotEntry = entry("moonshotai");
 
 test("anthropic-family: system goes through buildAnthropicSystemParam, messages get cache breakpoints", () => {
   const opts = buildGenerateOptions(anthropicEntry, modelHandle, {
@@ -38,10 +70,24 @@ test("anthropic-family: system goes through buildAnthropicSystemParam, messages 
   assert.ok(Array.isArray(opts.messages));
 });
 
-test("minimax (anthropic npm family, no effortFamily): effort is never applied", () => {
+test("minimax (effortFamily verified): an explicit effort is routed under providerOptions.anthropic", () => {
   const opts = buildGenerateOptions(minimaxEntry, modelHandle, {
     prompt: "hi",
     effort: "high",
+  });
+  assert.deepEqual((opts.providerOptions as any).anthropic, { effort: "high" });
+});
+
+test("minimax: an unset effort falls back to the catalogue's defaultEffort, not the provider's own (max) default", () => {
+  const opts = buildGenerateOptions(minimaxEntry, modelHandle, {
+    prompt: "hi",
+  });
+  assert.deepEqual((opts.providerOptions as any).anthropic, { effort: "medium" });
+});
+
+test("anthropic: an unset effort stays unset — only minimax carries a defaultEffort fallback", () => {
+  const opts = buildGenerateOptions(anthropicEntry, modelHandle, {
+    prompt: "hi",
   });
   assert.equal(opts.providerOptions, undefined);
 });
@@ -110,11 +156,61 @@ test("openai-compatible: openai-shaped system, but no promptCacheKey", () => {
 });
 
 test("openai-compatible: no effortFamily means effort is never routed", () => {
-  const opts = buildGenerateOptions(openaiCompatibleEntry, modelHandle, {
+  const opts = buildGenerateOptions(noEffortEntry, modelHandle, {
     prompt: "hi",
     effort: "high",
   });
   assert.equal(opts.providerOptions, undefined);
+});
+
+// =============================================================================
+// New effortFamily branches (deepseek, groq, xai, openai-compatible) — each
+// verified against the named AI SDK package's own source or the vendor's
+// docs; see catalogue.ts's OVERRIDES comments for the citation per entry.
+// =============================================================================
+
+test("deepseek: effort is routed under providerOptions.deepseek.reasoningEffort, unclamped", () => {
+  const opts = buildGenerateOptions(deepseekEntry, modelHandle, {
+    prompt: "hi",
+    effort: "xhigh",
+  });
+  assert.deepEqual((opts.providerOptions as any).deepseek, { reasoningEffort: "xhigh" });
+});
+
+test("deepseek: no defaultEffort — an unset effort stays unset", () => {
+  const opts = buildGenerateOptions(deepseekEntry, modelHandle, { prompt: "hi" });
+  assert.equal(opts.providerOptions, undefined);
+});
+
+test("groq: effort is routed under providerOptions.groq.reasoningEffort, clamped to its low/medium/high range", () => {
+  const opts = buildGenerateOptions(groqEntry, modelHandle, {
+    prompt: "hi",
+    effort: "max",
+  });
+  assert.deepEqual((opts.providerOptions as any).groq, { reasoningEffort: "high" });
+});
+
+test("xai: effort is routed under providerOptions.xai.reasoningEffort, clamped to its low..xhigh range", () => {
+  const opts = buildGenerateOptions(xaiEntry, modelHandle, {
+    prompt: "hi",
+    effort: "max",
+  });
+  assert.deepEqual((opts.providerOptions as any).xai, { reasoningEffort: "xhigh" });
+});
+
+test("moonshotai (openai-compatible family): effort lands under providerOptions[entry.id], not a fixed key", () => {
+  const opts = buildGenerateOptions(moonshotEntry, modelHandle, {
+    prompt: "hi",
+    effort: "high",
+  });
+  assert.deepEqual((opts.providerOptions as any).moonshotai, { reasoningEffort: "high" });
+});
+
+test("moonshotai: an unset effort falls back to defaultEffort, clamped — medium isn't in its low|high|max range", () => {
+  const opts = buildGenerateOptions(moonshotEntry, modelHandle, { prompt: "hi" });
+  // defaultEffort is "medium"; moonshotai's effortValues are ["low","high","max"],
+  // and the clamp prefers the cheaper neighbor, so "medium" snaps to "low".
+  assert.deepEqual((opts.providerOptions as any).moonshotai, { reasoningEffort: "low" });
 });
 
 test("anthropic-family branch is keyed on the SDK package, not the provider id", () => {

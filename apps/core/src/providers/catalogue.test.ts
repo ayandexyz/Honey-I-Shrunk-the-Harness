@@ -52,7 +52,7 @@ test("freecode's deliberate divergences from models.dev survive resolution", () 
   assert.equal(byId.get("deepseek")?.npm, "@ai-sdk/deepseek");
   assert.equal(byId.get("deepseek")?.baseURL, undefined);
   assert.equal(byId.get("zai")?.npm, "@ai-sdk/anthropic");
-  assert.equal(byId.get("zai")?.baseURL, "https://api.z.ai/api/anthropic");
+  assert.equal(byId.get("zai")?.baseURL, "https://api.z.ai/api/anthropic/v1");
 
   // minimax's baseURL is models.dev's, not an override — it must survive too.
   assert.equal(
@@ -67,12 +67,71 @@ test("minimax reserves the shared output cap, not a copy of its number", async (
   assert.equal(minimax?.maxOutputTokens, OUTPUT_TOKEN_CAP);
 });
 
-test("effortFamily is set only for the three providers it was verified on", () => {
+test("effortFamily is set only for the providers it was verified on", () => {
   const withEffort = resolveCatalogue()
     .filter((e) => e.effortFamily)
     .map((e) => e.id)
     .sort();
-  assert.deepEqual(withEffort, ["anthropic", "gemini", "openai"]);
+  assert.deepEqual(withEffort, [
+    "anthropic",
+    "deepseek",
+    "gemini",
+    "groq",
+    "minimax",
+    "moonshotai",
+    "openai",
+    "xai",
+    "zai",
+    "zai-coding-plan",
+    "zhipuai",
+    "zhipuai-coding-plan",
+  ]);
+});
+
+test("zai-coding-plan and zhipuai(-coding-plan) are live-verified as openai-compatible; the plain `zai` entry is live-verified separately as anthropic-shaped", () => {
+  for (const id of ["zai-coding-plan", "zhipuai-coding-plan", "zhipuai"]) {
+    const found = resolveCatalogue().find((e) => e.id === id);
+    assert.equal(found?.effortFamily, "openai-compatible", id);
+    assert.deepEqual(found?.effortValues, ["low", "high", "max"], id);
+  }
+  const zai = resolveCatalogue().find((e) => e.id === "zai");
+  assert.equal(zai?.npm, "@ai-sdk/anthropic", "zai itself stays on the forced anthropic-shaped endpoint");
+  assert.equal(zai?.effortFamily, "anthropic", "zai's effort shape matches minimax, verified live against api.z.ai/api/anthropic");
+});
+
+test("minimax defaults to medium effort when the session has not chosen one — its own API defaults the omitted field to max", () => {
+  const minimax = resolveCatalogue().find((e) => e.id === "minimax");
+  assert.equal(minimax?.effortFamily, "anthropic");
+  assert.equal(minimax?.defaultEffort, "medium");
+});
+
+test("moonshotai (K3) also defaults to max when omitted, same bug shape as minimax — defaultEffort covers it too", () => {
+  const moonshot = resolveCatalogue().find((e) => e.id === "moonshotai");
+  assert.equal(moonshot?.effortFamily, "openai-compatible");
+  assert.equal(moonshot?.defaultEffort, "medium");
+});
+
+test("defaultEffort is set only where the vendor's own undeclared-effort default is confirmed bad (minimax, moonshotai)", () => {
+  const withDefaultEffort = resolveCatalogue()
+    .filter((e) => e.defaultEffort)
+    .map((e) => e.id)
+    .sort();
+  assert.deepEqual(withDefaultEffort, ["minimax", "moonshotai"]);
+});
+
+test("deepseek, groq, xai get effortFamily (an explicit /effort choice is now honoured) but no defaultEffort (their own default is unverified)", () => {
+  for (const id of ["deepseek", "groq", "xai"]) {
+    const found = resolveCatalogue().find((e) => e.id === id);
+    assert.ok(found?.effortFamily, `${id} should carry an effortFamily`);
+    assert.equal(found?.defaultEffort, undefined, `${id} should not carry a defaultEffort`);
+  }
+});
+
+test("groq and xai carry the effortValues their SDK package actually accepts", () => {
+  const groq = resolveCatalogue().find((e) => e.id === "groq");
+  const xai = resolveCatalogue().find((e) => e.id === "xai");
+  assert.deepEqual(groq?.effortValues, ["low", "medium", "high"]);
+  assert.deepEqual(xai?.effortValues, ["low", "medium", "high", "xhigh"]);
 });
 
 test("env keys come from the catalogue, so zai reads models.dev's name", () => {

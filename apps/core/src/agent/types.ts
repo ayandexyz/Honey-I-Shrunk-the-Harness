@@ -211,6 +211,13 @@ export interface LoopHeuristics {
   repeatedIdenticalThreshold: number;
   // B. No state change - 5 turns with no file changes → warning
   stagnantTurnsThreshold: number;
+  // B, read-only modes (plan/review/explore): "no file changed" is always
+  // true there, so the 1x `warn` tier is noise (measured, Phase 2 probe: a
+  // legitimate 6-turn explore case tripped the old undifferentiated warn) —
+  // but nothing bounded these modes at all otherwise. This is the only tier
+  // that still applies, counting plain turns (not stagnation in the
+  // mutation sense, since there is none to track) toward `force_text`.
+  readOnlyExplorationLimit: number;
   // C. Oscillation - edit A, revert A, edit A → block
   oscillationScoreThreshold: number;
   // D. Repeated reasoning similarity - >90% for N turns → likely stuck
@@ -226,6 +233,14 @@ export interface LoopHeuristics {
 export const DEFAULT_LOOP_HEURISTICS: LoopHeuristics = {
   repeatedIdenticalThreshold: 3,
   stagnantTurnsThreshold: 5,
+  // 4x the build-mode stagnation threshold: generous enough that a
+  // thorough review or explore task is never interrupted early (the
+  // Phase-2 regression this guards against was a 6-turn case), but bounded
+  // instead of the Infinity read-only modes had until now. The session
+  // that exposed this ran 21 turns of varied read/grep/glob/webfetch in
+  // `review` mode and was cut off mid-generation, with zero text, only by
+  // the eval harness's own trial timeout — no loop-health signal applied.
+  readOnlyExplorationLimit: 20,
   oscillationScoreThreshold: 4,
   reasoningSimilarityThreshold: 0.9,
   reasoningSimilarityTurns: 3,
@@ -242,7 +257,12 @@ export const DEFAULT_LOOP_HEURISTICS: LoopHeuristics = {
 };
 
 export interface LoopAction {
-  action: "continue" | "warn" | "stop";
+  // `force_text` is distinct from `stop`: `stop` ends the run with a
+  // synthetic "Loop stopped" message and no model answer. `force_text` lets
+  // the model answer for itself — same `toolChoice: "none"` mechanism the
+  // iteration-cap safety valve already uses (opencode's MAX_STEPS_PROMPT
+  // pattern), just reached by a loop-health signal instead of a turn count.
+  action: "continue" | "warn" | "stop" | "force_text";
   reason?: string;
 }
 

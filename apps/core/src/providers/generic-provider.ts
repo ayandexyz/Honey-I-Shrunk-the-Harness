@@ -35,6 +35,10 @@ import { mapUsage } from "./provider-shared.js";
 import { applyEffort } from "./effort.js";
 import { loadSdkFactory } from "./sdk-factories.js";
 import {
+  modelSupportsTemperature,
+  modelSupportsToolCalls,
+} from "../models-dev.js";
+import {
   baseURLFor,
   type ProviderCatalogueEntry,
 } from "./catalogue.js";
@@ -105,11 +109,18 @@ function appendEphemeralTail(
  *   set for `@ai-sdk/openai` alone — it is OpenAI's own cache-routing
  *   parameter, and openai-compatible endpoints reject unknown fields.
  *
- * `effortFamily` gates `applyEffort`, and is set only for the three providers
- * whose reasoning-effort parameter has been verified. It is deliberately not
- * inferred from the SDK package: `minimax` and `zai` speak
- * `@ai-sdk/anthropic` without accepting Anthropic's `effort`, so keying
- * effort off the package would send a field those endpoints reject.
+ * `effortFamily` gates `applyEffort`, and is set only for providers whose
+ * reasoning-effort parameter has been verified — see each entry's comment in
+ * `catalogue.ts`'s `OVERRIDES` for the source. It is deliberately not
+ * inferred from the SDK package: `zai` also speaks `@ai-sdk/anthropic` but
+ * has not been verified to accept Anthropic's `effort` (conflicting vendor
+ * docs), so keying effort off the package would risk sending a field that
+ * endpoint rejects. `defaultEffort` is sent in place of an unset
+ * `opts.effort` only for providers (minimax, moonshotai) whose own
+ * undeclared-effort default is confirmed to be worse than guessing.
+ * `resolvedModel` is threaded into `applyEffort` so it can prefer
+ * models.dev's own per-model accepted values over the catalogue entry's
+ * hand-maintained fallback — see `effort.ts`'s `modelsDevEffortValues`.
  */
 export function buildGenerateOptions(
   entry: ProviderCatalogueEntry,
@@ -120,10 +131,21 @@ export function buildGenerateOptions(
   // supportsLongCacheTtl) — opts.model is absent when the caller relies on
   // the provider's own default.
   const resolvedModel = opts.model ?? entry.defaultModel;
-  const tools = buildToolsParam(opts.tools, entry.id, resolvedModel);
+  // models.dev's `temperature`/`tool_call` booleans, when it has an opinion —
+  // fail open (no resolved model, or models.dev silent on either field) so
+  // this can only ever suppress a param freecode already sends, never add
+  // one it didn't. See docs/DECISIONS.md's "Provider layer" entries for why
+  // this stays data-only rather than growing into per-provider logic.
+  const toolsSupported =
+    !resolvedModel || modelSupportsToolCalls(entry.id, resolvedModel);
+  const temperatureSupported =
+    !resolvedModel || modelSupportsTemperature(entry.id, resolvedModel);
+  const tools = toolsSupported
+    ? buildToolsParam(opts.tools, entry.id, resolvedModel)
+    : undefined;
   const generateOptions: any = {
     model: modelHandle,
-    temperature: opts.temperature,
+    temperature: temperatureSupported ? opts.temperature : undefined,
     maxOutputTokens: opts.maxTokens || entry.maxOutputTokens,
     tools: tools as any,
     ...(opts.toolChoice && tools ? { toolChoice: opts.toolChoice } : {}),
@@ -195,7 +217,7 @@ export function buildGenerateOptions(
   }
 
   if (entry.effortFamily) {
-    applyEffort(generateOptions, entry.effortFamily, opts.effort);
+    applyEffort(generateOptions, entry, opts.effort ?? entry.defaultEffort, resolvedModel);
   }
 
   return generateOptions;

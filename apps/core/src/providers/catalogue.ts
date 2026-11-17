@@ -23,8 +23,27 @@ import { readCachedProviders } from "../models-dev.js";
 import { hasSdkFactory } from "./sdk-factories.js";
 import { canonicalProviderId } from "./canonical-id.js";
 import { OUTPUT_TOKEN_CAP } from "./utils.js";
+import { logger } from "../utils/logger.js";
+import type { EffortLevel } from "@thisisayande/freecode-shared";
 
-export type EffortFamily = "anthropic" | "openai" | "gemini";
+/**
+ * Which `applyEffort()` wire shape a provider's reasoning-effort parameter
+ * uses, verified per family against either the AI SDK package's own source
+ * (anthropic, openai, gemini, deepseek, groq, xai) or the vendor's own docs
+ * (minimax, and the openai-compatible-shaped vendors named in `OVERRIDES`).
+ * "openai-compatible" is the one dynamic case: the field lands under
+ * `providerOptions[entry.id]`, so it works for any catalogue entry on
+ * `@ai-sdk/openai-compatible` that has actually been verified to accept
+ * `reasoning_effort` — see the `moonshotai` entry below for how to add one.
+ */
+export type EffortFamily =
+  | "anthropic"
+  | "openai"
+  | "gemini"
+  | "deepseek"
+  | "groq"
+  | "xai"
+  | "openai-compatible";
 
 export interface ProviderCatalogueEntry {
   id: string;
@@ -48,6 +67,27 @@ export interface ProviderCatalogueEntry {
    * understand a reasoning-effort parameter rejects the request outright.
    */
   effortFamily?: EffortFamily;
+  /**
+   * Effort to send when the session has not picked one and `effortFamily` is
+   * set. Only worth setting when the provider's own undeclared-effort default
+   * is known to be bad — see the `minimax` entry: its docs state
+   * `output_config.effort` defaults to `max` (and thinking cannot be disabled
+   * at all) when the field is omitted, which is how an un-configured session
+   * was burning 10-30k chars of hidden reasoning per tool call.
+   */
+  defaultEffort?: EffortLevel;
+  /**
+   * The hand-maintained FALLBACK for which levels this provider's API
+   * accepts, ordered low to high. `applyEffort()` prefers models.dev's own
+   * per-model `reasoning_options` when that model has one (see effort.ts's
+   * `modelsDevEffortValues`) — this field only matters for a model
+   * models.dev has no opinion on, or when its data is stale/missing. Either
+   * way, anything outside the resolved set snaps to the nearest member,
+   * preferring the cheaper neighbor on a tie, the same direction
+   * `defaultEffort` already leans. Undefined means "accepts freecode's full
+   * five-tier scale as-is" at this fallback layer.
+   */
+  effortValues?: readonly EffortLevel[];
 }
 
 /**
@@ -76,6 +116,9 @@ const OVERRIDES: Record<string, Partial<ProviderCatalogueEntry>> = {
     // it breaks the provider for anyone who does not name a model.
     defaultModel: "gemini-3.6-flash",
     effortFamily: "gemini",
+    // thinkingLevel tops out at "high" — the generic clamp in effort.ts snaps
+    // xhigh/max down to it, replacing what used to be a one-off inline check.
+    effortValues: ["low", "medium", "high"],
   },
   minimax: {
     defaultModel: "MiniMax-M2",
@@ -89,6 +132,19 @@ const OVERRIDES: Record<string, Partial<ProviderCatalogueEntry>> = {
     // occupancy. OUTPUT_TOKEN_CAP keeps the write headroom while giving the
     // rest of the window back to the conversation.
     maxOutputTokens: OUTPUT_TOKEN_CAP,
+    // Verified against MiniMax's own docs (platform.minimax.io/docs/api-reference/
+    // text-anthropic-api, 2026-11-17): the Anthropic-compatible endpoint's
+    // `output_config.effort` field takes the exact same low|medium|high|xhigh|max
+    // scale Anthropic's own adaptive-effort models use, so the "anthropic"
+    // applyEffort() branch is the right shape here too. MiniMax-M3.1-Flash
+    // defaults that field to "max" when the request omits it entirely (and
+    // rejects "disabled" outright — thinking can't be turned off), which is
+    // why a session that never called /effort was sending every grep/read/bash
+    // turn through maximum reasoning depth: 10-30k+ chars of hidden thinking
+    // for a single tool call. `defaultEffort` only fires when the session has
+    // not chosen one itself.
+    effortFamily: "anthropic",
+    defaultEffort: "medium",
   },
   deepseek: {
     // models.dev routes deepseek through @ai-sdk/openai-compatible. freecode
@@ -99,6 +155,69 @@ const OVERRIDES: Record<string, Partial<ProviderCatalogueEntry>> = {
     npm: "@ai-sdk/deepseek",
     baseURL: undefined,
     defaultModel: "deepseek-chat",
+    // Verified in @ai-sdk/deepseek's own source (dist/index.mjs): it declares
+    // `reasoningEffort: z.enum(["low","medium","high","xhigh","max"])` and
+    // remaps "medium"->"high"/"xhigh"->"max" itself before the request goes
+    // out, logging a warning either way. No `defaultEffort`: unlike minimax
+    // and moonshotai, DeepSeek's own undeclared-effort default has not been
+    // checked, so an unset session leaves the field unsent rather than guess.
+    effortFamily: "deepseek",
+  },
+  groq: {
+    // Verified in @ai-sdk/groq's own source: `reasoningEffort` accepts
+    // "none"|"default"|"low"|"medium"|"high" — no xhigh/max — mapped onto the
+    // wire as `reasoning_effort`. No `defaultEffort`: Groq's own
+    // undeclared-effort default has not been checked.
+    effortFamily: "groq",
+    effortValues: ["low", "medium", "high"],
+  },
+  xai: {
+    // Verified in @ai-sdk/xai's own source: `reasoningEffort` accepts
+    // "none"|"low"|"medium"|"high"|"xhigh" — no "max" — mapped onto the wire
+    // as `reasoning_effort`. No `defaultEffort`: xAI's own undeclared-effort
+    // default has not been checked.
+    effortFamily: "xai",
+    effortValues: ["low", "medium", "high", "xhigh"],
+  },
+  moonshotai: {
+    // Moonshot's own docs (platform.kimi.ai/docs/guide/use-reasoning-effort,
+    // 2026-11-17): Kimi K3 takes a top-level `reasoning_effort` on Chat
+    // Completions — exactly what @ai-sdk/openai-compatible's generic
+    // `reasoningEffort` field already sends — accepting only low|high|max,
+    // defaulting to **max** when the request omits it (same bug shape as
+    // minimax/MiniMax-M3.1-Flash: K3 always reasons, there is no "off").
+    // `providerOptionsName` for this package is the catalogue id ("moonshotai"),
+    // which is what makes this entry's effort land at all.
+    effortFamily: "openai-compatible",
+    effortValues: ["low", "high", "max"],
+    defaultEffort: "medium",
+  },
+  "zai-coding-plan": {
+    // Live-verified 2026-11-17 against the real API (not just docs): the
+    // same "grep this repo" prompt at effort "low" vs "max" produced 0 vs
+    // ~95 thinkingChars, no error either side. This is a DIFFERENT baseURL
+    // than the plain `zai` entry below (openai-compatible .../coding/paas/v4,
+    // not the anthropic-shaped endpoint `zai` is forced onto), so it is not
+    // affected by that entry's unresolved ambiguity.
+    effortFamily: "openai-compatible",
+    effortValues: ["low", "high", "max"],
+  },
+  "zhipuai-coding-plan": {
+    // Same vendor and npm package as `zai-coding-plan`, baseURL differing
+    // only by domain (open.bigmodel.cn vs api.z.ai) — also live-verified
+    // 2026-11-17, effort "low" ran clean with no error.
+    effortFamily: "openai-compatible",
+    effortValues: ["low", "high", "max"],
+  },
+  zhipuai: {
+    // Live-verified 2026-11-17 against the real API (not just assumed from
+    // zhipuai-coding-plan's sibling result): glm-4.6 at
+    // open.bigmodel.cn/api/paas/v4/chat/completions with `reasoning_effort`
+    // set — "low" produced 45 reasoning_content chars (8 reasoning tokens),
+    // "max" produced 11,517 chars (2,616 reasoning tokens), no error either
+    // side.
+    effortFamily: "openai-compatible",
+    effortValues: ["low", "high", "max"],
   },
   zai: {
     // models.dev lists zai as openai-compatible against .../paas/v4. z.ai also
@@ -106,8 +225,28 @@ const OVERRIDES: Record<string, Partial<ProviderCatalogueEntry>> = {
     // deliberately: that path accepts the cache breakpoints `applyMessageCaching`
     // sets, which the openai-compatible path has no way to express.
     npm: "@ai-sdk/anthropic",
-    baseURL: "https://api.z.ai/api/anthropic",
+    // Found 2026-11-17 running the trajectory suite against this entry for
+    // the first time (it had no credential configured before): @ai-sdk/
+    // anthropic appends `/messages` directly to `baseURL`, so this needs the
+    // `/v1` minimax's own entry already carries. Without it every real
+    // request hit `.../anthropic/messages` (no v1), which z.ai's gateway
+    // answers with HTTP 200 and a JSON error body
+    // (`{"code":500,"msg":"404 NOT_FOUND"}`) rather than a real 404 — the
+    // Anthropic SDK can't parse that as a response and silently produced an
+    // empty, zero-token assistant message instead of throwing. Confirmed
+    // live: curl against `.../anthropic/v1/messages` with the same body
+    // returns a real tool_use response; `.../anthropic/messages` 200s with
+    // the error payload above.
+    baseURL: "https://api.z.ai/api/anthropic/v1",
     defaultModel: "glm-5.2",
+    // Live-verified 2026-11-17 against the real API (not just docs, which
+    // disagreed): glm-5.2 against api.z.ai/api/anthropic with
+    // `output_config.effort` set — "low" produced 95 thinking chars, "max"
+    // produced 2129, same shape @ai-sdk/anthropic already sends for minimax.
+    // No `defaultEffort`: the undeclared default (no `thinking`/`output_config`
+    // at all) came back at 94 chars, so unlike minimax there is no vendor-max
+    // bug here to work around.
+    effortFamily: "anthropic",
   },
 };
 
@@ -191,10 +330,25 @@ function computeCatalogue(): ProviderCatalogueEntry[] {
   }
 
   const resolved: ProviderCatalogueEntry[] = [];
+  const skipped: string[] = [];
   for (const snapshot of byId.values()) {
     const entry = toEntry(snapshot);
-    if (!hasSdkFactory(entry.npm)) continue;
+    if (!hasSdkFactory(entry.npm)) {
+      skipped.push(`${entry.id} (${entry.npm})`);
+      continue;
+    }
     resolved.push(entry);
+  }
+  // opencode logs the same gap (`"Skipped models.dev APIs with entrypoints
+  // this build doesn't have"`) rather than dropping it silently — until now
+  // freecode's only sign a models.dev provider has no bundled SDK was reading
+  // this loop by hand. Debug-gated: this runs on every memo miss, which
+  // includes every `invalidateCatalogue()` refresh, not just process start.
+  if (skipped.length > 0) {
+    logger.debug(
+      `Skipped ${skipped.length} models.dev provider(s) with no bundled SDK`,
+      { providers: skipped },
+    );
   }
   return resolved;
 }

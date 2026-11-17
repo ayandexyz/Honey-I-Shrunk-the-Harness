@@ -116,8 +116,11 @@ import {
 } from "./verify-tests.js";
 import {
   MAX_TRUNCATED_TOOL_RETRIES,
+  noProgressReminder,
+  oscillationReminder,
   repeatedCallReminder,
   repeatedErrorReminder,
+  repeatedReasoningReminder,
   shouldNudgeTodo,
   todoNudgeReminder,
   truncatedToolCallReminder,
@@ -1146,6 +1149,39 @@ export class AgentLoop {
             { kind: "stuck", reason: healthAction.reason },
           );
         }
+        // 2x tier (B/C/D): force a text-only reply instead of aborting —
+        // see each signal's comment in loop-health.ts for why. Reuses the
+        // same one-reminder-per-run bookkeeping as the warn tier, under a
+        // distinct per-reason key so it still fires once even though the
+        // warn tier already used the same reason earlier in this run. Each
+        // reason gets its own specific reminder where one exists (naming
+        // the file for oscillation, the turn count for the others);
+        // wrapUpReminder is the fallback for any reason without one.
+        if (healthAction.action === "force_text") {
+          const forceKey = `${healthAction.reason}_force_text`;
+          if (!this.healthWarned.has(forceKey)) {
+            this.healthWarned.add(forceKey);
+            if (healthAction.reason === "oscillation_detected") {
+              const lastEdit = this.recentEdits[this.recentEdits.length - 1];
+              this.pendingReminders.push(
+                lastEdit
+                  ? oscillationReminder(
+                      lastEdit.file,
+                      this.state.loopHealth.oscillationScore,
+                    )
+                  : wrapUpReminder(),
+              );
+            } else if (healthAction.reason === "repeated_reasoning") {
+              this.pendingReminders.push(
+                repeatedReasoningReminder(
+                  this.state.loopHealth.repeatedReasoningScore,
+                ),
+              );
+            } else {
+              this.pendingReminders.push(wrapUpReminder());
+            }
+          }
+        }
         if (healthAction.action === "warn") {
           logger.debug(`[AgentLoop] Warning: ${healthAction.reason}`);
           const warnReason = healthAction.reason ?? "unknown";
@@ -1197,6 +1233,52 @@ export class AgentLoop {
                 ),
               );
             }
+          }
+          // B: same shape as A/E — one reminder per run. Until now this
+          // reason had no block at all, so a read-only exploration loop (no
+          // file changes, but varied tool calls that never trip A) got no
+          // signal between the threshold and whatever eventually cut the
+          // turn off — see `noProgressReminder`'s comment for the session
+          // that exposed this (22 turns of varied grep/read, no edits).
+          if (
+            !spent &&
+            healthAction.reason === "no_progress" &&
+            !this.healthWarned.has(healthAction.reason)
+          ) {
+            this.healthWarned.add(healthAction.reason);
+            this.pendingReminders.push(
+              noProgressReminder(this.state.loopHealth.stagnantTurns),
+            );
+          }
+          // C: same gap as B had — found by the same audit, same shape.
+          if (
+            !spent &&
+            healthAction.reason === "oscillation_detected" &&
+            !this.healthWarned.has(healthAction.reason)
+          ) {
+            const lastEdit = this.recentEdits[this.recentEdits.length - 1];
+            if (lastEdit) {
+              this.healthWarned.add(healthAction.reason);
+              this.pendingReminders.push(
+                oscillationReminder(
+                  lastEdit.file,
+                  this.state.loopHealth.oscillationScore,
+                ),
+              );
+            }
+          }
+          // D: same gap as B/C.
+          if (
+            !spent &&
+            healthAction.reason === "repeated_reasoning" &&
+            !this.healthWarned.has(healthAction.reason)
+          ) {
+            this.healthWarned.add(healthAction.reason);
+            this.pendingReminders.push(
+              repeatedReasoningReminder(
+                this.state.loopHealth.repeatedReasoningScore,
+              ),
+            );
           }
           if (!this.warnRecorded.has(warnReason)) {
             this.warnRecorded.add(warnReason);
@@ -2903,10 +2985,18 @@ export class AgentLoop {
       // Prefer streaming when the provider supports it AND we have a listener.
       // If either is missing, fall back to the one-shot execute() path so callers
       // and downstream code paths are unchanged.
-      // The turn before the iteration cap trips (see the wrap-up reminder):
-      // tools stay defined but cannot be called, so the run ends on a summary.
+      // The turn before the iteration cap trips (see the wrap-up reminder),
+      // OR signal B's `force_text` tier (see loop-health.ts — 2x stagnation
+      // in build mode, or readOnlyExplorationLimit in plan/review/explore):
+      // tools stay defined but cannot be called, so the run ends on a
+      // summary instead of looping indefinitely on varied-but-unproductive
+      // exploration that never trips signal A's exact-repetition check.
+      // Delegates to the same evaluator the health check above uses, so
+      // this can never drift from what actually triggered the reminder.
       const finalTurn =
-        this.state.iterationCount === this.config.maxIterations - 1;
+        this.state.iterationCount === this.config.maxIterations - 1 ||
+        this.loopHealthEvaluator.evaluate(this.state, this.config.heuristics)
+          .action === "force_text";
       if (aiProvider.stream) {
         let content = "";
         let thinking = "";
@@ -3985,14 +4075,18 @@ export class AgentLoop {
   // changes" — and reading a codebase (five reads in a row inside one turn)
   // is no longer indistinguishable from being stuck.
   //
-  // In a read-only mode the counter is not advanced at all. Nothing the agent
-  // is *permitted* to do can reset it there, so it would climb to the threshold
-  // on any exploration longer than five turns and stay there — reporting
-  // "no progress" for a mode whose entire job is to make no file changes.
-  // Measured, not assumed: a 6-turn explore case tripped it (Phase 2 probe).
+  // In a read-only mode the counter still advances — nothing the agent is
+  // *permitted* to do can ever reset it there, so by turn 6 it is already
+  // past the build-mode threshold and stays there for the rest of the run.
+  // That used to mean "never evaluate this counter in read-only mode at
+  // all" (Phase 2 probe: a legitimate 6-turn explore case tripped the old
+  // undifferentiated warn) — but loop-health.ts now reads mode itself and
+  // applies a separate, much higher limit (`readOnlyExplorationLimit`)
+  // instead of skipping the counter outright, so a read-only run still has
+  // *some* ceiling rather than none (see that limit's comment in types.ts
+  // for the session that exposed the gap: 21 turns, zero text, no signal).
   // ===========================================================================
   private advanceStagnation(madeFileChange: boolean): void {
-    if (isReadOnlyMode(this.state.agentMode)) return;
     this.state = {
       ...this.state,
       loopHealth: {

@@ -16,6 +16,7 @@ import type {
   LoopHeuristics,
   LoopAction,
 } from "../agent/types.js";
+import { isReadOnlyMode } from "../permission/mode-policy.js";
 
 export interface LoopHealthEvaluator {
   evaluate(state: SessionState, heuristics: LoopHeuristics): LoopAction;
@@ -48,15 +49,44 @@ export const createLoopHealthEvaluator = (): LoopHealthEvaluator => ({
     }
 
     // B. No file change for N *turns* — the counter is advanced once per turn
-    // by AgentLoop.advanceStagnation(), never per tool call.
-    if (health.stagnantTurns >= heuristics.stagnantTurnsThreshold) {
-      return { action: "warn", reason: "no_progress" };
+    // by AgentLoop.advanceStagnation(), never per tool call. Unlike A/C/D,
+    // the 2x tier is `force_text` rather than `stop`: a read-only
+    // exploration task (varied grep/read, never identical, so A never
+    // trips) legitimately has no file change to show, so ending the run
+    // with a bare "Loop stopped" would discard real findings the model
+    // already has. Forcing a text-only reply lets it answer with what it
+    // found instead (session that exposed this: 22 turns of varied
+    // grep/read, no edits, cut off only by the eval harness's own trial
+    // timeout — see noProgressReminder's comment in reminders.ts).
+    //
+    // plan/review/explore modes: "no file changed" is always true there, so
+    // the 1x `warn` tier would fire every single turn — noise, not signal.
+    // Only `force_text`, against a much higher, mode-specific limit, applies
+    // (see readOnlyExplorationLimit's comment in types.ts for the session
+    // that exposed THIS gap: 21 turns, zero loop-health signal at all, only
+    // the eval harness's own trial timeout — and it cut the model off
+    // mid-generation, with no chance to answer).
+    if (isReadOnlyMode(state.agentMode)) {
+      if (health.stagnantTurns >= heuristics.readOnlyExplorationLimit) {
+        return { action: "force_text", reason: "no_progress" };
+      }
+    } else {
+      if (health.stagnantTurns >= heuristics.stagnantTurnsThreshold * 2) {
+        return { action: "force_text", reason: "no_progress" };
+      }
+      if (health.stagnantTurns >= heuristics.stagnantTurnsThreshold) {
+        return { action: "warn", reason: "no_progress" };
+      }
     }
 
     // C. Oscillation detected - edit/revert/edit pattern. The score counts
     // reverts inside the recent-edit window, so it can fall as well as rise.
+    // 2x tier is `force_text`, not `stop`, for the same reason as B: the
+    // model has made real edits (just contradictory ones), and a bare "Loop
+    // stopped" would discard whatever understanding led to them instead of
+    // asking it to explain the conflict or commit to one side.
     if (health.oscillationScore >= heuristics.oscillationScoreThreshold * 2) {
-      return { action: "stop", reason: "oscillation_detected" };
+      return { action: "force_text", reason: "oscillation_detected" };
     }
     if (health.oscillationScore >= heuristics.oscillationScoreThreshold) {
       return { action: "warn", reason: "oscillation_detected" };
@@ -64,8 +94,11 @@ export const createLoopHealthEvaluator = (): LoopHealthEvaluator => ({
 
     // D. Repeated reasoning similarity - near-identical reasoning text for N
     // consecutive turns, tracked by AgentLoop.advanceReasoningSimilarity().
+    // 2x tier is `force_text`: toolChoice:"none" removes the only other
+    // option, which can itself break a thought-loop that kept recurring
+    // only because tool calls gave it somewhere to go instead of concluding.
     if (health.repeatedReasoningScore >= heuristics.reasoningSimilarityTurns * 2) {
-      return { action: "stop", reason: "repeated_reasoning" };
+      return { action: "force_text", reason: "repeated_reasoning" };
     }
     if (health.repeatedReasoningScore >= heuristics.reasoningSimilarityTurns) {
       return { action: "warn", reason: "repeated_reasoning" };

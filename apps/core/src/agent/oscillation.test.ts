@@ -131,7 +131,7 @@ test("a long run of forward edits to one file does not stop the loop", () => {
   assert.equal(health(loop).action, "continue");
 });
 
-test("a genuine revert cycle still stops the loop", () => {
+test("a genuine revert cycle forces a text-only reply, not a bare stop", () => {
   const loop = createAgentLoop("test-oscillation-revert");
   // Distinct content each cycle so the repeated-identical-tool detector, which
   // keys on tool+args, stays out of it and oscillation is what trips.
@@ -140,7 +140,10 @@ test("a genuine revert cycle still stops the loop", () => {
     applyEdit(loop, "/p/a.ts", `B${i}`, `A${i}`);
   }
   const action = health(loop);
-  assert.equal(action.action, "stop");
+  // Not "stop": the model has made real (if contradictory) edits, and a bare
+  // "Loop stopped" would discard whatever led to them instead of asking it
+  // to explain the conflict or commit to one side.
+  assert.equal(action.action, "force_text");
   assert.equal(action.reason, "oscillation_detected");
 });
 

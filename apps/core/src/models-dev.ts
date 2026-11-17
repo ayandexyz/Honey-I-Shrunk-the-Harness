@@ -72,6 +72,18 @@ export interface ModelCost {
   cacheWrite?: number;
 }
 
+/**
+ * A model's reasoning-effort capability, as models.dev publishes it per
+ * model (not per provider) — the same field opencode's `supports()` reads
+ * to drive its own effort dispatch. "effort" is the only type freecode's
+ * `EffortLevel` scale currently maps onto; "toggle"/"budget_tokens" are
+ * carried through for completeness but nothing yet consumes them.
+ */
+export type ReasoningOption =
+  | { readonly type: "effort"; readonly values: readonly string[] }
+  | { readonly type: "toggle" }
+  | { readonly type: "budget_tokens"; readonly min?: number; readonly max?: number };
+
 export interface ProviderModel {
   id: string;
   name: string;
@@ -82,6 +94,30 @@ export interface ProviderModel {
   cost?: ModelCost;
   /** Input modalities, e.g. ["text", "image", "pdf"]. Absent if unreported. */
   inputModalities?: string[];
+  /** Whether this specific model supports reasoning at all. */
+  reasoning?: boolean;
+  /**
+   * Whether this model accepts a `temperature` parameter. Absent means
+   * models.dev has no opinion — treated as "accepts it", the existing
+   * default — so this can only ever suppress a param for a model that
+   * explicitly declares it unsupported, never wrongly add one.
+   */
+  temperature?: boolean;
+  /**
+   * Whether this model can be sent tool definitions at all. Same
+   * fail-open-on-absence rule as `temperature`: only ever suppresses tools
+   * for a model models.dev explicitly marks as `tool_call: false`.
+   */
+  toolCall?: boolean;
+  /**
+   * How to drive that reasoning, with the exact accepted values when the
+   * type is "effort" — e.g. a specific GLM version may only take
+   * ["none","high","xhigh"], not the full low..max scale. Absent or empty
+   * means models.dev has nothing more specific than `reasoning` itself; a
+   * caller resolving an effort value falls back to its own hand-verified
+   * default for that case rather than treating absence as "no reasoning".
+   */
+  reasoningOptions?: readonly ReasoningOption[];
 }
 
 export interface Provider {
@@ -100,7 +136,8 @@ export interface Provider {
   env?: string[];
 }
 
-let cache: { data: Provider[]; timestamp: number } | null = null;
+let cache: { data: Provider[]; timestamp: number; etag?: string } | null =
+  null;
 
 function ensureCacheDir(): void {
   if (!fs.existsSync(CACHE_DIR)) {
@@ -108,24 +145,38 @@ function ensureCacheDir(): void {
   }
 }
 
-function loadFromDisk(): Provider[] | null {
+/** The raw disk cache regardless of TTL — the only way to read a stale
+ *  entry's `etag` for a conditional refetch. */
+function loadRawFromDisk(): {
+  data: Provider[];
+  timestamp: number;
+  etag?: string;
+} | null {
   try {
     const file = cacheFile();
     if (!fs.existsSync(file)) return null;
-    const content = fs.readFileSync(file, "utf-8");
-    const cached = JSON.parse(content);
-    if (Date.now() - cached.timestamp > CACHE_TTL_MS) return null;
-    return cached.data;
+    const cached = JSON.parse(fs.readFileSync(file, "utf-8"));
+    return Array.isArray(cached?.data) ? cached : null;
   } catch {
     return null;
   }
 }
 
-function saveToDisk(providers: Provider[]): void {
+function loadFromDisk(): Provider[] | null {
+  const cached = loadRawFromDisk();
+  if (!cached || Date.now() - cached.timestamp > CACHE_TTL_MS) return null;
+  return cached.data;
+}
+
+function saveToDisk(providers: Provider[], etag?: string): void {
   ensureCacheDir();
   fs.writeFileSync(
     cacheFile(),
-    JSON.stringify({ data: providers, timestamp: Date.now() }, null, 2),
+    JSON.stringify(
+      { data: providers, timestamp: Date.now(), ...(etag ? { etag } : {}) },
+      null,
+      2,
+    ),
   );
 }
 
@@ -166,7 +217,79 @@ export function readCachedProvidersWrittenAt(): Date | null {
 }
 
 /**
- * One attempt: GET the catalogue as text, or throw.
+ * A model's reasoning-effort options straight off the in-memory/disk cache
+ * `readCachedProviders` already reads for provider identity — synchronous
+ * and network-free on purpose. `buildGenerateOptions` calls this on every
+ * single model request; routing it through the TTL-respecting async
+ * `getProviderModels` path would put a network round trip on freecode's
+ * hottest path, which is exactly the kind of per-call latency this whole
+ * effort-tuning feature exists to cut. A stale answer here is still better
+ * than a live one that cost the request a few hundred extra milliseconds.
+ *
+ * Exact match first, then case-insensitive — same lookup shape as
+ * `findModelLimit`/`modelSupportsImages`.
+ */
+export function findModelReasoningOptions(
+  providerId: string,
+  modelId: string,
+): readonly ReasoningOption[] | undefined {
+  const providers = readCachedProviders();
+  const provider = providers?.find((p) => p.id === providerId);
+  if (!provider) return undefined;
+  const exact = provider.models.find((m) => m.id === modelId);
+  if (exact) return exact.reasoningOptions;
+  const lower = modelId.toLowerCase();
+  return provider.models.find((m) => m.id.toLowerCase() === lower)
+    ?.reasoningOptions;
+}
+
+function findModelSync(
+  providerId: string,
+  modelId: string,
+): ProviderModel | undefined {
+  const providers = readCachedProviders();
+  const provider = providers?.find((p) => p.id === providerId);
+  if (!provider) return undefined;
+  const exact = provider.models.find((m) => m.id === modelId);
+  if (exact) return exact;
+  const lower = modelId.toLowerCase();
+  return provider.models.find((m) => m.id.toLowerCase() === lower);
+}
+
+/**
+ * Whether `providerId/modelId` accepts a `temperature` parameter, straight
+ * off the same synchronous cache `findModelReasoningOptions` reads — same
+ * hot-path reasoning: `buildGenerateOptions` is sync, and this must not add
+ * a network round trip to every request. Unknown model or no opinion from
+ * models.dev both default to `true` (the existing, pre-this-change
+ * behavior) — this can only ever suppress the field, never add it where it
+ * wasn't already being sent.
+ */
+export function modelSupportsTemperature(
+  providerId: string,
+  modelId: string,
+): boolean {
+  return findModelSync(providerId, modelId)?.temperature !== false;
+}
+
+/**
+ * Whether `providerId/modelId` can be sent tool definitions at all. Same
+ * fail-open-on-unknown rule as `modelSupportsTemperature` — this is for
+ * models.dev's `tool_call: false`, not for freecode's own tool-use gating
+ * (permission modes, `agentMode`), which stays exactly as it is.
+ */
+export function modelSupportsToolCalls(
+  providerId: string,
+  modelId: string,
+): boolean {
+  return findModelSync(providerId, modelId)?.toolCall !== false;
+}
+
+/**
+ * One attempt: GET the catalogue as text, or throw. `undefined` body means a
+ * 304 — `etag` sent and the server confirmed nothing changed, same
+ * conditional-request shape opencode's own models.dev client uses (its
+ * `fetchPath`, `packages/core/src/models-dev.ts`).
  *
  * `fetch` rather than `https.get` — it carries a real timeout via
  * `AbortSignal.timeout` instead of the socket-timeout dance, and it honours
@@ -174,24 +297,35 @@ export function readCachedProvidersWrittenAt(): Date | null {
  * mirror for an air-gapped install is as likely to be plain http on a private
  * network as it is to be https.
  */
-async function fetchOnce(url: string): Promise<string> {
+async function fetchOnce(
+  url: string,
+  etag?: string,
+): Promise<{ body: string | undefined; etag?: string }> {
   const res = await fetch(url, {
     signal: AbortSignal.timeout(fetchTimeoutMs()),
-    headers: { accept: "application/json" },
+    headers: {
+      accept: "application/json",
+      ...(etag ? { "if-none-match": etag } : {}),
+    },
   });
+  if (res.status === 304) return { body: undefined, etag };
   if (!res.ok) {
     throw new Error(`models.dev returned ${res.status}`);
   }
-  return await res.text();
+  return { body: await res.text(), etag: res.headers.get("etag") ?? undefined };
 }
 
-async function fetchFromNetwork(): Promise<Provider[]> {
+/** `undefined` providers means a 304 — the caller's existing cache still
+ *  holds the current catalogue. */
+async function fetchFromNetwork(
+  etag?: string,
+): Promise<{ providers: Provider[] | undefined; etag?: string }> {
   const url = modelsUrl();
   let lastError: unknown;
-  let body: string | undefined;
+  let result: { body: string | undefined; etag?: string } | undefined;
   for (let attempt = 0; attempt < FETCH_ATTEMPTS; attempt++) {
     try {
-      body = await fetchOnce(url);
+      result = await fetchOnce(url, etag);
       break;
     } catch (err) {
       lastError = err;
@@ -202,8 +336,45 @@ async function fetchFromNetwork(): Promise<Provider[]> {
       }
     }
   }
-  if (body === undefined) throw lastError;
-  return parseCatalogue(body);
+  if (result === undefined) throw lastError;
+  if (result.body === undefined) return { providers: undefined, etag: result.etag };
+  return { providers: parseCatalogue(result.body), etag: result.etag };
+}
+
+/**
+ * `modelData.reasoning_options` -> `ReasoningOption[]`, dropping anything
+ * that doesn't match a recognized `type` rather than throwing — models.dev
+ * is a third party, and a field it adds or reshapes later should degrade to
+ * "no options" here, not take the whole provider list down with it. For an
+ * "effort" entry, `null`/"null" values are filtered the same way opencode's
+ * own ingestion does (models.dev's effort arrays use a literal null to mark
+ * an unsupported slot in some models' lists).
+ */
+function parseReasoningOptions(raw: unknown): ReasoningOption[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const options: ReasoningOption[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const type = (entry as any).type;
+    if (type === "effort") {
+      const values = Array.isArray((entry as any).values)
+        ? (entry as any).values.filter(
+            (v: unknown): v is string =>
+              typeof v === "string" && v !== "null",
+          )
+        : [];
+      options.push({ type: "effort", values });
+    } else if (type === "toggle") {
+      options.push({ type: "toggle" });
+    } else if (type === "budget_tokens") {
+      options.push({
+        type: "budget_tokens",
+        min: typeof (entry as any).min === "number" ? (entry as any).min : undefined,
+        max: typeof (entry as any).max === "number" ? (entry as any).max : undefined,
+      });
+    }
+  }
+  return options.length > 0 ? options : undefined;
 }
 
 /** models.dev's api.json -> the shape the rest of freecode reads. */
@@ -258,6 +429,19 @@ function parseCatalogue(body: string): Provider[] {
         inputModalities: Array.isArray(modelData.modalities?.input)
           ? (modelData.modalities.input as string[])
           : undefined,
+        reasoning:
+          typeof modelData.reasoning === "boolean"
+            ? modelData.reasoning
+            : undefined,
+        reasoningOptions: parseReasoningOptions(modelData.reasoning_options),
+        temperature:
+          typeof modelData.temperature === "boolean"
+            ? modelData.temperature
+            : undefined,
+        toolCall:
+          typeof modelData.tool_call === "boolean"
+            ? modelData.tool_call
+            : undefined,
       });
     }
 
@@ -286,15 +470,31 @@ export async function getProviders(forceRefresh = false): Promise<Provider[]> {
     return cache.data;
   }
 
+  // A stale (TTL-expired) disk cache still carries a usable `etag` — sending
+  // it means models.dev answers 304 and we skip re-downloading and
+  // re-parsing the multi-MB catalogue for a body that didn't change.
+  const staleCache = diskCache ? null : loadRawFromDisk();
+  const priorEtag = forceRefresh ? undefined : staleCache?.etag;
+
   try {
-    const providers = await fetchFromNetwork();
-    cache = { data: providers, timestamp: Date.now() };
-    saveToDisk(providers);
+    const { providers, etag } = await fetchFromNetwork(priorEtag);
+    if (providers === undefined) {
+      // 304: reuse the unchanged body, but refresh the timestamp so the next
+      // check doesn't immediately refetch, and re-save with the (possibly
+      // rotated) etag.
+      const unchanged = staleCache!.data;
+      cache = { data: unchanged, timestamp: Date.now(), etag };
+      saveToDisk(unchanged, etag);
+      return unchanged;
+    }
+    cache = { data: providers, timestamp: Date.now(), etag };
+    saveToDisk(providers, etag);
     return providers;
   } catch (err) {
     // If network fails but we have disk cache, use it
-    if (diskCache) {
-      cache = { data: diskCache, timestamp: Date.now() };
+    const fallback = diskCache ?? staleCache?.data;
+    if (fallback) {
+      cache = { data: fallback, timestamp: Date.now() };
       return cache.data;
     }
     throw err;
