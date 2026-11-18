@@ -18,8 +18,14 @@
 // the tail (the recent tools) rather than the head.
 // =============================================================================
 
-/** Chars kept from each tool's result. Enough for an error or a diff stat. */
-const MAX_RESULT_CHARS = 200;
+/**
+ * Chars kept from each tool's result: pi's TOOL_RESULT_MAX_CHARS (opencode
+ * keeps 1,250). At 200 a summary could name the files a session read but
+ * not what was in them, so a session that only reads and greps re-read the
+ * same code after every compaction (50f4745d / 8b4b7a32: two compactions
+ * each, ~50 minutes of exploring, no edit and no answer before the end).
+ */
+const MAX_RESULT_CHARS = 2_000;
 /** Chars kept from each tool's arguments — a path or a command, not a file. */
 const MAX_ARGS_CHARS = 200;
 
@@ -37,6 +43,14 @@ function clip(text: string, maxChars: number): string {
   return oneLine.length <= maxChars
     ? oneLine
     : `${oneLine.slice(0, maxChars)}…`;
+}
+
+// `read`'s envelope. The path is already in the args, and at the old
+// 200-char budget this was most of what survived of a file.
+const READ_ENVELOPE = /^<path>[^\n]*<\/path>\n<type>\w+<\/type>\n(?:<content>\n)?/;
+
+function stripEnvelope(output: string): string {
+  return output.replace(READ_ENVELOPE, "").replace(/\n?<\/content>$/, "");
 }
 
 function renderArgs(args: unknown): string {
@@ -63,7 +77,7 @@ export function renderToolActivity(
       const head = args ? `Tool ${entry.tool}: ${args}` : `Tool ${entry.tool}:`;
       if (entry.error) return `${head} -> failed: ${clip(entry.error, MAX_RESULT_CHARS)}`;
       if (!entry.output) return `${head} -> ok`;
-      return `${head} -> ${clip(entry.output, MAX_RESULT_CHARS)}`;
+      return `${head} -> ${clip(stripEnvelope(entry.output), MAX_RESULT_CHARS)}`;
     });
 
   let total = lines.reduce((sum, line) => sum + line.length + 1, 0);

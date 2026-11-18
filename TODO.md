@@ -193,11 +193,11 @@ that page's **Known gaps**.
 ### Real fixes
 
 - [ ] **`ExecuteResult.thinking` is dead for every provider.** The generic driver
-      sets `thinking: undefined` in `execute()` (`generic-provider.ts:357`);
+      sets `thinking: undefined` in `execute()` (`generic-provider.ts:384`);
       reasoning reaches the loop only as
       `thinking_delta` on the streaming path, so a non-streaming turn loses
-      extended thinking silently. Related: there is no thinking-budget or
-      reasoning-effort field anywhere in `ExecuteOptions`.
+      extended thinking silently. (`ExecuteOptions.effort` now exists —
+      `providers/effort.ts` — but a thinking-budget field still does not.)
 ## Docs-audit findings (tool system — 2026-08-23)
 
 Found while writing `apps/docs/app/internals/tools`. Each is also listed in that

@@ -42,6 +42,7 @@ left out.
 
 | Variable | Default | Purpose |
 |---|---|---|
+| `FREECODE_STAGNATION_FORCE_TEXT` | off | `1` lets signal B (no file change) take a build-mode run's tools away at 2× `stagnantTurnsThreshold` (10 turns) and force a text answer (`effect/loop-health.ts`). Off because reads and bash runs never reset the counter, so ordinary debugging reaches 10 turns before its first edit. Read-only modes always use `readOnlyExplorationLimit` (20). `eval ab`. |
 | `FREECODE_REPEATED_ERROR` | on | `0` turns off signal E, the "same error back after edits" detector and its one nudge (`agent/repeated-error.ts`). `eval ab`. |
 | `FREECODE_VERIFY_TESTS` | on | `0` skips the finish-time test run for changes of ≥3 files (`verify.tests: false` in settings). Runs each changed file's nearest `package.json` `test` script (`agent/verify-tests.ts`). `eval ab`. |
 | `FREECODE_VERIFY_TEST_COMMAND` | discovered | Test command to run at finish instead of each changed file's package `test` script (`verify.testCommand` in settings). |
@@ -107,6 +108,7 @@ left out.
 
 | Variable | Default | Purpose |
 |---|---|---|
+| `FREECODE_DEFAULT_EFFORT` | on | `0` stops sending a catalogue entry's `defaultEffort` (minimax and moonshotai: `medium`) when the session has not picked an effort, so the vendor's own default (max for both) applies (`providers/effort.ts`). Read per request. `eval ab`. |
 | `FREECODE_ANTHROPIC_AUTH` | API key if one is configured, else a stored login | `oauth` uses your Claude Pro/Max subscription login, `api-key` the API key. Beats `providers.anthropic.authMode` in config. |
 | `FREECODE_OPENAI_AUTH` | stored choice | Same for OpenAI: `oauth` uses your ChatGPT Plus/Pro login through the Codex backend. |
 | `FREECODE_GEMINI_WEB_TOOLS` | on | `0` turns off the text-protocol tool bridge for the Gemini web-session provider. |

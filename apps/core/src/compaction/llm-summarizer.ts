@@ -17,11 +17,14 @@ Output GitHub-flavored markdown using exactly these section headers, in this ord
 ## In Progress
 ## Blocked
 ## Decisions
+## Findings
 ## Relevant Files
 ## Next Steps
 
 Rules:
 - Be factual and terse. Do not invent progress that isn't in the transcript.
+- Under "Goal", keep the user's request or question in their own words.
+- Under "Findings", record what the tool results established that the next step relies on: where things live (path:line), how the code works, answers already found. The transcript is about to be dropped, so anything not written here has to be read again.
 - Preserve exact file paths, identifiers, commands, and unresolved errors.
 - Under "Blocked", list only real, still-open blockers.
 - If a section has nothing, write "- (none)".`;
@@ -38,6 +41,11 @@ export function createLlmSummarizer(
 ): LlmSummarize {
   return async (input) => {
     const parts: string[] = [];
+    if (input.goal) {
+      parts.push(
+        `The user's original request (kept verbatim in the conversation, not in the transcript below):\n\n${input.goal}`,
+      );
+    }
     if (input.previousSummary) {
       parts.push(
         `Previous summary (carry forward and update, don't repeat verbatim):\n\n${input.previousSummary}`,

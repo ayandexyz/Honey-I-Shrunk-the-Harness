@@ -30,6 +30,12 @@ import {
 } from "../agent/task-notify.js";
 import { recordEnd, recordStart } from "../agent/background-ledger.js";
 import { scratchScriptHint } from "./scratch-hint.js";
+import {
+  createStreamRedactor,
+  heldSecretPrefix,
+  knownSecrets,
+  redactKnownSecrets,
+} from "./known-secrets.js";
 
 interface BashParams {
   command: string;
@@ -224,21 +230,33 @@ export function trackShell(
   // Set once the start is recorded; the exit handler can run before that
   // only for a shell that died instantly, which then never needs a record.
   let ledgered = false;
+  // The live stream to the `/shells` panel, credentials redacted across
+  // chunk boundaries (tools/known-secrets.ts). `hooks.onData` (a monitor's
+  // matcher) still sees the raw chunk; what it reports is redacted in
+  // notifyTask.
+  const live = createStreamRedactor();
   const shell = launch(registry, {
     command: params.command,
     cwd,
     owner: sessionId,
     sandbox: shellSandboxFor(ctx),
     onData: (id, chunk) => {
-      BusEvents.stream(rootId, {
-        type: "shell_output",
-        shellId: id,
-        chunk,
-      });
+      const safe = live.push(chunk);
+      if (safe) {
+        BusEvents.stream(rootId, {
+          type: "shell_output",
+          shellId: id,
+          chunk: safe,
+        });
+      }
       hooks.onData?.(id, chunk);
     },
     onExit: (id, status, exitCode) => {
       if (status === "running") return;
+      const rest = live.end();
+      if (rest) {
+        BusEvents.stream(rootId, { type: "shell_output", shellId: id, chunk: rest });
+      }
       BusEvents.stream(rootId, {
         type: "shell_exit",
         shellId: id,
@@ -394,11 +412,16 @@ function runForeground(
     // so a three-minute build reports progress instead of looking hung. Only
     // the tail is sent — the full output still goes back at completion.
     const canStream = Boolean(ctx.sessionId && ctx.toolCallId);
+    const secrets = canStream ? knownSecrets() : [];
     let tailDirty = false;
     const flushTail = (): void => {
       if (!tailDirty || !ctx.sessionId || !ctx.toolCallId) return;
       tailDirty = false;
-      const lines = (stdout + stderr)
+      // Redacted before lines are cut to MAX_LINE_LEN, so a cut never leaves
+      // half a key on screen; a key still being printed waits a tick.
+      const raw = stdout + stderr;
+      const visible = raw.slice(0, raw.length - heldSecretPrefix(raw, secrets));
+      const lines = redactKnownSecrets(visible, secrets)
         .split("\n")
         .filter((l) => l.trim())
         .slice(-LIVE_TAIL_LINES)

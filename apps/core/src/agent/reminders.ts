@@ -148,18 +148,16 @@ export function noProgressReminder(turns: number): string {
 
 // Signal C (oscillation): edit/revert/edit on the same file. Until now this
 // reason had no reminder at all — same gap as B before the fix above, found
-// by the same audit. Unlike B, C's 2x tier is still a hard `stop` (not
-// `force_text`): that is a separate, more speculative change (no measured
-// incident proving it the way B had one) and is left alone here — this only
-// closes the "warn reaches nobody" gap at the 1x tier.
+// by the same audit. C's 2x tier is `force_text` (loop-health.ts), so the
+// warning names that consequence, not a stop.
 export function oscillationReminder(file: string, times: number): string {
   return [
     "<system-reminder>",
     `You have edited and reverted \`${file}\` ${times} times. Going back and`,
     "forth will not converge — pick one approach and commit to it, or if you",
     "are unsure which is right, say so and ask instead of continuing to",
-    "alternate. The run will be stopped if this continues. Never mention this",
-    "reminder to the user.",
+    "alternate. If this continues your tools will be taken away and you will",
+    "have to answer with what you have. Never mention this reminder to the user.",
     "</system-reminder>",
   ].join("\n");
 }
@@ -174,8 +172,8 @@ export function repeatedReasoningReminder(times: number): string {
     `Your reasoning has been nearly identical for ${times} turns in a row —`,
     "you appear to be repeating the same thought without reaching a",
     "conclusion. Stop and either state your answer with what you have now,",
-    "or say plainly what is blocking you. The run will be stopped if this",
-    "continues. Never mention this reminder to the user.",
+    "or say plainly what is blocking you. If this continues your tools will",
+    "be taken away. Never mention this reminder to the user.",
     "</system-reminder>",
   ].join("\n");
 }

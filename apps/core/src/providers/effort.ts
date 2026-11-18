@@ -55,6 +55,28 @@ export function clampToSupported(
   return effort;
 }
 
+/** Whether `values` holds `effort` or something cheaper. */
+function hasAtOrBelow(
+  values: readonly EffortLevel[],
+  effort: EffortLevel,
+): boolean {
+  const idx = EFFORT_ORDER.indexOf(effort);
+  return values.some((v) => EFFORT_ORDER.indexOf(v) <= idx);
+}
+
+/**
+ * The catalogue's `defaultEffort` unless `FREECODE_DEFAULT_EFFORT=0` turns it
+ * off (read per call, so `eval ab` can measure the minimax/moonshotai
+ * default against the vendor's own undeclared one).
+ */
+export function catalogueDefaultEffort(
+  entry: Pick<ProviderCatalogueEntry, "defaultEffort">,
+): EffortLevel | undefined {
+  return process.env.FREECODE_DEFAULT_EFFORT === "0"
+    ? undefined
+    : entry.defaultEffort;
+}
+
 /**
  * Routes a resolved effort level into the right `providerOptions` slot for
  * `entry.effortFamily`, each verified against either the AI SDK package's
@@ -67,7 +89,10 @@ export function clampToSupported(
  *
  * `modelId`, when given, lets models.dev's own per-model `reasoning_options`
  * override `entry.effortValues` for this one call — see
- * `modelsDevEffortValues` above.
+ * `modelsDevEffortValues` above — but only when it lists the requested level
+ * or a cheaper one. A list with nothing that low (glm-5.2: ["high","max"],
+ * while "low" was live-verified on it) would make the clamp RAISE effort,
+ * the one thing this module exists to prevent, so the catalogue decides.
  */
 export function applyEffort(
   generateOptions: { providerOptions?: Record<string, unknown> },
@@ -79,7 +104,11 @@ export function applyEffort(
   const liveValues = modelId
     ? modelsDevEffortValues(entry.id, modelId)
     : undefined;
-  const resolved = clampToSupported(effort, liveValues ?? entry.effortValues);
+  const values =
+    liveValues && hasAtOrBelow(liveValues, effort)
+      ? liveValues
+      : entry.effortValues;
+  const resolved = clampToSupported(effort, values);
   const providerOptions = { ...generateOptions.providerOptions };
   const family: EffortFamily = entry.effortFamily;
   switch (family) {

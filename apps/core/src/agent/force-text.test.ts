@@ -68,6 +68,8 @@ test("2x stagnation forces a text-only reply instead of looping indefinitely", a
     }),
   });
 
+  // Build mode's force_text tier is opt-in (loop-health.ts).
+  process.env.FREECODE_STAGNATION_FORCE_TEXT = "1";
   const runtime = makeRuntime(makeTestLayer({}));
   try {
     const projectPath = mkdtempSync(join(tmpdir(), "freecode-force-text-test-"));
@@ -97,7 +99,9 @@ test("2x stagnation forces a text-only reply instead of looping indefinitely", a
     // The run ends once a turn is forced text-only.
     const trippedIndex = calls.findIndex((c) => c.toolChoice === "none");
     assert.ok(trippedIndex >= 0, `expected some turn to be forced text-only; got ${JSON.stringify(calls.map((c) => c.toolChoice))}`);
-    assert.match(calls[trippedIndex].ephemeralTail ?? "", /Do not call any more tools/);
+    // Stagnation tripped it, not the iteration cap (tripAt + 10).
+    assert.ok(trippedIndex <= tripAt, `forced at call ${trippedIndex}, expected by ${tripAt}`);
+    assert.match(calls[trippedIndex].ephemeralTail ?? "", /stop exploring and/);
 
     // No runaway: the run ends at the forced turn, not beyond it.
     assert.equal(calls.length, trippedIndex + 1);
@@ -105,6 +109,7 @@ test("2x stagnation forces a text-only reply instead of looping indefinitely", a
     // Earlier turns were not forced.
     assert.equal(calls[0].toolChoice, undefined);
   } finally {
+    delete process.env.FREECODE_STAGNATION_FORCE_TEXT;
     await runtime.dispose();
   }
 });

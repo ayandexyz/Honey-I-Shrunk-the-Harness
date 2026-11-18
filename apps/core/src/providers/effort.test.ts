@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { applyEffort, clampToSupported } from "./effort.js";
+import { applyEffort, catalogueDefaultEffort, clampToSupported } from "./effort.js";
 
 test("clampToSupported: a supported value passes through unchanged", () => {
   assert.equal(clampToSupported("high", ["low", "high"]), "high");
@@ -58,4 +58,11 @@ test("applyEffort: merges into providerOptions rather than clobbering an existin
   assert.deepEqual(opts.providerOptions, {
     anthropic: { somethingElse: true, effort: "high" },
   });
+});
+
+test("catalogueDefaultEffort: FREECODE_DEFAULT_EFFORT=0 turns the catalogue default off", (t) => {
+  t.after(() => delete process.env.FREECODE_DEFAULT_EFFORT);
+  assert.equal(catalogueDefaultEffort({ defaultEffort: "medium" }), "medium");
+  process.env.FREECODE_DEFAULT_EFFORT = "0";
+  assert.equal(catalogueDefaultEffort({ defaultEffort: "medium" }), undefined);
 });

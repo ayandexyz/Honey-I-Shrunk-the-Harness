@@ -213,10 +213,16 @@ export class MemoryService {
     }
 
     const previousSummary = this.state.summaries.at(-1)?.content;
+    // The head carve-out keeps the founding request out of `summarize`;
+    // both summarizers still need it to state the goal.
+    const goal = selected.summarize.some((m) => m.role === "user")
+      ? undefined
+      : selected.preserve.find((m) => m.role === "user")?.content;
     const summarizeInput = {
       sessionId: this.state.sessionId,
       previousSummary,
       messages: selected.summarize,
+      ...(goal ? { goal } : {}),
     };
     let summary = summarizeMessages(summarizeInput);
     if (options.llmSummarize) {

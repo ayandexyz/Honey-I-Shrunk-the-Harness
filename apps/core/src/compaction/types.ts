@@ -32,8 +32,9 @@ export interface CompactionConfig {
   maxPreserveRecentTokens: number;
   /**
    * Total chars of tool transcript kept for one turn (tool-transcript.ts).
-   * Sized for a turn, not a single output: at ~450 chars per tool line this
-   * carries roughly a dozen calls, and drops the oldest first when it can't.
+   * Sized for a turn, not a single output: a tool line is at most ~2.2K
+   * chars, so this carries a parallel batch of four or five full reads (more
+   * short calls), and drops the oldest first when it can't.
    */
   maxToolOutputChars: number;
   /**
@@ -85,7 +86,7 @@ export const DEFAULT_COMPACTION_CONFIG: CompactionConfig = {
   autoCompactBufferTokens: 13_000,
   preserveRecentTurns: 2,
   maxPreserveRecentTokens: 8_000,
-  maxToolOutputChars: 4_000,
+  maxToolOutputChars: 10_000,
   maxPreserveHeadTokens: 2_000,
   // Small, deliberately: jcode's equivalent default is 10, but jcode only
   // applies its cooldown to a predictive trigger that fires ahead of real

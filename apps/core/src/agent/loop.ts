@@ -1177,6 +1177,11 @@ export class AgentLoop {
                   this.state.loopHealth.repeatedReasoningScore,
                 ),
               );
+            } else if (healthAction.reason === "no_progress") {
+              // Not wrapUpReminder: that one blames the iteration limit.
+              this.pendingReminders.push(
+                noProgressReminder(this.state.loopHealth.stagnantTurns),
+              );
             } else {
               this.pendingReminders.push(wrapUpReminder());
             }
@@ -2216,14 +2221,6 @@ export class AgentLoop {
         systemBlocks.map((b) => b.text).join("\n"),
       );
 
-      // The compaction summary — how the model knows what happened before a
-      // compaction trimmed the history. Deliberately the summary ALONE, never
-      // with `recentMessages` beside it (the deleted renderPromptMemoryContext
-      // rendered both): those grow every turn and are already present in the history verbatim, so
-      // including them both duplicates content and rewrites the prefix on every
-      // request. The summary alone changes only when compaction runs.
-      const compactionSummary = this.memory.getPromptContext().summary;
-
       // Dynamic context (file tree + clock + memory) is inlined as the
       // first user message below, NOT as a system block — see the prepend in
       // callProviderOnce. Same shape as Claude Code's
@@ -2342,10 +2339,10 @@ export class AgentLoop {
       // gate) into this turn's prompt. Transient — never persisted to history.
       const reminderText = this.pendingReminders.join("\n\n");
       this.pendingReminders = [];
-      // Session-only system block: the compaction summary alone. It changes
-      // only when compaction runs, and compaction already documents its
-      // invalidation — so the system param stays byte-stable between
-      // compactions.
+      // Session-only system blocks, used only by the FREECODE_EPHEMERAL_TAIL=0
+      // measurement path below. The compaction summary is no longer one of
+      // them: it rides as a message (see compactionSummaryMessage), so the
+      // system param is byte-stable across compactions too.
       //
       // Memory / todos / reminders used to sit here too, which was the D2
       // "unexpected_creation" bug: system precedes every message, so any
@@ -2361,14 +2358,6 @@ export class AgentLoop {
       // turn — the ab runner flips it per side after boot.
       const tailEnabled = process.env.FREECODE_EPHEMERAL_TAIL !== "0";
       const sessionBlocks = [
-        ...(compactionSummary
-          ? [
-              {
-                text: `Compacted session summary:\n${compactionSummary}${this.restoredFiles ? `\n\n${this.restoredFiles}` : ""}`,
-                cache: false,
-              },
-            ]
-          : []),
         ...(!tailEnabled && memoryBlock
           ? [{ text: memoryBlock, cache: false }]
           : []),
@@ -2902,8 +2891,10 @@ export class AgentLoop {
       // every turn is the same prefix-invalidation bug in another guise.
       timestamp: 0,
     };
+    const summaryMessage = this.compactionSummaryMessage();
     const prunedMessages = this.pruneHistoryToolResults([
       dynamicUserMessage,
+      ...(summaryMessage ? [summaryMessage] : []),
       ...messages,
     ]);
     // Prompt-cache awareness (jcode #9): warn before a send that will likely
@@ -2986,8 +2977,9 @@ export class AgentLoop {
       // If either is missing, fall back to the one-shot execute() path so callers
       // and downstream code paths are unchanged.
       // The turn before the iteration cap trips (see the wrap-up reminder),
-      // OR signal B's `force_text` tier (see loop-health.ts — 2x stagnation
-      // in build mode, or readOnlyExplorationLimit in plan/review/explore):
+      // OR a loop-health `force_text` tier (see loop-health.ts — B's
+      // readOnlyExplorationLimit in plan/review/explore, 2x stagnation in
+      // build mode only with FREECODE_STAGNATION_FORCE_TEXT=1, and C/D at 2x):
       // tools stay defined but cannot be called, so the run ends on a
       // summary instead of looping indefinitely on varied-but-unproductive
       // exploration that never trips signal A's exact-repetition check.
@@ -3679,6 +3671,10 @@ export class AgentLoop {
             hookContext,
             "permission_prompt",
           );
+          const turnId = `turn-${this.state.turnCount}`;
+          const mode = this.state.agentMode ?? "build";
+          this.recorder.recordPermissionAsked(toolCall.tool, toolCall.id, mode, turnId);
+          const askedAt = Date.now();
           const outcome = this.permissionSettings
             ? await promptForPermission({
                 toolName: toolCall.tool,
@@ -3690,7 +3686,19 @@ export class AgentLoop {
                   evaluation.matchedRule ??
                   `${evaluation.source} (${this.state.agentMode} mode)`,
               })
-            : { allowed: false, reason: "Permission system unavailable" };
+            : {
+                allowed: false,
+                reason: "Permission system unavailable",
+                decision: "unavailable",
+              };
+          this.recorder.recordPermissionAnswered(
+            toolCall.tool,
+            toolCall.id,
+            mode,
+            outcome.decision,
+            Date.now() - askedAt,
+            turnId,
+          );
           if (!outcome.allowed) {
             return this.denyToolCall(
               toolCall,
@@ -3921,6 +3929,31 @@ export class AgentLoop {
       // Created by this run.
     }
     this.preEditContent.set(abs, content);
+  }
+
+  /**
+   * The compaction summary (and the files restored beside it), as a user
+   * message right after the dynamic context — never a system block. opencode
+   * and pi both keep it out of the system prompt. MiniMax renders the system
+   * text before the tool definitions, so a summary system block cost the
+   * tools as well on the first request after every compaction: probed
+   * 2026-11-18, ~10K of an 18K shared prefix read back on the first tries,
+   * against the full 18K with the summary as a message. Built per request
+   * and never stored, as the system block was.
+   */
+  private compactionSummaryMessage(): Message | undefined {
+    const summary = this.memory.getPromptContext().summary;
+    if (!summary) return undefined;
+    const restored = this.restoredFiles ? `\n\n${this.restoredFiles}` : "";
+    return {
+      id: "compaction-summary",
+      role: "user",
+      parts: [
+        { type: "text", content: `Compacted session summary:\n${summary}${restored}` },
+      ],
+      // Fixed for the same reason as the dynamic context message.
+      timestamp: 0,
+    };
   }
 
   // ===========================================================================

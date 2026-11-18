@@ -32,7 +32,7 @@ import {
 } from "./utils.js";
 import { normalizeAiSdkStream } from "./streaming.js";
 import { mapUsage } from "./provider-shared.js";
-import { applyEffort } from "./effort.js";
+import { applyEffort, catalogueDefaultEffort } from "./effort.js";
 import { loadSdkFactory } from "./sdk-factories.js";
 import {
   modelSupportsTemperature,
@@ -217,7 +217,12 @@ export function buildGenerateOptions(
   }
 
   if (entry.effortFamily) {
-    applyEffort(generateOptions, entry, opts.effort ?? entry.defaultEffort, resolvedModel);
+    applyEffort(
+      generateOptions,
+      entry,
+      opts.effort ?? catalogueDefaultEffort(entry),
+      resolvedModel,
+    );
   }
 
   return generateOptions;

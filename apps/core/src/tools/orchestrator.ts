@@ -21,6 +21,7 @@ import {
   boundDisplayOutput,
 } from "./output-store/index.js";
 import { maybeCompressOutput } from "./output-compress.js";
+import { redactKnownSecrets } from "./known-secrets.js";
 import { coerceArgs } from "./coerce-args.js";
 import { invalidateSymbolCache } from "../repo-map/index.js";
 import { logger } from "../utils/logger.js";
@@ -229,11 +230,14 @@ export function createToolOrchestrator(): ToolOrchestrator {
                 metadata?: Record<string, unknown>;
               })
             : null;
-        const output = structured
-          ? structured.output
-          : typeof r === "string"
-            ? r
-            : JSON.stringify(r);
+        // Before anything stores or shows it: see known-secrets.ts.
+        const output = redactKnownSecrets(
+          structured
+            ? structured.output
+            : typeof r === "string"
+              ? r
+              : JSON.stringify(r),
+        );
         // Stash the FULL output so the `output` tool can page it later, then cap
         // what the model sees to head+tail. A store miss later degrades to
         // "re-run the tool" (spec D4) — never fatal, so this put is best-effort.
@@ -272,7 +276,7 @@ export function createToolOrchestrator(): ToolOrchestrator {
           toolCallId: toolId,
           tool,
           title: toolDef.description,
-          error: String(err),
+          error: redactKnownSecrets(String(err)),
         };
       }
     },
