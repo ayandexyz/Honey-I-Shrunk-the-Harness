@@ -52,6 +52,7 @@ export class AbError extends Error {}
  *   FREECODE_STAGNATION_FORCE_TEXT     loop-health `evaluate`, every iteration
  *   FREECODE_COMPACT_RESTORE           `restoreRecentFiles`, every compaction
  *   FREECODE_COMPACT_TAIL              `getCompactTailMode`, every compaction
+ *   FREECODE_COMPACT_SOURCE            `getCompactSource`, every compaction
  *   FREECODE_VERIFY_TESTS              `loadVerifySettings`, every finish
  *   FREECODE_UNWIRED_CHECK             the loop's no-callers gate, every finish
  *   FREECODE_DEFAULT_EFFORT            `catalogueDefaultEffort`, every request
@@ -93,6 +94,8 @@ export const VARIABLE_ENV_KEYS = [
   "FREECODE_COMPACT_RESTORE",
   // Read per compaction in applyCompaction (getCompactTailMode).
   "FREECODE_COMPACT_TAIL",
+  // Read per compaction in applyCompaction (getCompactSource).
+  "FREECODE_COMPACT_SOURCE",
   // Read per finish in the loop's test and no-callers gates.
   "FREECODE_VERIFY_TESTS",
   "FREECODE_UNWIRED_CHECK",

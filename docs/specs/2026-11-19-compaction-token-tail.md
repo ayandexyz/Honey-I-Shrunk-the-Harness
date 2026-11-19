@@ -1,6 +1,7 @@
 # Compaction: keep the recent tail by tokens, cut once
 
 > **Status:** Built 2026-11-19 on branch `harness-fix`; `eval ab` kept (§4.2).
+> Phase 2 (§6) built 2026-11-20; `eval ab` kept (§6.3).
 > **Evidence:** session `ff9dd627` (desktop, MiniMax-M3.1-Flash), rollout
 > `~/.freecode/rollout/sessions/ff9dd627-…/events.jsonl`, `compact.occurred`
 > seq 1695 and 1722.
@@ -138,6 +139,50 @@ turns 294 → 261.
 
 ## 5. Not in this phase
 
-- Replacing the `MemoryService` shadow transcript with the real dropped
-  messages as summarizer input (removes §3.3's timestamp alignment).
-- pi's separate summary of a split turn's prefix.
+- pi's separate summary of a split turn's prefix (§6 covers most of it: the
+  dropped middle of the turn is now summarized from the real messages).
+- Reserving room for the reply in the trigger (Claude Code: window −
+  min(max output, 20K) − 13K). The cost target binds first on most models,
+  and overflow recovery catches the rest.
+
+## 6. Phase 2 — summarize the real dropped messages; retry an oversized summary
+
+Compared against Claude Code (`services/compact/`), pi and opencode on
+2026-11-20: all three summarize the messages they drop. freecode summarized
+`MemoryService`'s shadow transcript, aligned by §3.3's timestamp, so the
+batch edge, a `resetTranscript` re-stamp, or anything the loop never mirrored
+there could make the summary describe something other than what went.
+
+### 6.1 The summarizer reads what the store drops
+
+`applyCompaction` renders the dropped stored messages
+(`compaction/store-transcript.ts`) and passes them as `CompactOptions.messages`,
+with the pinned prompt as `goal`. The format is the shadow's own
+(`renderTurnForMemory`: `Tool <name>: <args> -> <result>`, 2K chars per
+result, 10K per message, oldest lines dropped first), so both summarizers
+read it unchanged; pi caps tool results at the same 2K. Images become
+`[image]` (Claude Code strips them before summarizing); appended context
+(`synthetic: "context"`) is skipped, being per-turn state. `cutoffTimestamp`
+still trims the shadow transcript, which keeps its other jobs (the estimated
+token count, the `/context` view). `FREECODE_COMPACT_SOURCE=shadow` restores
+the shadow as input; the `turns` tail always uses it.
+
+### 6.2 An oversized summarizer request is retried smaller
+
+Claude Code's `truncateHeadForPTLRetry`: when the summarizer's own request is
+rejected as too long (`isContextOverflowError`), drop the oldest fifth of the
+transcript, mark the cut (`[earlier transcript truncated for compaction
+retry]`), and retry — at most 3 times. The goal and previous summary are
+never dropped. Any other error still falls straight back to the heuristic
+summary. This matters more now that the input is the real messages.
+
+### 6.3 A/B 3 — store vs shadow input, kept
+
+`2026-11-19-coding-3`, MiniMax-M3, 5 trials, `shadow` → `store`: all four
+compaction cases 5/5 → 5/5, no declines, no infrastructure failures. Cost
++5.7% ($0.332 → $0.351): the summary call costs about $0.001 more per
+compaction (it reads the real messages), and the rest is the agent's own
+turns, mixed per case (−10% to +30%, 271 → 290 turns). None of these cases
+exercises the alignment faults §6 removes, so the A/B shows no regression,
+not a gain. Kept for that and for parity with Claude Code, pi and opencode.
+The §6.2 retry did not fire in these cases; only its unit tests cover it.
