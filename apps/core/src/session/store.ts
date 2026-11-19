@@ -94,13 +94,17 @@ export interface SerializedMessage {
   // context for their next prompt, never a turn of its own.
   // "context": memory recall / todo list / <system-reminder>s, appended once
   // when new (agent/context-inject.ts); for the model only, never a turn.
+  // "tool_image": images a tool returned (a `read` of a screenshot), sent as a
+  // user message only because providers reject non-text tool results; part of
+  // the tool turn, never a turn of its own.
   synthetic?:
     | "auto_poke"
     | "steer"
     | "branch_summary"
     | "task_notification"
     | "user_bash"
-    | "context";
+    | "context"
+    | "tool_image";
   interrupted?: boolean;
   usage?: MessageUsage;
   /**
@@ -110,6 +114,20 @@ export interface SerializedMessage {
    * linear log and the previous-line rule fills in the rest.
    */
   parentId?: string;
+}
+
+/**
+ * True when this entry starts a user turn. Appended context and tool images
+ * are user-role only for the provider's sake; counting them moved the
+ * compaction boundary — two screenshots read as two user turns and the
+ * real prompt before them was compacted away.
+ */
+export function isUserTurn(message: Pick<SerializedMessage, "role" | "synthetic">): boolean {
+  return (
+    message.role === "user" &&
+    message.synthetic !== "context" &&
+    message.synthetic !== "tool_image"
+  );
 }
 
 /** One node of the session tree as `getTree()` reports it — never content. */
@@ -501,7 +519,7 @@ class SessionStoreImpl implements SessionStore {
     // user turns, so advance it once here and keep `lastTurnAt` aligned with
     // the same durable event. Without this, every session stayed at zero and
     // the production consolidation gate was permanently unreachable.
-    if (entry.role === "user" && entry.synthetic !== "context") {
+    if (isUserTurn(entry)) {
       const meta = await this.getMeta(sessionId, projectPath);
       if (meta) {
         await this.updateMeta(

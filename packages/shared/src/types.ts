@@ -215,13 +215,15 @@ export interface SerializedMessage {
   // the frontend renders a one-line notice, not the XML.
   // "user_bash": output of a `!cmd` the user ran; context for the next prompt.
   // "context": memory / todos / reminders appended for the model; not shown.
+  // "tool_image": images a tool returned, part of the tool turn; not a turn.
   synthetic?:
     | "auto_poke"
     | "steer"
     | "branch_summary"
     | "task_notification"
     | "user_bash"
-    | "context";
+    | "context"
+    | "tool_image";
   /** True if the previous turn ended mid-stream; core appends a resume marker. */
   interrupted?: boolean;
 }

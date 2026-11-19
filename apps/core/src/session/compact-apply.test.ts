@@ -227,3 +227,22 @@ test("keepLastNUserTurns does not count appended context as a user turn", () => 
   // Two real turns are u1 and u2 — both kept; context did not push u1 out.
   assert.deepEqual(keepLastNUserTurns(messages, 2).map((m) => m.id), messages.map((m) => m.id));
 });
+
+test("keepLastNUserTurns does not count a tool's screenshot as a user turn", () => {
+  // Session ff9dd627: two screenshots read in one long turn were counted as
+  // two user turns, and the prompt that started the turn was compacted away.
+  const shot = (text: string): SerializedMessage => ({ ...msg("user", text), synthetic: "tool_image" });
+  const messages = [
+    msg("user", "u1"),
+    msg("assistant", "a1"),
+    msg("user", "u2"),
+    msg("assistant", "a2"),
+    shot("img1"),
+    msg("assistant", "a3"),
+    shot("img2"),
+    msg("assistant", "a4"),
+  ];
+  const kept = keepLastNUserTurns(messages, 2).map((m) => m.id);
+  assert.deepEqual(kept, messages.map((m) => m.id));
+  assert.deepEqual(keepLastNUserTurns(messages, 1)[0].id, "user-u2");
+});

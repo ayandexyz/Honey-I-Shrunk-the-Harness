@@ -2708,7 +2708,7 @@ export class AgentLoop {
           parts: [{ type: "text", content: caption }, ...toolImages],
           timestamp: Date.now(),
         });
-        await this.appendUserMessage(caption, toolImages);
+        await this.appendUserMessage(caption, toolImages, { synthetic: "tool_image" });
       }
 
       // Record the turn for compaction. The transcript carries what the tools

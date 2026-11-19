@@ -3,6 +3,7 @@
 // preserved recent turns so the NEXT turn's loadHistory() sends fewer messages.
 
 import type { SessionStore, SerializedMessage } from "./store.js";
+import { isUserTurn } from "./store.js";
 import type { MemoryService } from "../compaction/service.js";
 import type { CompactOptions } from "../compaction/service.js";
 import { DEFAULT_COMPACTION_CONFIG } from "../compaction/types.js";
@@ -34,8 +35,8 @@ export function keepLastNUserTurns(
   if (n <= 0) return [];
   let seen = 0;
   for (let i = messages.length - 1; i >= 0; i--) {
-    // Appended context is the harness talking; it is not a user turn.
-    if (messages[i].role === "user" && messages[i].synthetic !== "context") {
+    // Appended context and tool images are the harness talking; not user turns.
+    if (isUserTurn(messages[i])) {
       seen++;
       if (seen === n) return messages.slice(i);
     }
