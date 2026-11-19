@@ -145,6 +145,15 @@ export function getCompactTailMode(): "tokens" | "turns" {
   return process.env.FREECODE_COMPACT_TAIL === "turns" ? "turns" : "tokens";
 }
 
+/**
+ * What the summarizer reads under the token tail: the stored messages the
+ * compaction drops (default), or `FREECODE_COMPACT_SOURCE=shadow` for
+ * MemoryService's own transcript, for `eval ab` and rollback.
+ */
+export function getCompactSource(): "store" | "shadow" {
+  return process.env.FREECODE_COMPACT_SOURCE === "shadow" ? "shadow" : "store";
+}
+
 /** Tokens for one stored message, counting every part the provider will see. */
 export function estimateMessageTokens(message: SerializedMessage): number {
   let total = 0;

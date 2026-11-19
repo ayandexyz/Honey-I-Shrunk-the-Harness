@@ -307,3 +307,45 @@ test("the token tail skips the summarizer when the store cannot shrink", async (
   assert.equal(compactCalls, 0);
   assert.equal(outcome.reason, "nothing to compact");
 });
+
+test("the summarizer reads the dropped store messages, with the pinned prompt as the goal", async () => {
+  const { applyCompaction } = await import("./compact-apply.js");
+  const stored = ["u1", "a1", "a2", "a3", "a4"].map((id, i) => ({
+    ...msg(id.startsWith("u") ? "user" : "assistant", id),
+    timestamp: 100 + i,
+  }));
+  const run = async () => {
+    let seen: { messages?: Array<{ id: string; content: string }>; goal?: string } = {};
+    await applyCompaction({
+      memory: {
+        compact: async (options: typeof seen) => {
+          seen = options;
+          return { success: true, summary: { content: "s" }, tokenCountBefore: 9, tokenCountAfter: 1 };
+        },
+      } as never,
+      store: { getMessages: async () => stored, replaceMessages: async () => {} } as never,
+      sessionId: "s-source",
+      projectPath: "/p",
+      keepRecentTokens: 1,
+    });
+    return seen;
+  };
+
+  const fromStore = await run();
+  assert.deepEqual(
+    fromStore.messages?.map((m) => m.id),
+    ["assistant-a1", "assistant-a2", "assistant-a3"],
+    "exactly what the store drops; the pinned prompt and a4 are kept",
+  );
+  assert.equal(fromStore.messages?.[0].content, "a1");
+  assert.equal(fromStore.goal, "u1");
+
+  process.env.FREECODE_COMPACT_SOURCE = "shadow";
+  try {
+    const fromShadow = await run();
+    assert.equal(fromShadow.messages, undefined);
+    assert.equal(fromShadow.goal, undefined);
+  } finally {
+    delete process.env.FREECODE_COMPACT_SOURCE;
+  }
+});

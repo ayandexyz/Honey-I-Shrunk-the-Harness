@@ -10,8 +10,10 @@ import type { CompactOptions } from "../compaction/service.js";
 import { DEFAULT_COMPACTION_CONFIG } from "../compaction/types.js";
 import {
   DEFAULT_KEEP_RECENT_TOKENS,
+  getCompactSource,
   getCompactTailMode,
 } from "../compaction/tokens.js";
+import { storeToMemoryMessages } from "../compaction/store-transcript.js";
 import { keepRecentTokens } from "./compact-tail.js";
 import { markAllReadsCompacted } from "../tools/read-state.js";
 
@@ -114,15 +116,31 @@ export async function applyCompaction(opts: {
 
   // One cut: the summary covers exactly what the store drops — everything
   // before the first kept message that follows the last dropped one (a pinned
-  // prompt sits in front of the dropped run and does not count).
+  // prompt sits in front of the dropped run and does not count). The dropped
+  // messages themselves are the summarizer's input; the cutoff only trims
+  // MemoryService's shadow transcript to match.
   const keptIds = new Set(preserve.map((message) => message.id));
   let lastDropped = -1;
   stored.forEach((message, i) => {
     if (!keptIds.has(message.id)) lastDropped = i;
   });
+  const fromStore = byTokens && getCompactSource() === "store";
+  const pinned =
+    preserve[0] && stored.indexOf(preserve[0]) < lastDropped
+      ? preserve[0]
+      : undefined;
   const result = await opts.memory.compact({
     ...opts.compactOptions,
     ...(byTokens ? { cutoffTimestamp: stored[lastDropped + 1]?.timestamp } : {}),
+    ...(fromStore
+      ? {
+          messages: storeToMemoryMessages(
+            stored.filter((message) => !keptIds.has(message.id)),
+            DEFAULT_COMPACTION_CONFIG.maxToolOutputChars,
+          ),
+          goal: pinned ? storeToMemoryMessages([pinned], 0)[0]?.content : undefined,
+        }
+      : {}),
   });
   if (!result.success || !result.summary) {
     return {
