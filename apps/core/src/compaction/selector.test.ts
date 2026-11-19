@@ -110,3 +110,32 @@ test("selectForCompaction leaves a short single-prompt run alone", () => {
   assert.deepEqual(result.summarize, []);
   assert.equal(result.preserve.length, 2);
 });
+
+test("a cutoff summarizes exactly the messages older than the store's first kept one", () => {
+  const messages = [
+    msg("1", "user", "the brief"),
+    msg("2", "assistant", "tool turn"),
+    msg("3", "assistant", "tool turn"),
+    msg("4", "assistant", "tool turn"),
+    msg("5", "assistant", "tool turn"),
+  ];
+  const result = selectForCompaction(messages, DEFAULT_COMPACTION_CONFIG, 4);
+  // One user turn: the old selector would have kept the last 2 messages.
+  assert.deepEqual(result.summarize.map((m) => m.id), ["2", "3"]);
+  assert.deepEqual(result.preserve.map((m) => m.id), ["1", "4", "5"]);
+});
+
+test("a cutoff that selects nothing falls back to the selector's own cut", () => {
+  // resetTranscript() stamps every message "now", after any stored cutoff.
+  const messages = [
+    msg("10", "user", "a"),
+    msg("11", "assistant", "b"),
+    msg("12", "user", "c"),
+    msg("13", "assistant", "d"),
+    msg("14", "user", "e"),
+    msg("15", "assistant", "f"),
+  ];
+  const withCutoff = selectForCompaction(messages, DEFAULT_COMPACTION_CONFIG, 1);
+  const without = selectForCompaction(messages, DEFAULT_COMPACTION_CONFIG);
+  assert.deepEqual(withCutoff, without);
+});

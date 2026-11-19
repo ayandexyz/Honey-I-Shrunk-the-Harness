@@ -109,6 +109,9 @@ async function scenario(restore: boolean) {
   writeFileSync(other, "export const other = 0;\n");
   const prev = process.env.FREECODE_COMPACT_RESTORE;
   process.env.FREECODE_COMPACT_RESTORE = restore ? "1" : "0";
+  // Three tiny turns fit any token tail; this scenario needs the old
+  // "last two user turns" cut to drop turn one's read.
+  process.env.FREECODE_COMPACT_TAIL = "turns";
   const runtime = makeRuntime(
     makeTestLayer({
       memoryFactory: {
@@ -178,6 +181,7 @@ async function scenario(restore: boolean) {
   } finally {
     if (prev === undefined) delete process.env.FREECODE_COMPACT_RESTORE;
     else process.env.FREECODE_COMPACT_RESTORE = prev;
+    delete process.env.FREECODE_COMPACT_TAIL;
     await runtime.dispose();
     // Reading a .ts file starts a language server (edit-time diagnostics);
     // left running, it keeps the test process alive after the tests pass.

@@ -1,4 +1,5 @@
 import { logger } from "../utils/logger.js";
+import type { SerializedMessage } from "../session/store.js";
 
 const CHARS_PER_TOKEN = 4;
 
@@ -128,4 +129,36 @@ export function shouldCompact(
   // pay for on every subsequent turn.
   const limit = Math.min(windowLimit, getCompactTarget());
   return tokenCount >= Math.max(0, limit - bufferTokens);
+}
+
+/**
+ * Most recent history a compaction keeps verbatim — pi's `keepRecentTokens`
+ * default. compact-tail.ts also caps it at half the conversation.
+ */
+export const DEFAULT_KEEP_RECENT_TOKENS = 20_000;
+
+/**
+ * `FREECODE_COMPACT_TAIL=turns` restores the old tail (last N user turns, and
+ * the summary side's own cut) for `eval ab` and rollback. Default `tokens`.
+ */
+export function getCompactTailMode(): "tokens" | "turns" {
+  return process.env.FREECODE_COMPACT_TAIL === "turns" ? "turns" : "tokens";
+}
+
+/** Tokens for one stored message, counting every part the provider will see. */
+export function estimateMessageTokens(message: SerializedMessage): number {
+  let total = 0;
+  for (const part of message.parts) {
+    total += estimateTokenCount(part.content ?? "");
+    total += estimateTokenCount(part.result ?? "");
+    if (part.tool) {
+      total += estimateTokenCount(
+        part.tool.name + JSON.stringify(part.tool.args),
+      );
+    }
+    // Images are re-encoded by each provider at wildly different rates, so
+    // base64 length / 4 would be a fiction; a flat estimate per image instead.
+    if (part.type === "image") total += IMAGE_TOKEN_ESTIMATE;
+  }
+  return total;
 }

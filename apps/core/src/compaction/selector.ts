@@ -11,7 +11,20 @@ function countTokens(messages: MemoryMessage[]): number {
 export function selectForCompaction(
   messages: MemoryMessage[],
   config: CompactionConfig,
+  cutoffTimestamp?: number,
 ): SelectionResult {
+  // The store has already decided what it drops (compact-apply.ts); summarize
+  // exactly the messages older than its first kept one, so the summary and
+  // the history cannot disagree (spec 2026-11-19-compaction-token-tail §3.3).
+  // A transcript rebuilt by resetTranscript() is stamped "now" and would
+  // select nothing; fall through to this selector's own cut instead.
+  if (cutoffTimestamp !== undefined) {
+    const cut = messages.findIndex((m) => m.timestamp >= cutoffTimestamp);
+    const end = cut === -1 ? messages.length : cut;
+    if (end > 0) return withHead(messages.slice(0, end), messages.slice(end), config);
+  }
+
+
   // Preserve the tail from the Nth-most-recent user turn. A headless run
   // (`freecode run`, the bench, an eval case) has ONE user message for its
   // whole life — tool turns are recorded as `assistant` — so counting only
@@ -44,15 +57,25 @@ export function selectForCompaction(
   const firstPreservedIndex = firstPreservedId
     ? messages.findIndex((message) => message.id === firstPreservedId)
     : messages.length;
-  let summarize = messages.slice(0, Math.max(0, firstPreservedIndex));
+  return withHead(
+    messages.slice(0, Math.max(0, firstPreservedIndex)),
+    preserve,
+    config,
+  );
+}
 
+function withHead(
+  summarize: MemoryMessage[],
+  preserve: MemoryMessage[],
+  config: CompactionConfig,
+): SelectionResult {
   // Head carve-out. The founding instruction is the first thing compacted
   // away otherwise, and on the *next* compaction the summary of it is
   // summarized again — the brief decays faster than anything else in the
   // window, which is the plausible mechanism behind long-session drift off
   // the task. Keeping it verbatim costs a bounded, one-off few hundred
-  // tokens. It is prepended after the tail-trimming loop above deliberately:
-  // trimming must never be able to evict the brief.
+  // tokens. It is prepended after the tail is chosen deliberately: trimming
+  // must never be able to evict the brief.
   const headIndex = summarize.findIndex((message) => message.role === "user");
   const head = headIndex === -1 ? undefined : summarize[headIndex];
   if (head && head.tokenCount <= config.maxPreserveHeadTokens) {

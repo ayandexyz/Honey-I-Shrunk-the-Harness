@@ -89,6 +89,8 @@ test("applyCompaction reports the exact persisted message boundary", async () =>
     sessionId: "s-boundary",
     projectPath: "/p",
     preserveRecentTurns: 1,
+    // Token tail: cut at a3, pin its prompt u3 — the same boundary.
+    keepRecentTokens: 1,
   });
 
   assert.equal(outcome.messagesBefore, 6);
@@ -129,6 +131,8 @@ test("applyCompaction skips the summarizer when the store has nothing to trim (2
   let compactCalls = 0;
   let replaceCalls = 0;
 
+  // The old tail's guard; the token tail always drops half (its own case below).
+  process.env.FREECODE_COMPACT_TAIL = "turns";
   const outcome = await applyCompaction({
     memory: {
       compact: async () => {
@@ -151,6 +155,7 @@ test("applyCompaction skips the summarizer when the store has nothing to trim (2
     projectPath: "/p",
     preserveRecentTurns: 2,
   });
+  delete process.env.FREECODE_COMPACT_TAIL;
 
   assert.equal(compactCalls, 0, "the paid summarizer call must not run");
   assert.equal(replaceCalls, 0, "the store must not be rewritten");
@@ -198,6 +203,7 @@ test("compaction forgets which reads are in context, so the next read is real", 
       sessionId,
       projectPath: "/p",
       preserveRecentTurns: 1,
+      keepRecentTokens: 1,
     });
     return canDedup(getReadState(sessionId).get("/p/a.ts"), shown);
   };
@@ -245,4 +251,59 @@ test("keepLastNUserTurns does not count a tool's screenshot as a user turn", () 
   const kept = keepLastNUserTurns(messages, 2).map((m) => m.id);
   assert.deepEqual(kept, messages.map((m) => m.id));
   assert.deepEqual(keepLastNUserTurns(messages, 1)[0].id, "user-u2");
+});
+
+test("the summary is cut where the store is cut, and only in token mode", async () => {
+  const { applyCompaction } = await import("./compact-apply.js");
+  // One prompt, then tool turns: the token tail cuts mid-turn and pins u1.
+  const stored = ["u1", "a1", "a2", "a3", "a4"].map((id, i) => ({
+    ...msg(id.startsWith("u") ? "user" : "assistant", id),
+    timestamp: 100 + i,
+  }));
+  const run = async () => {
+    let cutoff: number | undefined;
+    const outcome = await applyCompaction({
+      memory: {
+        compact: async (options: { cutoffTimestamp?: number }) => {
+          cutoff = options.cutoffTimestamp;
+          return { success: true, summary: { content: "s" }, tokenCountBefore: 9, tokenCountAfter: 1 };
+        },
+      } as never,
+      store: { getMessages: async () => stored, replaceMessages: async () => {} } as never,
+      sessionId: "s-cutoff",
+      projectPath: "/p",
+      keepRecentTokens: 1,
+    });
+    return { cutoff, kept: outcome.preservedMessageIds };
+  };
+
+  const byTokens = await run();
+  assert.deepEqual(byTokens.kept, ["user-u1", "assistant-a4"]);
+  assert.equal(byTokens.cutoff, 104, "a4's timestamp: a1..a3 are what gets summarized");
+
+  process.env.FREECODE_COMPACT_TAIL = "turns";
+  try {
+    const byTurns = await run();
+    assert.equal(byTurns.cutoff, undefined);
+  } finally {
+    delete process.env.FREECODE_COMPACT_TAIL;
+  }
+});
+
+test("the token tail skips the summarizer when the store cannot shrink", async () => {
+  const { applyCompaction } = await import("./compact-apply.js");
+  let compactCalls = 0;
+  const outcome = await applyCompaction({
+    memory: {
+      compact: async () => {
+        compactCalls++;
+        return { success: true, summary: { content: "s" }, tokenCountBefore: 1, tokenCountAfter: 1 };
+      },
+    } as never,
+    store: { getMessages: async () => [msg("user", "only")], replaceMessages: async () => {} } as never,
+    sessionId: "s-one",
+    projectPath: "/p",
+  });
+  assert.equal(compactCalls, 0);
+  assert.equal(outcome.reason, "nothing to compact");
 });

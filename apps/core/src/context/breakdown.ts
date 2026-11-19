@@ -29,8 +29,8 @@ import { PromptCompiler } from "./compiler.js";
 import { collectScopePaths } from "./instructions.js";
 import { getFrozenSessionContext } from "./session-context.js";
 import {
+  estimateMessageTokens,
   estimateTokenCount,
-  IMAGE_TOKEN_ESTIMATE,
 } from "../compaction/tokens.js";
 import { MemoryService } from "../compaction/service.js";
 import { getMemoryGraphService } from "../memory/graph/index.js";
@@ -57,23 +57,6 @@ function toolTokens(tool: {
   );
 }
 
-/** Tokens for one stored message, counting every part the provider will see. */
-function messageTokens(message: SerializedMessage): number {
-  let total = 0;
-  for (const part of message.parts) {
-    total += estimateTokenCount(part.content ?? "");
-    total += estimateTokenCount(part.result ?? "");
-    if (part.tool) {
-      total += estimateTokenCount(
-        part.tool.name + JSON.stringify(part.tool.args),
-      );
-    }
-    // Images are re-encoded by each provider at wildly different rates, so
-    // base64 length / 4 would be a fiction; a flat estimate per image instead.
-    if (part.type === "image") total += IMAGE_TOKEN_ESTIMATE;
-  }
-  return total;
-}
 
 /**
  * The most recent provider-reported input size. Each request resends the whole
@@ -175,7 +158,7 @@ export async function buildContextBreakdown(
 
   // --- the conversation -----------------------------------------------------
   let messageTotal = 0;
-  for (const message of messages) messageTotal += messageTokens(message);
+  for (const message of messages) messageTotal += estimateMessageTokens(message);
   push("messages", "Messages", messageTotal);
 
   const usedTokens = segments.reduce((sum, s) => sum + s.tokens, 0);

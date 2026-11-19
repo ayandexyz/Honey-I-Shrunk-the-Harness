@@ -22,6 +22,9 @@ export interface CompactOptions {
   // summarizer is used instead. The agent loop supplies this with the current
   // provider/model so summaries are real LLM output rather than keyword bullets.
   llmSummarize?: LlmSummarize;
+  // Set by applyCompaction: the timestamp of the first stored message it
+  // keeps. Everything older is what gets summarized.
+  cutoffTimestamp?: number;
 }
 
 interface MemoryServiceOptions {
@@ -183,7 +186,11 @@ export class MemoryService {
   }
 
   async compact(options: CompactOptions = {}): Promise<CompactionResult> {
-    const selected = selectForCompaction(this.state.messages, this.config);
+    const selected = selectForCompaction(
+      this.state.messages,
+      this.config,
+      options.cutoffTimestamp,
+    );
     if (selected.summarize.length === 0) {
       return {
         success: true,
