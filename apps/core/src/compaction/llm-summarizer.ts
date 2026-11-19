@@ -2,6 +2,7 @@ import type { AIProvider } from "../providers/types.js";
 import type { MemoryAuxiliaryObserver } from "../memory/auxiliary.js";
 import type { MemoryMessage } from "./types.js";
 import type { SummarizeInput } from "./summarizer.js";
+import { isContextOverflowError } from "../agent/recovery/manager.js";
 
 /**
  * Produces the markdown body of a compaction summary. Throws on failure so the
@@ -33,6 +34,20 @@ function renderTranscript(messages: MemoryMessage[]): string {
   return messages.map((m) => `${m.role}: ${m.content}`).join("\n\n");
 }
 
+// Claude Code's PTL retry (truncateHeadForPTLRetry): when the summarizer's
+// own request is too long, drop the oldest fifth of the transcript and try
+// again, up to three times. The previous summary and the goal are never
+// dropped — they carry what the oldest messages said before.
+const MAX_OVERFLOW_RETRIES = 3;
+const OVERFLOW_DROP_FRACTION = 0.2;
+const TRUNCATED_MARKER = "[earlier transcript truncated for compaction retry]";
+
+export function dropOldestForRetry(messages: MemoryMessage[]): MemoryMessage[] {
+  if (messages.length <= 1) return messages;
+  const drop = Math.max(1, Math.floor(messages.length * OVERFLOW_DROP_FRACTION));
+  return messages.slice(drop);
+}
+
 export function createLlmSummarizer(
   provider: AIProvider,
   model: string | undefined,
@@ -40,6 +55,27 @@ export function createLlmSummarizer(
   onAuxiliaryCall?: MemoryAuxiliaryObserver,
 ): LlmSummarize {
   return async (input) => {
+    let messages = input.messages;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await summarizeOnce(input, messages, attempt > 0);
+      } catch (error) {
+        if (
+          !isContextOverflowError(error) ||
+          attempt >= MAX_OVERFLOW_RETRIES ||
+          messages.length <= 1
+        )
+          throw error;
+        messages = dropOldestForRetry(messages);
+      }
+    }
+  };
+
+  async function summarizeOnce(
+    input: SummarizeInput,
+    messages: MemoryMessage[],
+    truncated: boolean,
+  ): Promise<string> {
     const parts: string[] = [];
     if (input.goal) {
       parts.push(
@@ -52,7 +88,7 @@ export function createLlmSummarizer(
       );
     }
     parts.push(
-      `Session transcript to summarize:\n\n${renderTranscript(input.messages)}`,
+      `Session transcript to summarize:\n\n${truncated ? `${TRUNCATED_MARKER}\n\n` : ""}${renderTranscript(messages)}`,
     );
 
     const startedAt = Date.now();
@@ -99,5 +135,5 @@ export function createLlmSummarizer(
     if (result.stopReason === "max_tokens")
       throw new Error("provider truncated the summary at maxTokens");
     return content;
-  };
+  }
 }

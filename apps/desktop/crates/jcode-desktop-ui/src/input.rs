@@ -28,6 +28,11 @@ mod layout;
 mod motion;
 use layout::PromptLayout;
 
+#[path = "input_at_mention.rs"]
+mod at_mention;
+use at_mention::MentionPicker;
+use at_mention::mention_runs;
+
 #[path = "input_file_drop.rs"]
 pub(crate) mod file_drop;
 #[path = "input_model_menu.rs"]
@@ -201,6 +206,9 @@ pub struct PromptInput {
     command_scroll: gpui::ListState,
     suggestions_revision: u64,
     suggestions_cache: RefCell<Option<model_picker::SuggestionsCache>>,
+    /// The `@` file-mention picker. Open while the cursor sits in a mention.
+    mention_picker: MentionPicker,
+    mention_scroll: gpui::ListState,
     command_layout_key: Option<(SharedString, usize, gpui::Size<Pixels>)>,
     command_entrance: jcode_desktop_motion::MenuEntrance,
     editor_scroll: gpui::ScrollHandle,
@@ -581,6 +589,14 @@ impl PromptInput {
             command_scroll: gpui::ListState::new(0, gpui::ListAlignment::Top, px(48.)),
             suggestions_revision: 0,
             suggestions_cache: RefCell::new(None),
+            mention_picker: MentionPicker {
+                candidates: Vec::new(),
+                selection: 0,
+                prefix: String::new(),
+                start: 0,
+                end: 0,
+            },
+            mention_scroll: gpui::ListState::new(0, gpui::ListAlignment::Top, px(34.)),
             command_layout_key: None,
             command_entrance: jcode_desktop_motion::MenuEntrance::default(),
             editor_scroll: gpui::ScrollHandle::new(),
@@ -947,6 +963,11 @@ impl PromptInput {
         if !self.submission_enabled {
             return;
         }
+        // The mention picker owns Enter while it is open: it picks a file
+        // instead of sending the prompt.
+        if self.mention_picker_open() && self.accept_mention(cx).is_some() {
+            return;
+        }
         if self.pending_session
             && self.command_completion
             && self.content.trim_start().starts_with('/')
@@ -1195,6 +1216,10 @@ impl PromptInput {
     }
 
     fn history_prev(&mut self, _: &HistoryPrev, _: &mut Window, cx: &mut Context<Self>) {
+        if self.mention_picker_open() {
+            self.move_mention_selection(-1, cx);
+            return;
+        }
         let suggestions = self.command_suggestions();
         if !suggestions.is_empty() {
             self.command_selection = self.command_selection.saturating_sub(1);
@@ -1217,6 +1242,10 @@ impl PromptInput {
     }
 
     fn history_next(&mut self, _: &HistoryNext, _: &mut Window, cx: &mut Context<Self>) {
+        if self.mention_picker_open() {
+            self.move_mention_selection(1, cx);
+            return;
+        }
         let suggestions = self.command_suggestions();
         if !suggestions.is_empty() {
             self.command_selection = (self.command_selection + 1).min(suggestions.len() - 1);
@@ -1237,6 +1266,12 @@ impl PromptInput {
     }
 
     fn clear(&mut self, _: &Clear, _: &mut Window, cx: &mut Context<Self>) {
+        // Escape closes the mention picker before it clears the composer.
+        if self.mention_picker_open() {
+            self.mention_picker.candidates.clear();
+            cx.notify();
+            return;
+        }
         if let Some(cancel) = &self.on_overlay_cancel {
             if cancel(cx) {
                 return;
@@ -1461,6 +1496,7 @@ impl PromptInput {
         self.reveal_command(0);
         self.selected_range = self.content.len()..self.content.len();
         self.selection_reversed = false;
+        self.refresh_mention_picker(cx);
         cx.notify();
     }
 
@@ -1508,6 +1544,7 @@ impl PromptInput {
 
     fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
         self.selected_range = offset..offset;
+        self.refresh_mention_picker(cx);
         cx.notify()
     }
 
@@ -1547,6 +1584,7 @@ impl PromptInput {
             self.selection_reversed = !self.selection_reversed;
             self.selected_range = self.selected_range.end..self.selected_range.start;
         }
+        self.refresh_mention_picker(cx);
         cx.notify()
     }
 
@@ -1740,6 +1778,7 @@ impl EntityInputHandler for PromptInput {
         self.marked_range.take();
         self.command_selection = 0;
         self.reveal_command(0);
+        self.refresh_mention_picker(cx);
         if let Some(on_change) = &self.on_change {
             on_change(&self.content, cx);
         }
@@ -1787,6 +1826,7 @@ impl EntityInputHandler for PromptInput {
 
         self.command_selection = 0;
         self.reveal_command(0);
+        self.refresh_mention_picker(cx);
         if let Some(on_change) = &self.on_change {
             on_change(&self.content, cx);
         }
@@ -1998,7 +2038,7 @@ impl Element for TextElement {
             .filter(|run| run.len > 0)
             .collect()
         } else {
-            vec![run]
+            mention_runs(&display_text, &run)
         };
 
         let font_size = style.font_size.to_pixels(window.rem_size());
@@ -2252,6 +2292,9 @@ impl Render for PromptInput {
         }
         let command_visible = self.command_completion
             && (!suggestions.is_empty() || self.content.trim_start().starts_with("/model "));
+        // The mention picker opens on `@`. It replaces the command overlay
+        // rather than stacking on it: a prompt never shows both at once.
+        let mention_visible = self.mention_picker_open() && !command_visible;
         let menu_duration = jcode_desktop_motion::policy(
             crate::transition::Transition::Menu,
             crate::config::get().appearance.reduce_motion || cx.reduce_motion(),
@@ -2440,6 +2483,78 @@ impl Render for PromptInput {
                                     )),
                             ),
                         px(4.0 + 6.0 * (1.0 - menu_progress)),
+                    ))
+                    .with_priority(1),
+                )
+            })
+            .when(mention_visible, |el| {
+                el.child(
+                    gpui::deferred(popup::Popup::new(
+                        div()
+                            .id("mention-suggestions")
+                            .debug_selector(|| "mention-overlay".into())
+                            .w_full()
+                            .max_h_full()
+                            .flex()
+                            .flex_col()
+                            .rounded_lg()
+                            .border_1()
+                            .border_color(Theme::global().PANEL_BORDER_FOCUS)
+                            .bg(Theme::global().HEADER_BG)
+                            .shadow_lg()
+                            .occlude()
+                            .child(
+                                div()
+                                    .relative()
+                                    .flex()
+                                    .flex_col()
+                                    .min_h_0()
+                                    .p_1()
+                                    .child(
+                                        div()
+                                            .id("mention-scroll")
+                                            .debug_selector(|| "mention-scroll".into())
+                                            .min_h_0()
+                                            .flex()
+                                            .flex_col()
+                                            .max_h(popup::scroll_height(
+                                                window.viewport_size().height,
+                                                false,
+                                            ))
+                                            .on_scroll_wheel(cx.listener(|_, _, _, cx| cx.notify()))
+                                            .pr(px(crate::scrollbar::GUTTER - 4.0))
+                                            .child({
+                                                let input = cx.entity();
+                                                gpui::list(
+                                                    self.mention_scroll.clone(),
+                                                    move |index, _, cx| {
+                                                        input.update(cx, |input, cx| {
+                                                            let Some(candidate) = input
+                                                                .mention_candidates()
+                                                                .get(index)
+                                                                .cloned()
+                                                            else {
+                                                                return div().into_any_element();
+                                                            };
+                                                            input.render_mention_row(
+                                                                index, candidate, cx,
+                                                            )
+                                                        })
+                                                    },
+                                                )
+                                                .with_sizing_behavior(
+                                                    gpui::ListSizingBehavior::Infer,
+                                                )
+                                                .min_h_0()
+                                                .w_full()
+                                            }),
+                                    )
+                                    .child(crate::scrollbar::vertical_list(
+                                        &self.mention_scroll,
+                                        "mention-scrollbar",
+                                    )),
+                            ),
+                        px(4.0),
                     ))
                     .with_priority(1),
                 )

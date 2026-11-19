@@ -22,6 +22,15 @@ export interface CompactOptions {
   // summarizer is used instead. The agent loop supplies this with the current
   // provider/model so summaries are real LLM output rather than keyword bullets.
   llmSummarize?: LlmSummarize;
+  // Set by applyCompaction: the timestamp of the first stored message it
+  // keeps. Everything older is what gets summarized.
+  cutoffTimestamp?: number;
+  // Set by applyCompaction: the dropped stored messages, rendered. When set
+  // they are what gets summarized; the shadow transcript is only trimmed.
+  messages?: MemoryMessage[];
+  // The turn's prompt when applyCompaction kept it in front of the tail, so
+  // it is not among `messages`.
+  goal?: string;
 }
 
 interface MemoryServiceOptions {
@@ -183,8 +192,13 @@ export class MemoryService {
   }
 
   async compact(options: CompactOptions = {}): Promise<CompactionResult> {
-    const selected = selectForCompaction(this.state.messages, this.config);
-    if (selected.summarize.length === 0) {
+    const selected = selectForCompaction(
+      this.state.messages,
+      this.config,
+      options.cutoffTimestamp,
+    );
+    const toSummarize = options.messages ?? selected.summarize;
+    if (toSummarize.length === 0) {
       return {
         success: true,
         preservedMessageIds: selected.preserve.map((message) => message.id),
@@ -215,13 +229,15 @@ export class MemoryService {
     const previousSummary = this.state.summaries.at(-1)?.content;
     // The head carve-out keeps the founding request out of `summarize`;
     // both summarizers still need it to state the goal.
-    const goal = selected.summarize.some((m) => m.role === "user")
-      ? undefined
-      : selected.preserve.find((m) => m.role === "user")?.content;
+    const goal = options.messages
+      ? options.goal
+      : selected.summarize.some((m) => m.role === "user")
+        ? undefined
+        : selected.preserve.find((m) => m.role === "user")?.content;
     const summarizeInput = {
       sessionId: this.state.sessionId,
       previousSummary,
-      messages: selected.summarize,
+      messages: toSummarize,
       ...(goal ? { goal } : {}),
     };
     let summary = summarizeMessages(summarizeInput);
@@ -243,7 +259,7 @@ export class MemoryService {
       success: true,
       summary,
       preservedMessageIds: selected.preserve.map((message) => message.id),
-      compactedMessageIds: selected.summarize.map((message) => message.id),
+      compactedMessageIds: toSummarize.map((message) => message.id),
       tokenCountBefore: this.state.tokenCount,
       tokenCountAfter,
     };

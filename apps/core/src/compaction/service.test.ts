@@ -230,3 +230,23 @@ test("compaction hands the carved-out founding request to the summarizer as the 
   });
   assert.equal(seenGoal, "can i have multiple sessions with multiple models??");
 });
+
+test("given the dropped messages, compaction summarizes those and only trims its own transcript", async () => {
+  let seen: { ids: string[]; goal?: string } | undefined;
+  const service = new MemoryService(`session-source-${Date.now()}`, {
+    storage: { save: () => {}, load: () => undefined, listSessions: () => [], delete: () => {} } as never,
+  });
+  service.addMessage("user", "shadow prompt");
+  service.addMessage("assistant", "shadow reply");
+  const result = await service.compact({
+    messages: [{ id: "store-a1", role: "assistant", content: "Tool grep: … -> found it", timestamp: 1, tokenCount: 6 }],
+    goal: "the real prompt",
+    cutoffTimestamp: Number.MAX_SAFE_INTEGER,
+    llmSummarize: async (input) => {
+      seen = { ids: input.messages.map((m) => m.id), goal: input.goal };
+      return "## Goal\n- ok";
+    },
+  });
+  assert.deepEqual(seen, { ids: ["store-a1"], goal: "the real prompt" });
+  assert.deepEqual(result.compactedMessageIds, ["store-a1"]);
+});

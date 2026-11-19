@@ -70,6 +70,14 @@ describe("SessionStore", () => {
       parts: [{ type: "text", content: "second" }],
       timestamp: now + 2,
     });
+    // A tool's screenshot rides a user message but is not a turn.
+    await store.appendMessage(sessionId, {
+      id: "tool-image-1",
+      role: "user",
+      parts: [{ type: "text", content: "Image from the tool call above:" }],
+      timestamp: now + 3,
+      synthetic: "tool_image",
+    });
 
     const meta = await store.getMeta(sessionId);
     assert.equal(meta?.turnCount, 2);

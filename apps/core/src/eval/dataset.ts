@@ -190,18 +190,6 @@ function validate(raw: unknown, where: string): EvalCase {
   const answers = validateAnswers(o.answers, where);
   const mcpServers = validateMcpServers(o.mcpServers, where);
   const env = validateEnv(o.env, where);
-  // Structural, not a matter of tuning: `selectForCompaction` refuses while
-  // `countUserTurns <= preserveRecentTurns` (2), and only a prompt creates a
-  // user turn. Two follow-ups is the minimum that can compact at all, so a
-  // case asserting one without them would fail for a reason that has nothing
-  // to do with the agent.
-  if (o.expectCompaction !== undefined && (followUps?.length ?? 0) < 2) {
-    throw new DatasetError(
-      `${where}: 'expectCompaction' needs at least 2 'followUps'. Compaction ` +
-        `preserves the most recent 2 user turns, and one prompt is one user ` +
-        `turn — so a single-turn case cannot compact at any token count.`,
-    );
-  }
   // Asserting a compaction without lowering a threshold is a case that waits
   // for an accident: the default trigger sits at 120K tokens, which no eval
   // case reaches. Caught here rather than at run time, where it would read as

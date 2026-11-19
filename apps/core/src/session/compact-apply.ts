@@ -1,11 +1,20 @@
 // Applies compaction so it persists across turns: MemoryService produces the
-// summary (kept in the system prompt), and the session store is trimmed to the
-// preserved recent turns so the NEXT turn's loadHistory() sends fewer messages.
+// summary, and the session store is trimmed to the recent tail (by tokens,
+// compact-tail.ts; or the last N user turns under FREECODE_COMPACT_TAIL=turns)
+// so the NEXT turn's loadHistory() sends fewer messages.
 
 import type { SessionStore, SerializedMessage } from "./store.js";
+import { isUserTurn } from "./store.js";
 import type { MemoryService } from "../compaction/service.js";
 import type { CompactOptions } from "../compaction/service.js";
 import { DEFAULT_COMPACTION_CONFIG } from "../compaction/types.js";
+import {
+  DEFAULT_KEEP_RECENT_TOKENS,
+  getCompactSource,
+  getCompactTailMode,
+} from "../compaction/tokens.js";
+import { storeToMemoryMessages } from "../compaction/store-transcript.js";
+import { keepRecentTokens } from "./compact-tail.js";
 import { markAllReadsCompacted } from "../tools/read-state.js";
 
 export interface ApplyCompactionResult {
@@ -34,8 +43,8 @@ export function keepLastNUserTurns(
   if (n <= 0) return [];
   let seen = 0;
   for (let i = messages.length - 1; i >= 0; i--) {
-    // Appended context is the harness talking; it is not a user turn.
-    if (messages[i].role === "user" && messages[i].synthetic !== "context") {
+    // Appended context and tool images are the harness talking; not user turns.
+    if (isUserTurn(messages[i])) {
       seen++;
       if (seen === n) return messages.slice(i);
     }
@@ -65,10 +74,13 @@ export async function applyCompaction(opts: {
   sessionId: string;
   projectPath: string;
   preserveRecentTurns?: number;
+  /** Cap on the verbatim tail (default 20K; tests pass a small one). */
+  keepRecentTokens?: number;
   compactOptions?: CompactOptions;
 }): Promise<ApplyCompactionResult> {
   const preserveRecentTurns =
     opts.preserveRecentTurns ?? DEFAULT_COMPACTION_CONFIG.preserveRecentTurns;
+  const byTokens = getCompactTailMode() === "tokens";
 
   // Check the real, provider-facing transcript for room to drop BEFORE paying
   // for a MemoryService summary. MemoryService tracks its own much smaller
@@ -83,7 +95,12 @@ export async function applyCompaction(opts: {
   // such no-op firings (see TODO.md). Skip the summary call entirely when
   // the store wouldn't shrink.
   const stored = await opts.store.getMessages(opts.sessionId, opts.projectPath);
-  const preserve = keepLastNUserTurns(stored, preserveRecentTurns);
+  const preserve = byTokens
+    ? keepRecentTokens(
+        stored,
+        opts.keepRecentTokens ?? DEFAULT_KEEP_RECENT_TOKENS,
+      )
+    : keepLastNUserTurns(stored, preserveRecentTurns);
   if (preserve.length >= stored.length) {
     return {
       compacted: false,
@@ -97,7 +114,34 @@ export async function applyCompaction(opts: {
     };
   }
 
-  const result = await opts.memory.compact(opts.compactOptions);
+  // One cut: the summary covers exactly what the store drops — everything
+  // before the first kept message that follows the last dropped one (a pinned
+  // prompt sits in front of the dropped run and does not count). The dropped
+  // messages themselves are the summarizer's input; the cutoff only trims
+  // MemoryService's shadow transcript to match.
+  const keptIds = new Set(preserve.map((message) => message.id));
+  let lastDropped = -1;
+  stored.forEach((message, i) => {
+    if (!keptIds.has(message.id)) lastDropped = i;
+  });
+  const fromStore = byTokens && getCompactSource() === "store";
+  const pinned =
+    preserve[0] && stored.indexOf(preserve[0]) < lastDropped
+      ? preserve[0]
+      : undefined;
+  const result = await opts.memory.compact({
+    ...opts.compactOptions,
+    ...(byTokens ? { cutoffTimestamp: stored[lastDropped + 1]?.timestamp } : {}),
+    ...(fromStore
+      ? {
+          messages: storeToMemoryMessages(
+            stored.filter((message) => !keptIds.has(message.id)),
+            DEFAULT_COMPACTION_CONFIG.maxToolOutputChars,
+          ),
+          goal: pinned ? storeToMemoryMessages([pinned], 0)[0]?.content : undefined,
+        }
+      : {}),
+  });
   if (!result.success || !result.summary) {
     return {
       compacted: false,
