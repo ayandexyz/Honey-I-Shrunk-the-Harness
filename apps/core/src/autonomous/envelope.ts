@@ -19,6 +19,7 @@ import {
   extractTarget,
   realpathOrSelf,
 } from "../permission/rules.js";
+import { commandSegments } from "../utils/shell-segments.js";
 
 /**
  * Denied for every night run, seeded into the session's DENY tier so a user's
@@ -144,37 +145,6 @@ const DENIED_PREFIXES = ENVELOPE_DENY_RULES.map((rule) =>
   rule.replace(/^Bash\(/, "").replace(/:\*\)$/, "").trim(),
 );
 
-/** `&&`, `||`, `;`, `|`, newline, and command substitution. */
-const SEGMENT_SPLIT = /\|\||&&|;|\||\n|`|\$\(|\)/;
-
-/** `FOO=bar` — a leading environment assignment, not the command. */
-const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
-
-/**
- * Strip what a prefix rule cannot see past, so the verb lands at the front:
- * leading environment assignments and an `env` wrapper
- * (`GIT_AUTHOR_NAME=x env git commit` → `git commit`), then the directory of a
- * program path (`/usr/bin/git commit` → `git commit`).
- *
- * Only leading tokens are touched — a path or an `=` in an ARGUMENT is data,
- * and rewriting it would change which commands match.
- */
-function normalizeSegment(segment: string): string {
-  let rest = segment.trim();
-  for (;;) {
-    const space = rest.search(/\s/);
-    if (space === -1) break;
-    const head = rest.slice(0, space);
-    if (!ENV_ASSIGNMENT.test(head) && head !== "env") break;
-    rest = rest.slice(space + 1).trimStart();
-  }
-  const space = rest.search(/\s/);
-  const head = space === -1 ? rest : rest.slice(0, space);
-  if (!head.includes("/")) return rest;
-  const bare = head.slice(head.lastIndexOf("/") + 1);
-  return space === -1 ? bare : bare + rest.slice(space);
-}
-
 /**
  * The denied verb inside a command, however it is spelled.
  *
@@ -203,8 +173,7 @@ function normalizeSegment(segment: string): string {
  */
 function deniedSegment(command: unknown): string | undefined {
   if (typeof command !== "string") return undefined;
-  for (const raw of command.split(SEGMENT_SPLIT)) {
-    const segment = normalizeSegment(raw);
+  for (const segment of commandSegments(command)) {
     for (const prefix of DENIED_PREFIXES) {
       if (segment === prefix) return prefix;
       if (
