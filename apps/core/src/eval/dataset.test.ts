@@ -663,22 +663,13 @@ test("mcpServers takes named needs-auth fixtures, nothing else", () => {
   }
 });
 
-test("expectCompaction needs at least two followUps", () => {
-  // Structural, not tuning: selectForCompaction refuses while
-  // countUserTurns <= preserveRecentTurns (2), and only a prompt makes a user
-  // turn. A single-turn case cannot compact at any token count, so accepting
-  // one would ship a case that fails for a reason unrelated to the agent.
+test("expectCompaction no longer needs followUps", () => {
+  // It used to: compaction kept the last 2 user turns, so a case with fewer
+  // could not compact. The token tail (spec 2026-11-19-compaction-token-tail)
+  // cuts inside one long turn, which is exactly what a case may now assert.
   const env = `"env":{"FREECODE_AUTO_COMPACT_TOKENS":"16000"}`;
   const head = `{"id":"a","prompt":"p",${REQUIRED},"expectCompaction":1,${env}`;
-  assert.throws(() => parseSuite(`${head}}`), /at least 2 'followUps'/);
-  assert.throws(
-    () => parseSuite(`${head},"followUps":["b"]}`),
-    /at least 2 'followUps'/,
-  );
-  assert.equal(
-    parseSuite(`${head},"followUps":["b","c"]}`)[0].expectCompaction,
-    1,
-  );
+  assert.equal(parseSuite(`${head}}`)[0].expectCompaction, 1);
 });
 
 test("an 'unmeasured' case that has run history is stale", () => {
