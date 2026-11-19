@@ -187,6 +187,13 @@ Grouped by subsystem. Open bugs are in `TODO.md`; unbuilt features in
   output attached — otherwise the loop concludes the command worked.
 - **Tools return data, never markup.** Four frontends render the same
   `StreamEvent`s their own way.
+- **The self-kill guard holds in danger mode and has no off switch.**
+  `permission/self-kill.ts` refuses a `bash`/`monitor` command that would kill
+  this process or an ancestor (the desktop app, the terminal), checked before
+  the permission pipeline. Danger mode means "don't ask me", not "end the
+  session": session baddd7f8 killed the Honey window it ran in and died
+  mid-step. A command it wrongly refuses is one the user can still run
+  themselves; one it wrongly allows cannot be undone from inside the session.
 
 ## Context engine
 

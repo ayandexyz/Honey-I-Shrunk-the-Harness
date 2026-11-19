@@ -47,7 +47,9 @@ import { evaluatePermission } from "../permission/evaluate.js";
 import { envelopeDecision, intersectEnvelopes, resolveEnvelopeTarget } from "../permission/envelope.js";
 import { isReadOnlyMode } from "../permission/mode-policy.js";
 import { promptForPermission } from "../permission/prompt.js";
-import { extractTarget, targetKind } from "../permission/rules.js";
+import { COMMAND_TOOLS, extractTarget, targetKind } from "../permission/rules.js";
+import { findSelfKill } from "../permission/self-kill.js";
+import { hostProcesses } from "../permission/host-processes.js";
 import { sandboxAvailable } from "../sandbox/index.js";
 import { PermissionSettingsManager } from "../permission/settings.js";
 import { collectScopePaths } from "../context/instructions.js";
@@ -3554,6 +3556,23 @@ export class AgentLoop {
           ...preResult.modifiedInput,
         },
       };
+    }
+
+    // Self-kill guard: before the permission pipeline, so danger mode cannot
+    // skip it. Session baddd7f8 killed the desktop app it ran inside.
+    if (COMMAND_TOOLS.has(toolCall.tool)) {
+      const selfKill = findSelfKill(
+        (toolCall.args as Record<string, unknown> | undefined)?.command,
+        hostProcesses,
+      );
+      if (selfKill) {
+        return this.denyToolCall(
+          toolCall,
+          "self",
+          `Refused in every mode: ${selfKill}. Killing it ends this session mid-step. ` +
+            "If a restart or a new build is needed, tell the user how to do it instead.",
+        );
+      }
     }
 
     // Permission pipeline (spec: 2026-07-18-permission-rules.md §5)

@@ -115,7 +115,8 @@ export interface FunctionOutputEvent extends BaseEvent {
 
 /** Which gate refused the call. Kept distinct so "the mode forbids this" and
  *  "the user said no" do not read as the same event. `envelope` is the agent's
- *  own declared ceiling, which outranks every other gate. */
+ *  own declared ceiling, which outranks every other gate. `self` is the
+ *  self-kill guard (permission/self-kill.ts), which holds in every mode. */
 export type DenySource =
   | "hook"
   | "mode"
@@ -123,7 +124,8 @@ export type DenySource =
   | "permission-hook"
   | "user"
   | "role"
-  | "envelope";
+  | "envelope"
+  | "self";
 
 /**
  * A tool call the model made that never ran.
