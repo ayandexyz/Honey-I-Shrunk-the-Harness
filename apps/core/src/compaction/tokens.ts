@@ -16,6 +16,14 @@ export function estimateTokenCount(text: string): number {
 }
 
 /**
+ * Flat per-image estimate. Providers re-encode images at their own rates, so
+ * base64 length / 4 would be a fiction — but counting an image as zero is a
+ * worse one. opencode uses 1,500, pi 1,200 (4,800 chars); this takes the
+ * higher, since overestimating only makes a number look larger.
+ */
+export const IMAGE_TOKEN_ESTIMATE = 1_500;
+
+/**
  * Cost ceiling for the conversation, independent of the model's window.
  *
  * Compaction used to fire only when the next request would not *fit*. That is a

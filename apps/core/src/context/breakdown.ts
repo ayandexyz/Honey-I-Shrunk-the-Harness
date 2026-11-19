@@ -28,7 +28,10 @@ import type { SerializedMessage } from "../session/store.js";
 import { PromptCompiler } from "./compiler.js";
 import { collectScopePaths } from "./instructions.js";
 import { getFrozenSessionContext } from "./session-context.js";
-import { estimateTokenCount } from "../compaction/tokens.js";
+import {
+  estimateTokenCount,
+  IMAGE_TOKEN_ESTIMATE,
+} from "../compaction/tokens.js";
 import { MemoryService } from "../compaction/service.js";
 import { getMemoryGraphService } from "../memory/graph/index.js";
 import { renderRetrievedMemories } from "../memory/mem-prompt.js";
@@ -66,7 +69,8 @@ function messageTokens(message: SerializedMessage): number {
       );
     }
     // Images are re-encoded by each provider at wildly different rates, so
-    // base64 length / 4 would be a fiction. Skipped, and said so in the UI.
+    // base64 length / 4 would be a fiction; a flat estimate per image instead.
+    if (part.type === "image") total += IMAGE_TOKEN_ESTIMATE;
   }
   return total;
 }
