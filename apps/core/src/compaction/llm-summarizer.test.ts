@@ -162,3 +162,50 @@ test("the LLM summarizer is shown the founding request the selector kept aside",
   await createLlmSummarizer(provider, undefined)({ ...input, goal: "can i have multiple sessions with multiple models??" });
   assert.match(prompt, /original request[\s\S]*multiple sessions with multiple models/);
 });
+
+function overflowingProvider(fitsAt: number, prompts: string[]): AIProvider {
+  return {
+    info: { id: "minimax", name: "MiniMax", supportsStreaming: false, supportsTools: false, maxOutputTokens: 1024 },
+    async execute(options) {
+      prompts.push(String(options.prompt));
+      const lines = String(options.prompt).match(/^user: m\d+$/gm)?.length ?? 0;
+      if (lines > fitsAt) {
+        throw Object.assign(new Error("invalid params, context window exceeds limit (2013)"), { status: 400 });
+      }
+      return { content: "## Goal\n- ok", stopReason: "stop", provider: "minimax", model: "m" };
+    },
+  };
+}
+const ten = {
+  sessionId: "s",
+  messages: Array.from({ length: 10 }, (_, i) => ({
+    id: `m${i}`, role: "user" as const, content: `m${i}`, timestamp: i, tokenCount: 1,
+  })),
+};
+
+test("a summarizer request that is too long drops the oldest fifth and retries", async () => {
+  const prompts: string[] = [];
+  const summary = await createLlmSummarizer(overflowingProvider(7, prompts), undefined)(ten);
+  assert.equal(summary, "## Goal\n- ok");
+  assert.equal(prompts.length, 3, "10 → 8 → 7 messages");
+  assert.ok(!prompts[2].includes("user: m2\n"), "the oldest messages went");
+  assert.ok(prompts[2].includes("user: m9"), "the newest stayed");
+  assert.ok(prompts[2].includes("[earlier transcript truncated for compaction retry]"));
+});
+
+test("gives up after three retries, and never retries an unrelated error", async () => {
+  const prompts: string[] = [];
+  await assert.rejects(createLlmSummarizer(overflowingProvider(0, prompts), undefined)(ten), /context window/);
+  assert.equal(prompts.length, 4, "one try and three retries");
+
+  let calls = 0;
+  const failing: AIProvider = {
+    info: { id: "minimax", name: "MiniMax", supportsStreaming: false, supportsTools: false, maxOutputTokens: 1024 },
+    async execute() {
+      calls++;
+      throw new Error("rate limited");
+    },
+  };
+  await assert.rejects(createLlmSummarizer(failing, undefined)(ten), /rate limited/);
+  assert.equal(calls, 1);
+});
