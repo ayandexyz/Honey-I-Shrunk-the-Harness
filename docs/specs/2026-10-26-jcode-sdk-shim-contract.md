@@ -546,9 +546,15 @@ changes.
 **Status legend**: `todo` · `stub` (compiles, returns "unsupported") ·
 `done` · `cut` (decided out of scope, not building)
 
-Source: `jcode-sdk/src/client.rs` (1938 lines) in the sibling `jcode`
-checkout, mapped against `packages/shared/src/ipc/protocol.ts` (960 lines).
-Produced 2026-10-26, Phase 1 of the desktop backend rewire.
+Source: upstream `jcode-sdk/src/client.rs` (1938 lines), mapped against
+`packages/shared/src/ipc/protocol.ts` (960 lines). Produced 2026-10-26,
+Phase 1 of the desktop backend rewire. The shim itself is
+`apps/desktop-shim/jcode-sdk/src/client.rs`; the rest of jcode's crates are
+vendored in `vendor/jcode` since 2026-11-21 (`vendor/README.md`).
+
+**Last reconciled with the code: 2026-11-21** — every row below was checked
+against the shim's bodies (`todo!` / `unsupported` / real) and its desktop
+call sites. Reconcile again whenever a row's method changes.
 
 ## Transport
 
@@ -574,9 +580,10 @@ needs its signature to compile; it never needs a real body.
 | `create_session_with_options` | 0 | `session.start` | no `system_prompt` override in freecode | stub — signature only |
 | `attach_session` | 3 | `session.resume` | close | ✅ done |
 | `detach_session` | 2 | — | freecode has no attach state; no-op | ✅ done |
-| `list_sessions_limited` | 1 | `session.list` + `session.activeIds` (new, 2026-10-27) | no `limit` param on freecode — truncate in shim; `status` is `"running"` for any id `session.activeIds` reports mid-turn, else `"idle"` (freecode's own status is lifecycle-only) | ✅ done |
+| `list_sessions_limited` | 1 | `session.list` (with `limit`, 2026-11-21) + `session.activeIds` (2026-10-27) | core keeps the `limit` newest by `updatedAt` before reading per-session sidecars (the shim still sorts/truncates, for an older core); `status` is `"running"` for any id `session.activeIds` reports mid-turn, else `"idle"` (freecode's own status is lifecycle-only). Also mapped per session (2026-11-21): `meta.agent` → `parent_session_id`/`agent_label`/`swarm_status` (subagent nesting), `editStats` → `edit_stats`, `openTodos` → kept beside the list for `jcode_sdk::open_todos` (the harness's unfinished-work section; `SessionInfo` has no todo field) | ✅ done |
 | `list_sessions` | 0 | `session.list` + `session.activeIds` | same running-status cross-reference | ✅ done |
-| `archive_session` | 0 | `session.archive` | — | stub — signature only |
+| `archive_session` | 0 | `session.archive` | — | ✅ done (2026-11-21; was `todo!()`) |
+| `restore_session` | 0 | `session.unarchive` (new, 2026-11-21) | archived → active only; a deleted session stays deleted | ✅ done |
 | `fork_session` | 2 | `session.fork` | close | ✅ done |
 | `transfer_session` | 1 | `session.fork` + `session.resume` + `session.compact` | **not** "move a session between daemons" as earlier noted — upstream's own doc comment is "create a fresh session containing a runtime-compacted handoff, parent unchanged," i.e. fork + compact the clone. freecode has no single op for that, so the shim does fork → resume (registers the clone in memory, since `compact` needs `getSession` to find it) → compact; replies `SessionForked` like a plain fork. **Found and fixed in the same pass**: `fork_session`'s existing "done" row was silently broken — `session.fork`'s reply is a bare id string, not an object, so `session_info()` on it failed to deserialize (`session_id` is a required field); both now go through a shared `fork()` helper that extracts the string first | ✅ done |
 | `send_message_with_reminder` | 1 | `session.send` | jcode fires, then the harness waits for `MessageAccepted` on the event stream; freecode's `session.send` streams and resolves with the turn. Shim emits a synthetic `MessageAccepted` first | ✅ done |
@@ -589,7 +596,7 @@ needs its signature to compile; it never needs a real body.
 | `set_session_saved` | 2 | `session.setSaved` (new, 2026-10-27) | `{sessionId, saved, label?}` → `{title?}`; persisted as `SessionMeta.pinned`/`pinnedLabel`, surfaced in every `SessionInfo` as `saved`/`save_label` (`freecode::session_info`); a non-empty label also renames the session, and the shim synthesizes `SessionRenamed` from the reply's `title` itself — same reason `rename_session` does, not core's own broadcast (see that row) | ✅ done |
 | `set_model` | 2 | `config.setCurrentModel` | per-process not per-session in freecode | ✅ done |
 | `set_reasoning_effort` | 2 (+1 `managed_cloud_parity.rs`) | `session.setReasoningEffort` (new, 2026-10-27) | sticky per-session override, same precedence as `session.send`'s own `effort` field (`server.ts`'s `session.effort = effort`) but settable without sending a turn | ✅ done |
-| `list_models` | 0 | `models.list` | models reach desktop through `RuntimeInfo.routes`, not this | stub — signature only |
+| `list_models` | 0 | `models.list` | models reach desktop through `RuntimeInfo.routes`, not this | stub — `todo!()`, no callers |
 | `get_runtime_info` | 2 | `config.get` + `models.list` | must assemble `RuntimeInfo { provider, model, reasoning_effort, auth_method, routes: Vec<ModelRouteInfo> }` | ✅ done |
 | `get_history_with_images` | 1 | `session.resume` | row text was stale (said "needs a new IPC method"); the real implementation is `freecode_session::history`, a bare `session.resume` call, reused by `attach_session`'s cache and (2026-10-27) by `harness.rs`'s `Command::PeekHistory` for the resume picker's read-only preview — no attach needed, see Phase 6 | ✅ done |
 | `get_history` | 0 | — | — | ✅ done |
@@ -629,9 +636,9 @@ match. Ordered by use.
 | `BackgroundProgress` | 3 | `shell_start`/`shell_output`/`shell_exit`, `agent_*` | different model (per task bar) | ✅ done — `freecode_events::translate`; `task_id` = `shellId`/`agentId`, `label` set from `shell_start`'s `command` or `agent_start`'s `"<agentType>: <task>"` and remembered in `SessionState.background_labels` (neither `*_output` nor `*_exit` repeats it), `summary` is the last non-empty line of `*_output`'s `chunk` or a fixed "Done"/"Failed"/"Killed" on `*_exit`, `percent` always `None` (freecode reports neither), `done` only on `*_exit` |
 | `ToolExec` | 2 | `tool_output` | close | ✅ done |
 | `SidePaneImages` | 2 | — | **gap** | cut — no freecode wire support: `tool_complete` never carries image bytes (`agent/loop.ts`'s `displayOutput` is text-only), so there is nothing to translate live. The one place freecode does carry image bytes is `get_history_with_images`, and that mapping is itself still a noted gap ("images not mapped yet") |
-| `RuntimeCommandResult` | 2 | — | built by the harness from `runtime_command`'s reply | cut — follows `runtime_command`, which is itself cut (stub returns error), so this event can never fire against freecode |
-| `SessionForked` | 1 | `session.fork` | ✅ done — `fork_session` publishes it right after the reply, carrying the same `SessionInfo` it returns |
-| `Attached` | 1 | `session.resume` / `session.start` | ✅ done — `attach_session`/`create_session` publish it after their reply, so the sound-state machine resets (`live_turn`/`cancelled`/`error_reported`) on (re)attach |
+| `RuntimeCommandResult` | 2 | — | built by the harness from `runtime_command`'s reply | ✅ done for the 8 `runtime_command` variants the shim implements (see that row); the rest reply with an error instead |
+| `SessionForked` | 1 | `session.fork` | synthesized by the shim | ✅ done — `fork_session` publishes it right after the reply, carrying the same `SessionInfo` it returns |
+| `Attached` | 1 | `session.resume` / `session.start` | synthesized by the shim | ✅ done — `attach_session`/`create_session` publish it after their reply, so the sound-state machine resets (`live_turn`/`cancelled`/`error_reported`) on (re)attach |
 | `SessionRecovery` | 1 | — | **gap**: jcode's server-owned crash-continuation directive. `send_system_reminder` (its consumer) is now built, but freecode's daemon has no equivalent of jcode's crash-detection — no event to source a `SessionRecovery` from in the first place | cut — the consumer is ready; there's still nothing on the freecode side to produce this event |
 | `AppletState` | 1 | — | jcode's agent-applet UI primitive | cut — applets are cut |
 | `PermissionRequest` | 1 (sound only) | `permission_asked` | answered by the freecode approve card (`panel_permission_card.rs`) | ✅ done |
@@ -644,8 +651,6 @@ Each of these needs one of: stub to a clean "unsupported" error, hide the
 UI affordance, or (rare) add new freecode IPC to support it. Default
 assumption until decided: **cut for v1**.
 
-| jcode_sdk surface | What it does | Status |
-|---|---|---|
 Desktop call counts from the Phase 1 audit. A `cut` row with callers still
 needs a stub that returns a clean error, so the harness compiles and its
 UI path fails visibly instead of hanging.
@@ -656,24 +661,29 @@ UI path fails visibly instead of hanging.
 | `global_events`/`GlobalEventStream`/`GlobalEventsOptions` | 0 | fan-in across all sessions, background discovery | cut |
 | `launch`/`LaunchOptions`/`LaunchedInstance`/`ensure_runtime` | see session table | jcode's self-managed daemon launch/instance ownership | stub — becomes "spawn `apps/core`" |
 | `set_api_key` | 1 | `config.setApiKey`, same write path as `freecode auth set-key` | done |
-| `notify_auth_changed` / `invalidate_usage` | 2 / 1 | OAuth-reload, usage-reset invalidation | stub — partial |
-| `clear_api_key` | 0 | | cut |
+| `notify_auth_changed` / `invalidate_usage` | 2 / 1 | OAuth-reload, usage-reset invalidation | stub — both return "unsupported"; the callers ignore the error |
+| `clear_api_key` | 0 | | cut — `todo!()`, no callers |
 | `configure_tools`/`list_tools`/`submit_tool_result`/custom `ToolCall` event | 0 | client-supplied custom tools | cut — freecode's tool system is entirely server-side |
 | `applet_action` / `close_applet` | 1 / 1 | jcode's agent-applet UI primitive | cut — stub returns error |
-| `todo_state` / `ack_todo_follow_up` | 1 / 1 | freecode has `TodoItem`/`todowrite` internally but no IPC exposing it to a frontend | stub — needs new IPC method if wanted |
+| `todo_state` / `ack_todo_follow_up` | 1 / 1 | the desktop's own auto-poke at turn end (`jcode_todo_policy`) | stub — "unsupported", so the desktop never pokes. Deliberately not wired: core runs its own auto-poke (`agent/signals/`, off by default), and two pokers would double-poke. Open todos DO reach the desktop now, read-only, via `session.list` `openTodos` (2026-11-21) |
 | `background_tool` | 1 | move the running tool call to the background | cut — freecode's background shells (`shells.*`) are a different model |
 | `background_tool_result` | 0 | | cut |
-| `runtime_command` | 1 | slash-style commands run by the daemon (`RuntimeCommand::ServerReload`, `Remote`, …) | cut — stub returns error |
+| `runtime_command` | 1 | slash-style commands run by the daemon | partial — 8 of 29 variants: `Skills`, `Context`, `Agents`, `Info`, `Memory`, `Overnight`, `Auth`, `Logout` (`freecode_session::*_summary`, `auth_status`, `auth_logout`). The other 21 reply "not supported" — see the audit section below for which ones core could back |
 | `read_file`/`find_files`/`search_text`/`file_status` | 0 | | cut — no desktop callers; their reply events are only routed |
 | `soft_interrupt_with_images` | 1 | | see session table |
 | other `soft_interrupt*`/`cancel_soft_interrupt*` | 0 | | cut |
-| `restore_session`, `peek_session`, `set_retention_policy`, `ping`, `respond_to_permission`, `get_history`, `send_message` | 0 | missing from the first pass; no production callers | stub — signature only |
+| `peek_session`, `set_retention_policy` | 0 | missing from the first pass; no production callers | stub — `todo!()` |
+| `ping`, `respond_to_permission`, `get_history`, `send_message` | 0 | missing from the first pass | ✅ done (`restore_session` moved to the session table) |
 
 ## Beyond jcode-sdk — coupling a `JcodeClient` shim cannot reach
 
 The first pass assumed every desktop crate depends only on `jcode-sdk`. The
-`Cargo.toml`s path-depend on **nine** crates in the sibling `jcode`
-checkout. Files counted are production `.rs` files that import the crate.
+desktop's `Cargo.toml`s directly path-depend on the **nine** crates below;
+counting transitive dependencies the binary links **45** jcode crates (plus
+the shim). Since 2026-11-21 all of them are vendored in `vendor/jcode` at the
+pinned commit, as are handterm-common, the GPUI fork and mermaid-rs-renderer
+(`vendor/README.md`) — a build fetches nothing from jcode's author. Files
+counted are production `.rs` files that import the crate.
 
 | Crate | Desktop files | What desktop uses it for | Keep as path dep? |
 |---|---|---|---|
@@ -691,6 +701,52 @@ A further dependency (not a crate): **`sdk::todo` / `jcode_todo_policy`**
 (auto-poke messages, todo gate digests) mirrors freecode's own auto-poke
 (`agent/signals/`). The desktop renders Jcode's poke messages; freecode's
 `synthetic: "auto_poke"` messages will look different. Fold into Phase 6.
+
+## freecode additions — shim methods with no jcode-sdk equivalent
+
+Not part of upstream's surface; the desktop's hand hooks call them.
+
+| Method | Caller | freecode | Status |
+|---|---|---|---|
+| `set_agent_mode` / `agent_mode` | `panel.rs` mode picker → `harness.rs` | `agentMode` on the next `session.send` | ✅ done |
+| `last_agent_mode` | `harness_spawn.rs` | `config.getLastAgentMode` | ✅ done |
+| `auth_status` | `harness.rs` `Command::AuthStatus` → sidebar account pill | `config.get` (provider, model, auth method) | ✅ done |
+| `list_provider_models` | `workspace.rs` provider/model picker | `models.list` for one provider | ✅ done |
+| `auth_report_json` | Accounts page (`connection.rs`) | runs `freecode auth status --json` — same report shape as jcode's `auth doctor --json`, so the parser is unchanged | ✅ done (2026-11-21) |
+| `open_todos` | `harness.rs::unfinished_sessions_in` | `openTodos` from the last `session.list` | ✅ done (2026-11-21) |
+
+## Audit 2026-11-21 — what the desktop offers that core does not back
+
+Every desktop feature whose shim path is `unsupported`, `todo!()` or a jcode
+disk read, excluding accounts sign-in and SSH/managed cloud (hidden by
+design). **Core could back it** says whether the data or behaviour already
+exists in `apps/core` (so the work is IPC + shim mapping) or would be new.
+
+| Desktop feature | Shim path | What happens now | Core could back it |
+|---|---|---|---|
+| `/cache` | `runtime_command(Cache)` | "not supported" | **Yes** — `providers/cache-miss.ts` keeps the stats the TUI's status row shows; needs an IPC read |
+| `/subagent`, `/swarm` | `runtime_command` | "not supported" | **Partly** — `agents.list`/`agents.stop` exist; `/agents` already uses them |
+| `/review` | `runtime_command(Review)` | "not supported" | **Partly** — core has a `review` agent mode, not jcode's review-as-session |
+| `/refresh-models` | `runtime_command(RefreshModelList)` | "not supported" | **Yes** — `models.list` over the models.dev catalogue |
+| `/continue`, `/resume-all` | `runtime_command` | "not supported" | **Partly** — `session.resume` per session |
+| `/judge`, `/autojudge`, `/autoreview`, `/fast`, `/transport`, `/telemetry`, `/subscription`, `/premium`, `/productivity`, `/initiatives`, `/provider-test-coverage`, `/subagent-model`, `/remote`, `/server-reload` | `runtime_command` | "not supported" | No — jcode-only products or daemon concepts |
+| Move a running tool to the background | `background_tool` | nothing | **Partly** — `bash(run_in_background)` starts one in the background; adopting a running call is new |
+| Desktop auto-poke at turn end | `todo_state`, `ack_todo_follow_up` | never pokes | Deliberately not — core pokes itself (see the row above) |
+| Applets | `applet_action`, `close_applet`, `AppletState` | error / never fires | No — cut |
+| Side panel pages, side-pane images | `SidePanelState`, `SidePaneImages` | never shown | No — tool results carry no image bytes |
+| Images in resumed history | `get_history_with_images` | text only — `freecode_session::history` returns no images | **Yes** — core persists tool images (`synthetic: "tool_image"`); needs mapping |
+| Crash recovery ("continue after crash") | `SessionRecovery` | never fires | No — core has no crash detection to source it |
+| Transcript-text search in the resume picker | `resume_content_search.rs` reads jcode's journal | title/folder/id only | **Yes** — needs a search over `messages.jsonl` (IPC) |
+| Instant transcript paint while attaching | `panel.rs::prefetch_persisted_history` reads jcode's files | skipped; history appears on attach | **Yes** — same store, a cheaper read path |
+| Accounts page provider rows, live Test | `AuthClient::providers()` is empty; `run_live_test` returns nothing | statuses only, no rows; Test does nothing | Rows: **yes** (`auth status` lists every provider). Test: new (no live-validation command) |
+| OAuth reload / usage-reset invalidation | `notify_auth_changed`, `invalidate_usage` | ignored | No equivalent needed — core resolves credentials itself; nothing to notify |
+| `/restart-all`'s server reload | `workspace_restart.rs` | skipped (2026-11-21; ran `jcode server reload`) | Not needed — core is each window's child |
+
+Gmail, Todoist and voice dictation run inside the desktop and need nothing
+from core. Executables: the desktop never runs a `jcode` binary — the last two
+spawns (Accounts' `jcode auth doctor`, `/restart-all`'s `jcode server reload`)
+were removed 2026-11-21; `LaunchOptions.binary`/`AuthOptions.binary` still name
+`jcode` but the shim never executes them.
 
 ## How to use this doc
 
