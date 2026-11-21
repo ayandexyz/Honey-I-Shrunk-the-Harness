@@ -1,7 +1,7 @@
 import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "fs/promises";
-import { readFileSync } from "fs";
+import { readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { formatSessionDirName } from "../store/path-formatter.js";
@@ -11,6 +11,7 @@ import {
   getTodos,
   clearTodos,
   renderTodoPromptBlock,
+  readOpenTodos,
   setTodoPersistenceBaseDir,
   resetTodoPersistenceBaseDir,
   type TodoItem,
@@ -132,4 +133,28 @@ test("confidence and hillClimbability round-trip, clamp, and coerce strings", as
   // The prompt block shows the numbers so the model can step them next call.
   assert.match(renderTodoPromptBlock(sessionId), /verify \(confidence 75, hill-climb 100\)/);
   assert.match(renderTodoPromptBlock(sessionId), /\[ \] plan$/);
+});
+
+test("readOpenTodos reads the disk, not the cache, and drops finished items", async () => {
+  const projectPath = "/tmp/todo-open-project";
+  const sessionStore = await createSessionStore(testHome);
+  const sessionId = await sessionStore.createSession({
+    title: "Todo open",
+    projectPath,
+    provider: "test",
+  });
+  assert.equal(readOpenTodos(sessionId, projectPath), undefined);
+
+  await TodoWriteTool.execute({ todos: sampleTodos }, ctx(sessionId, projectPath));
+  assert.deepEqual(readOpenTodos(sessionId, projectPath), [
+    { content: "Wire repo-map into compiler", status: "in_progress" },
+    { content: "Add fixture test", status: "pending" },
+  ]);
+
+  // Another process finishing the list is seen even though this one cached it.
+  writeFileSync(
+    join(testHome, "sessions", formatSessionDirName(projectPath), sessionId, "todos.json"),
+    JSON.stringify(sampleTodos.map((t) => ({ ...t, status: "completed" }))),
+  );
+  assert.equal(readOpenTodos(sessionId, projectPath), undefined);
 });

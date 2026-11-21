@@ -358,6 +358,41 @@ pub(crate) fn call(inner: &Inner, method: &str, params: Value) -> Result<Value> 
     reply?
 }
 
+/// Open todo items `(content, status)` per session, from the last
+/// `session.list`. jcode's `SessionInfo` has no todo field and its desktop
+/// read them from `~/.jcode/todos/`, so they ride beside the list instead.
+static OPEN_TODOS: Mutex<Option<HashMap<String, Vec<(String, String)>>>> = Mutex::new(None);
+
+/// The unfinished todos core reported for `session_id` on the last session
+/// list refresh, or `None` when it has none (or was never listed).
+pub fn open_todos(session_id: &str) -> Option<Vec<(String, String)>> {
+    OPEN_TODOS.lock().ok()?.as_ref()?.get(session_id).cloned()
+}
+
+fn remember_open_todos(sessions: &[&Value]) {
+    let todos = sessions
+        .iter()
+        .filter_map(|session| {
+            let id = session.get("id")?.as_str()?;
+            let items = session
+                .get("openTodos")?
+                .as_array()?
+                .iter()
+                .filter_map(|todo| {
+                    Some((
+                        todo.get("content")?.as_str()?.to_string(),
+                        todo.get("status")?.as_str()?.to_string(),
+                    ))
+                })
+                .collect::<Vec<_>>();
+            (!items.is_empty()).then(|| (id.to_string(), items))
+        })
+        .collect();
+    if let Ok(mut slot) = OPEN_TODOS.lock() {
+        *slot = Some(todos);
+    }
+}
+
 /// core `session.list` (every project, newest first) → jcode `SessionInfo`s.
 pub(crate) fn list_sessions(inner: &Inner, limit: Option<u32>) -> Result<Vec<SessionInfo>> {
     let result = call(inner, "session.list", json!({}))?;
@@ -366,6 +401,7 @@ pub(crate) fn list_sessions(inner: &Inner, limit: Option<u32>) -> Result<Vec<Ses
     if let Some(limit) = limit {
         sessions.truncate(limit as usize);
     }
+    remember_open_todos(&sessions);
     // Best-effort: a failed/old-core call just means no session shows as
     // "running" this refresh, not a broken list.
     let running = active_ids(inner).unwrap_or_default();
@@ -511,5 +547,17 @@ mod tests {
         let stats = info.edit_stats.unwrap();
         assert_eq!((stats.added, stats.removed, stats.approximate), (12, 3, false));
         assert_eq!(session_info(&json!({ "id": "s2" })).unwrap().edit_stats, None);
+    }
+
+    #[test]
+    fn open_todos_are_kept_per_session_and_replaced_by_the_next_list() {
+        let with = json!({"id": "t1", "openTodos": [{"content": "Ship it", "status": "pending"}]});
+        let without = json!({"id": "t2"});
+        remember_open_todos(&[&with, &without]);
+        assert_eq!(open_todos("t1"), Some(vec![("Ship it".into(), "pending".into())]));
+        assert_eq!(open_todos("t2"), None);
+
+        remember_open_todos(&[&without]);
+        assert_eq!(open_todos("t1"), None, "a finished list disappears on refresh");
     }
 }

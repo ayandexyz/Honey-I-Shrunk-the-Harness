@@ -15,6 +15,7 @@ import {
 } from "./store.js";
 import { CONFIG_FILE } from "../providers/config.js";
 import { readEditStats, type EditStats } from "./edit-stats.js";
+import { readOpenTodos } from "../tools/todo.js";
 
 const SESSION_DIR = ".freecode";
 
@@ -42,6 +43,8 @@ export interface SessionContext {
   agent?: SessionMeta["agent"];
   /** Lines the edit/write tools changed (`edit-stats.ts`); list only. */
   editStats?: EditStats;
+  /** Unfinished todo items, for a frontend's "pick up where you left off"; list only. */
+  openTodos?: ReturnType<typeof readOpenTodos>;
 }
 
 // =============================================================================
@@ -177,6 +180,7 @@ export class SessionManager {
       pinnedLabel: meta.pinnedLabel,
       agent: meta.agent,
       editStats: editStats[i],
+      openTodos: readOpenTodos(meta.id, meta.projectPath),
       messages: [], // Don't load messages for list
     }));
   }

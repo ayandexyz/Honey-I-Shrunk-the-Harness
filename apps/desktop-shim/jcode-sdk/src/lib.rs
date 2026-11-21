@@ -145,6 +145,7 @@ mod auth;
 mod client;
 pub mod collections;
 mod freecode;
+pub use freecode::open_todos;
 mod freecode_events;
 mod freecode_session;
 mod diagnostics;

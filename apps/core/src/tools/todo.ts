@@ -190,6 +190,21 @@ export function getTodos(sessionId: string, projectPath?: string): TodoItem[] {
   return [];
 }
 
+/**
+ * The open items (not completed or cancelled) of a session's list, read from
+ * disk every time. For listing sessions: another process may own the session
+ * and have changed it since this one cached it.
+ */
+export function readOpenTodos(
+  sessionId: string,
+  projectPath: string,
+): Pick<TodoItem, "content" | "status">[] | undefined {
+  const open = (loadFromDisk(sessionId, projectPath) ?? [])
+    .filter((t) => t.status !== "completed" && t.status !== "cancelled")
+    .map(({ content, status }) => ({ content, status }));
+  return open.length > 0 ? open : undefined;
+}
+
 // Drops the in-memory copy; the on-disk list survives.
 export function clearTodos(sessionId: string): void {
   store.delete(sessionId);

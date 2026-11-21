@@ -1447,10 +1447,24 @@ pub fn unfinished_sessions_in(home: &Path, sessions: &[SessionInfo]) -> Vec<Unfi
         .filter(|session| !remote::is_remote(&session.session_id))
         .filter(|session| !matches!(session.status.as_str(), "active" | "running" | "working"))
         .filter_map(|session| {
-            let todos: Vec<PersistedTodoTitleItem> =
-                std::fs::read(todos_dir.join(format!("{}.json", session.session_id)))
+            // freecode: core reports open todos with the session list; the
+            // jcode-format file below is only ever there for a jcode session.
+            let from_core = jcode_sdk::open_todos(&session.session_id).map(|todos| {
+                todos
+                    .into_iter()
+                    .map(|(content, status)| PersistedTodoTitleItem {
+                        content,
+                        status,
+                        group: None,
+                    })
+                    .collect::<Vec<_>>()
+            });
+            let todos: Vec<PersistedTodoTitleItem> = match from_core {
+                Some(todos) => todos,
+                None => std::fs::read(todos_dir.join(format!("{}.json", session.session_id)))
                     .ok()
-                    .and_then(|bytes| serde_json::from_slice(&bytes).ok())?;
+                    .and_then(|bytes| serde_json::from_slice(&bytes).ok())?,
+            };
             let todos = todos
                 .into_iter()
                 .filter(|todo| !todo.status.eq_ignore_ascii_case("completed"))
