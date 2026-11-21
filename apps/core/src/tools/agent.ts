@@ -11,7 +11,11 @@ import { AgentLoop } from "../agent/loop.js";
 import { BusEvents } from "../bus/index.js";
 import type { AgentMode, HookContext, LoopFailure } from "../agent/types.js";
 import type { HookRuntime } from "../hooks/runtime.js";
-import { createSessionStore, type SessionStore } from "../session/store.js";
+import {
+  createSessionStore,
+  type SessionMeta,
+  type SessionStore,
+} from "../session/store.js";
 import { coerceBoolean } from "./coerce-args.js";
 import { createRecorder } from "../rollout/recorder.js";
 import { resolveSpawn } from "../agent/definitions/resolve.js";
@@ -316,6 +320,17 @@ async function executeSubagent(
     await discardSession();
     return { success: false, error: String((error as Error).message ?? error) };
   }
+  // On the session itself, so a frontend listing sessions can nest this one
+  // under its spawner without the in-process roster (which a restart loses).
+  const recordAgentStatus = (status: NonNullable<SessionMeta["agent"]>["status"]) =>
+    sessionStore!
+      .updateMeta(
+        subagentId,
+        { agent: { parentId: parentSessionId, label: agentLabel, status } },
+        projectPath,
+      )
+      .catch(() => {});
+  await recordAgentStatus("running");
   // `k` in the /agents panel settles the record to "killed" before the loop
   // exists (stop() fires the interrupt on attach), so the loop's own result
   // cannot be trusted to say so — the record is the source of truth.
@@ -507,6 +522,7 @@ async function executeSubagent(
         error: errorMsg,
       };
     } finally {
+      await recordAgentStatus(killed() ? "killed" : settleStatus);
       // Idempotent, and a no-op when the panel already stopped this agent —
       // `stop()` settles the record itself so the row flips without waiting for
       // the loop to unwind.

@@ -38,6 +38,7 @@ export interface SessionContext {
   messages: SerializedMessage[];
   pinned?: boolean;
   pinnedLabel?: string;
+  agent?: SessionMeta["agent"];
 }
 
 // =============================================================================
@@ -168,6 +169,7 @@ export class SessionManager {
       parentId: meta.parentId,
       pinned: meta.pinned,
       pinnedLabel: meta.pinnedLabel,
+      agent: meta.agent,
       messages: [], // Don't load messages for list
     }));
   }

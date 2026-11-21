@@ -42,6 +42,16 @@ export interface SessionMeta {
   pinned?: boolean;
   /** Optional label given when pinning. Cleared when unpinned. */
   pinnedLabel?: string;
+  /**
+   * Set on a session the `agent` tool spawned: who spawned it (not `parentId`,
+   * which is the fork source), its role, and how it ended. Lets a frontend
+   * nest subagents under the session that delegated to them.
+   */
+  agent?: {
+    parentId: string;
+    label?: string;
+    status: "running" | "completed" | "failed" | "killed";
+  };
 }
 
 /**

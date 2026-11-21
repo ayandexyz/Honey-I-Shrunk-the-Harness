@@ -408,6 +408,11 @@ fn session_info_with_activity(session: &Value, running: &HashSet<String>) -> Res
         "last_active_at_ms": session.get("lastTurnAt"),
         "saved": session.get("pinned").and_then(Value::as_bool).unwrap_or(false),
         "save_label": session.get("pinnedLabel"),
+        // A subagent the `agent` tool spawned. jcode calls it a swarm member;
+        // the sidebar nests it under `parent_session_id`.
+        "parent_session_id": session.pointer("/agent/parentId"),
+        "agent_label": session.pointer("/agent/label"),
+        "swarm_status": session.pointer("/agent/status"),
     });
     serde_json::from_value(info).map_err(|e| {
         Error::new(ErrorKind::UnexpectedReply, format!("session.list: {e}"))
@@ -478,5 +483,20 @@ mod tests {
         let unpinned = session_info(&json!({ "id": "s2" })).unwrap();
         assert!(!unpinned.saved);
         assert_eq!(unpinned.save_label, None);
+    }
+
+    #[test]
+    fn session_info_maps_spawned_agent_to_swarm_member() {
+        let agent = session_info(&json!({
+            "id": "subagent-1",
+            "agent": {"parentId": "root", "label": "explorer", "status": "running"},
+        }))
+        .unwrap();
+        assert_eq!(agent.parent_session_id.as_deref(), Some("root"));
+        assert_eq!(agent.agent_label.as_deref(), Some("explorer"));
+        assert_eq!(agent.swarm_status.as_deref(), Some("running"));
+
+        let plain = session_info(&json!({ "id": "s2", "parentId": "fork-source" })).unwrap();
+        assert_eq!(plain.parent_session_id, None, "a fork is not a swarm member");
     }
 }
