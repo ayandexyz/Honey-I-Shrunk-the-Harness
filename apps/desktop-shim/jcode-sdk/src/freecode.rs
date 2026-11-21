@@ -395,7 +395,10 @@ fn remember_open_todos(sessions: &[&Value]) {
 
 /// core `session.list` (every project, newest first) → jcode `SessionInfo`s.
 pub(crate) fn list_sessions(inner: &Inner, limit: Option<u32>) -> Result<Vec<SessionInfo>> {
-    let result = call(inner, "session.list", json!({}))?;
+    // Core truncates before reading each session's sidecars; the local
+    // sort/truncate below stays for an older core that ignores `limit`.
+    let params = limit.map_or_else(|| json!({}), |limit| json!({ "limit": limit }));
+    let result = call(inner, "session.list", params)?;
     let mut sessions: Vec<&Value> = result.as_array().map(|a| a.iter().collect()).unwrap_or_default();
     sessions.sort_by_key(|s| std::cmp::Reverse(s.get("updatedAt").and_then(Value::as_i64)));
     if let Some(limit) = limit {

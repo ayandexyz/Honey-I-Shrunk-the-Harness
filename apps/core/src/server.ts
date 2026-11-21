@@ -1709,12 +1709,13 @@ export const methodHandlers: Record<
   "session.list": async (
     params: Record<string, unknown>,
   ): Promise<SessionContext[]> => {
-    const { projectPath, status } = params as {
+    const { projectPath, status, limit } = params as {
       projectPath?: string;
       status?: "active" | "archived" | "deleted";
+      limit?: number;
     };
     const manager = await getSessionManager();
-    return manager.list({ projectPath, status });
+    return manager.list({ projectPath, status, limit });
   },
 
   "session.activeIds": async (): Promise<string[]> => {

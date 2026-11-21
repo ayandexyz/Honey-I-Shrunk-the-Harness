@@ -158,8 +158,16 @@ export class SessionManager {
   async list(filter?: {
     projectPath?: string;
     status?: SessionMeta["status"];
+    /** Keep only the N most recently updated. Applied before the per-session
+     *  sidecar reads, which cost more than the meta scan on a large store. */
+    limit?: number;
   }): Promise<SessionContext[]> {
-    const metas = await this.sessionStore.list(filter);
+    let metas = await this.sessionStore.list(filter);
+    if (filter?.limit !== undefined) {
+      metas = [...metas]
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .slice(0, filter.limit);
+    }
     const editStats = await Promise.all(
       metas.map((meta) => readEditStats(meta.id, meta.projectPath)),
     );

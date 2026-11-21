@@ -153,6 +153,15 @@ describe("SessionManager", () => {
       assert.equal(active.length, 1);
       assert.equal(active[0].title, "Session 2");
     });
+
+    it("limit keeps the most recently updated sessions", async () => {
+      const older = await manager.start("/tmp/p1", "claude", "Older");
+      await manager.start("/tmp/p2", "claude", "Newer");
+      await manager.rename(older, "Touched last");
+
+      const listed = await manager.list({ limit: 1 });
+      assert.deepEqual(listed.map((s) => s.title), ["Touched last"]);
+    });
   });
 
   describe("archive", () => {

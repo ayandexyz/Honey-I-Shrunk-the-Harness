@@ -388,6 +388,7 @@ export const METHODS = {
     params: {} as {
       projectPath?: string;
       status?: import("../types.js").SessionStatus;
+      limit?: number;
     },
     result: [] as import("../types.js").SessionMeta[],
   },
