@@ -10,5 +10,5 @@ pub mod catalog;
 pub mod connection;
 pub mod login_input;
 
-use jcode_desktop_harness::{harness, platform};
+use jcode_desktop_harness::harness;
 use jcode_desktop_ui_core::{render_stats, theme};

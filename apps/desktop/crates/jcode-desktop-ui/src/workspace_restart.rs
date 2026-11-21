@@ -404,39 +404,12 @@ mod windows_process {
     }
 }
 
+/// freecode: there is no shared server to hand sessions off to — each window
+/// runs freecode core as its own child, which stops with the window and starts
+/// fresh when it is relaunched. Upstream ran `jcode server reload --force`
+/// here; running whatever `jcode` a user has installed would be wrong.
 fn reload_server(log: &mut Log) {
-    let jcode = crate::platform::companion_executable("jcode");
-    log.line(format!("reloading server with {}", jcode.display()));
-    let child = crate::platform::no_console_window(&mut Command::new(&jcode))
-        .args(["server", "reload", "--force"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn();
-    let mut child = match child {
-        Ok(child) => child,
-        Err(error) => {
-            log.line(format!("server reload could not start: {error}"));
-            return;
-        }
-    };
-    let finished = wait_until(Duration::from_secs(90), || {
-        matches!(child.try_wait(), Ok(Some(_)))
-    });
-    if !finished {
-        let _ = child.kill();
-        log.line("server reload timed out after 90s; continuing");
-        return;
-    }
-    match child.wait_with_output() {
-        Ok(output) => log.line(format!(
-            "server reload {}: {}{}",
-            output.status,
-            String::from_utf8_lossy(&output.stdout).trim(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        )),
-        Err(error) => log.line(format!("server reload failed: {error}")),
-    }
+    log.line("server reload skipped: freecode core restarts with each window");
 }
 
 /// Order restored launches: main workspace, then sidebar-free, then chats.

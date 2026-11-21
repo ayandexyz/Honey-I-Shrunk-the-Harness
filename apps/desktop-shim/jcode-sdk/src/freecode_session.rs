@@ -577,8 +577,15 @@ pub(crate) fn night_summary(inner: &Inner, args: &[String]) -> Result<(Value, St
 /// `/auth` — connected-provider status. No JSON-RPC equivalent exists yet
 /// (see MIGRATION_JCODE_CLI.md), so this shells out to the same one-off
 /// `freecode auth status --json` the account sidebar panel uses.
+/// `freecode auth status --json`, raw: one `{id, display_name, status,
+/// auth_kind, method}` per provider, the same shape jcode's `auth doctor
+/// --json` reports, so the desktop's Accounts page parses it unchanged.
+pub fn auth_report_json() -> Result<String> {
+    crate::freecode::run_cli(&["auth", "status", "--json"])
+}
+
 pub(crate) fn auth_status() -> Result<(Value, String)> {
-    let stdout = crate::freecode::run_cli(&["auth", "status", "--json"])?;
+    let stdout = auth_report_json()?;
     let value: Value = serde_json::from_str(&stdout).map_err(|e| {
         Error::new(ErrorKind::UnexpectedReply, format!("auth status --json: {e}"))
     })?;
