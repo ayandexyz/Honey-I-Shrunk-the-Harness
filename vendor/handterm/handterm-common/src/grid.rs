@@ -1,0 +1,2032 @@
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+pub struct Cell {
+    pub ch: u32,
+    pub fg: u32,
+    pub bg: u32,
+    pub underline_color: u32,
+    pub hyperlink_id: u16,
+    pub attrs: u8,
+    pub flags: u8,
+    pub underline_style: UnderlineStyle,
+    _pad: [u8; 3],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CellSnapshot {
+    pub ch: u32,
+    pub grapheme: Option<Box<str>>,
+    pub fg: u32,
+    pub bg: u32,
+    pub underline_color: u32,
+    pub hyperlink_id: u16,
+    pub attrs: u8,
+    pub flags: u8,
+    pub underline_style: UnderlineStyle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum UnderlineStyle {
+    None = 0,
+    Single = 1,
+    Double = 2,
+    Curly = 3,
+    Dotted = 4,
+    Dashed = 5,
+}
+
+/// Default theme color, distinct from every indexed color (including black).
+/// Serialized cells must be exchanged with peers using the same encoding.
+pub const COLOR_DEFAULT: u32 = 0x4000_0000;
+pub const COLOR_FLAG_RGB: u32 = 0x8000_0000;
+
+pub const ATTR_BOLD: u8 = 0x01;
+pub const ATTR_DIM: u8 = 0x02;
+pub const ATTR_ITALIC: u8 = 0x04;
+pub const ATTR_UNDERLINE: u8 = 0x08;
+pub const ATTR_INVERSE: u8 = 0x10;
+pub const ATTR_STRIKETHROUGH: u8 = 0x20;
+pub const ATTR_HAS_UCOLOR: u8 = 0x40;
+
+pub const FLAG_WIDE: u8 = 0x01;
+pub const FLAG_WIDE_CONT: u8 = 0x02;
+
+#[inline]
+fn decode_utf8(bytes: &[u8]) -> (u32, usize) {
+    let b0 = bytes[0];
+    if b0 < 0x80 {
+        (b0 as u32, 1)
+    } else if b0 < 0xc0 {
+        (0xFFFD, 1)
+    } else if b0 < 0xe0 {
+        if bytes.len() >= 2 && (bytes[1] & 0xc0) == 0x80 {
+            let cp = ((b0 as u32 & 0x1f) << 6) | (bytes[1] as u32 & 0x3f);
+            (cp, 2)
+        } else {
+            (0xFFFD, 1)
+        }
+    } else if b0 < 0xf0 {
+        if bytes.len() >= 3 && (bytes[1] & 0xc0) == 0x80 && (bytes[2] & 0xc0) == 0x80 {
+            let cp = ((b0 as u32 & 0x0f) << 12)
+                | ((bytes[1] as u32 & 0x3f) << 6)
+                | (bytes[2] as u32 & 0x3f);
+            (cp, 3)
+        } else {
+            (0xFFFD, 1)
+        }
+    } else if b0 < 0xf8 {
+        if bytes.len() >= 4
+            && (bytes[1] & 0xc0) == 0x80
+            && (bytes[2] & 0xc0) == 0x80
+            && (bytes[3] & 0xc0) == 0x80
+        {
+            let cp = ((b0 as u32 & 0x07) << 18)
+                | ((bytes[1] as u32 & 0x3f) << 12)
+                | ((bytes[2] as u32 & 0x3f) << 6)
+                | (bytes[3] as u32 & 0x3f);
+            (cp, 4)
+        } else {
+            (0xFFFD, 1)
+        }
+    } else {
+        (0xFFFD, 1)
+    }
+}
+
+impl Cell {
+    pub const BLANK: Self = Self {
+        ch: b' ' as u32,
+        fg: COLOR_DEFAULT,
+        bg: COLOR_DEFAULT,
+        underline_color: COLOR_DEFAULT,
+        hyperlink_id: 0,
+        attrs: 0,
+        flags: 0,
+        underline_style: UnderlineStyle::None,
+        _pad: [0; 3],
+    };
+
+    #[allow(dead_code)]
+    pub fn char_display(&self) -> char {
+        char::from_u32(self.ch).unwrap_or(' ')
+    }
+
+    pub fn from_snapshot(snapshot: CellSnapshot) -> Self {
+        Self {
+            ch: snapshot.ch,
+            fg: snapshot.fg,
+            bg: snapshot.bg,
+            underline_color: snapshot.underline_color,
+            hyperlink_id: snapshot.hyperlink_id,
+            attrs: snapshot.attrs,
+            flags: snapshot.flags,
+            underline_style: snapshot.underline_style,
+            _pad: [0; 3],
+        }
+    }
+}
+
+fn needs_grapheme_storage(grapheme: &str) -> bool {
+    grapheme.chars().count() > 1
+}
+
+fn bytes_need_grapheme_clusters(bytes: &[u8]) -> bool {
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            0xCC..=0xCD => return true,
+            0xE2 if i + 2 < bytes.len() => {
+                if bytes[i + 1] == 0x80 && bytes[i + 2] == 0x8D {
+                    return true;
+                }
+                if bytes[i + 1] == 0x83 && bytes[i + 2] == 0xA3 {
+                    return true;
+                }
+            }
+            0xEF if i + 2 < bytes.len()
+                && bytes[i + 1] == 0xB8
+                && (matches!(bytes[i + 2], 0x8E | 0x8F)
+                    || (0xA0..=0xAF).contains(&bytes[i + 2])) =>
+            {
+                return true;
+            }
+            0xF0 if i + 3 < bytes.len() && bytes[i + 1] == 0x9F => {
+                if bytes[i + 2] == 0x87 {
+                    return true;
+                }
+                if bytes[i + 2] == 0x8F && (0xBB..=0xBF).contains(&bytes[i + 3]) {
+                    return true;
+                }
+            }
+            0xF3 if i + 3 < bytes.len()
+                && bytes[i + 1] == 0xA0
+                && bytes[i + 2] == 0x81
+                && (0x81..=0xBF).contains(&bytes[i + 3]) =>
+            {
+                return true;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
+
+fn clone_optional_slice<T: Clone>(slice: &mut [Option<T>], src: usize, dest: usize, len: usize) {
+    if len == 0 || src == dest {
+        return;
+    }
+    if dest > src {
+        for i in (0..len).rev() {
+            slice[dest + i] = slice[src + i].clone();
+        }
+    } else {
+        for i in 0..len {
+            slice[dest + i] = slice[src + i].clone();
+        }
+    }
+}
+
+/// Bounded damage record for overlays. Terminal consumes this between actions.
+/// Mixed direct Grid operations conservatively invalidate overlays instead of
+/// accumulating an unbounded queue of scroll events.
+#[derive(Clone, Copy)]
+pub(crate) enum ScrollDamage {
+    /// Full-screen upward scroll whose rows entered bounded text history.
+    History {
+        rows: usize,
+    },
+    /// History was cleared or grid dimensions changed.
+    Prune,
+    Region {
+        top: usize,
+        bottom: usize,
+        delta: isize,
+    },
+    Clear,
+}
+
+pub struct Grid {
+    pub cols: usize,
+    pub rows: usize,
+    cursor_col: usize,
+    cursor_row: usize,
+    cells: Vec<Cell>,
+    graphemes: Vec<Option<Box<str>>>,
+    /// Latched once the grid (or its scrollback) has ever stored a real
+    /// multi-codepoint grapheme cluster. While this is `false` every entry in
+    /// `graphemes`/`scrollback_graphemes` is known to be `None`, so the hot
+    /// ASCII/BMP write and scroll paths can skip all `Option<Box<str>>`
+    /// maintenance (clears, clones, fills) entirely.
+    has_graphemes: bool,
+    top_row: usize,
+    current_fg: u32,
+    current_bg: u32,
+    current_attrs: u8,
+    current_underline_color: u32,
+    current_underline_style: UnderlineStyle,
+    current_hyperlink_id: u16,
+    pub hyperlinks: Vec<String>,
+    scroll_top: usize,
+    scroll_bottom: usize,
+    pub autowrap: bool,
+    pending_wrap: bool,
+    dirty: Vec<u64>,
+    pub all_dirty: bool,
+    generation: u64,
+    scroll_damage: Option<ScrollDamage>,
+    scrollback: Vec<Cell>,
+    scrollback_graphemes: Vec<Option<Box<str>>>,
+    scrollback_len: usize,
+    scrollback_head: usize,
+    scrollback_max: usize,
+    pub scroll_offset: usize,
+    pub selection: Option<Selection>,
+}
+
+pub const DEFAULT_SCROLLBACK_MAX: usize = 10_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Selection {
+    pub start_col: usize,
+    pub start_row: usize,
+    pub end_col: usize,
+    pub end_row: usize,
+}
+
+impl Grid {
+    pub fn new(cols: u16, rows: u16, _default_fg: [u8; 3], _default_bg: [u8; 3]) -> Self {
+        Self::new_with_scrollback(cols, rows, _default_fg, _default_bg, DEFAULT_SCROLLBACK_MAX)
+    }
+
+    pub fn new_with_scrollback(
+        cols: u16,
+        rows: u16,
+        _default_fg: [u8; 3],
+        _default_bg: [u8; 3],
+        scrollback_max: usize,
+    ) -> Self {
+        let cols = cols as usize;
+        let rows = rows as usize;
+        let total_cells = cols * rows;
+        let dirty_words = total_cells.div_ceil(64);
+        Self {
+            cols,
+            rows,
+            cursor_col: 0,
+            cursor_row: 0,
+            cells: vec![Cell::BLANK; total_cells],
+            graphemes: vec![None; total_cells],
+            has_graphemes: false,
+            top_row: 0,
+            current_fg: COLOR_DEFAULT,
+            current_bg: COLOR_DEFAULT,
+            current_attrs: 0,
+            current_underline_color: COLOR_DEFAULT,
+            current_underline_style: UnderlineStyle::None,
+            current_hyperlink_id: 0,
+            hyperlinks: vec![String::new()],
+            scroll_top: 0,
+            scroll_bottom: rows,
+            autowrap: true,
+            pending_wrap: false,
+            dirty: vec![!0u64; dirty_words],
+            all_dirty: true,
+            generation: 1,
+            scroll_damage: None,
+            scrollback: Vec::new(),
+            scrollback_graphemes: Vec::new(),
+            scrollback_len: 0,
+            scrollback_head: 0,
+            scrollback_max,
+            scroll_offset: 0,
+            selection: None,
+        }
+    }
+
+    pub fn resize(&mut self, cols: u16, rows: u16) {
+        let new_cols = cols.max(1) as usize;
+        let new_rows = rows.max(1) as usize;
+
+        if new_cols == self.cols && new_rows == self.rows {
+            return;
+        }
+
+        let old_cols = self.cols;
+        let old_rows = self.rows;
+        let mut new_cells = vec![Cell::BLANK; new_cols * new_rows];
+        let mut new_graphemes = vec![None; new_cols * new_rows];
+
+        let copy_rows = old_rows.min(new_rows);
+        let copy_cols = old_cols.min(new_cols);
+
+        for r in 0..copy_rows {
+            let src_phys = self.physical_row(r);
+            let src_start = src_phys * old_cols;
+            let dst_start = r * new_cols;
+            new_cells[dst_start..dst_start + copy_cols]
+                .copy_from_slice(&self.cells[src_start..src_start + copy_cols]);
+            if self.has_graphemes {
+                new_graphemes[dst_start..dst_start + copy_cols]
+                    .clone_from_slice(&self.graphemes[src_start..src_start + copy_cols]);
+            }
+        }
+
+        // History is not reflowed, just truncated/padded exactly like live rows.
+        // Preserve physical ring order/head so viewport and overlay anchors remain
+        // stable even when the ring is full and wrapped.
+        if new_cols != old_cols {
+            let mut history = vec![Cell::BLANK; self.scrollback_len * new_cols];
+            let mut graphemes = if self.has_graphemes {
+                vec![None; history.len()]
+            } else {
+                Vec::new()
+            };
+            for row in 0..self.scrollback_len {
+                let src = row * old_cols;
+                let dst = row * new_cols;
+                history[dst..dst + copy_cols]
+                    .copy_from_slice(&self.scrollback[src..src + copy_cols]);
+                if let Some(source) = self.scrollback_graphemes.get(src..src + copy_cols) {
+                    graphemes[dst..dst + copy_cols].clone_from_slice(source);
+                }
+            }
+            self.scrollback = history;
+            self.scrollback_graphemes = graphemes;
+        }
+        self.cells = new_cells;
+        self.graphemes = new_graphemes;
+        self.cols = new_cols;
+        self.rows = new_rows;
+        self.top_row = 0;
+        self.scroll_damage = Some(ScrollDamage::Prune);
+        self.scroll_offset = self.scroll_offset.min(self.scrollback_len);
+        self.selection = None;
+        self.scroll_top = 0;
+        self.scroll_bottom = new_rows;
+        self.cursor_col = self.cursor_col.min(new_cols.saturating_sub(1));
+        self.cursor_row = self.cursor_row.min(new_rows.saturating_sub(1));
+        self.pending_wrap = false;
+        let total_cells = new_cols * new_rows;
+        let dirty_words = total_cells.div_ceil(64);
+        self.dirty = vec![!0u64; dirty_words];
+        self.all_dirty = true;
+    }
+
+    pub fn cursor_pos(&self) -> (usize, usize) {
+        (self.cursor_col, self.cursor_row)
+    }
+
+    pub(crate) fn take_scroll_damage(&mut self) -> Option<ScrollDamage> {
+        self.scroll_damage.take()
+    }
+
+    /// Drop history, including its old column stride, and reset viewport state.
+    pub fn clear_scrollback(&mut self) {
+        self.scrollback.clear();
+        self.scrollback_graphemes.clear();
+        self.scrollback_len = 0;
+        self.scrollback_head = 0;
+        self.scroll_offset = 0;
+        self.selection = None;
+        self.scroll_damage = Some(ScrollDamage::Prune);
+        self.mark_all_dirty();
+    }
+
+    fn record_scroll(&mut self, delta: isize) {
+        let top = self.scroll_top;
+        let bottom = self.scroll_bottom;
+        if delta < 0 && top == 0 && bottom == self.rows && self.scrollback_max > 0 {
+            self.scroll_damage = Some(match self.scroll_damage {
+                None => ScrollDamage::History {
+                    rows: delta.unsigned_abs(),
+                },
+                Some(ScrollDamage::History { rows }) => ScrollDamage::History {
+                    rows: rows.saturating_add(delta.unsigned_abs()),
+                },
+                _ => ScrollDamage::Clear,
+            });
+            return;
+        }
+        self.scroll_damage = Some(match self.scroll_damage {
+            None => ScrollDamage::Region { top, bottom, delta },
+            Some(ScrollDamage::Region {
+                top: old_top,
+                bottom: old_bottom,
+                delta: old_delta,
+            }) if top == old_top
+                && bottom == old_bottom
+                && delta.signum() == old_delta.signum() =>
+            {
+                let height = bottom.saturating_sub(top) as isize;
+                ScrollDamage::Region {
+                    top,
+                    bottom,
+                    delta: old_delta.saturating_add(delta).clamp(-height, height),
+                }
+            }
+            _ => ScrollDamage::Clear,
+        });
+    }
+
+    #[inline(always)]
+    fn mark_dirty(&mut self, idx: usize) {
+        let word = idx / 64;
+        let bit = idx % 64;
+        unsafe {
+            *self.dirty.get_unchecked_mut(word) |= 1u64 << bit;
+        }
+        self.generation = self.generation.wrapping_add(1);
+    }
+
+    #[inline(always)]
+    fn mark_dirty_range(&mut self, start: usize, len: usize) {
+        if len == 0 {
+            return;
+        }
+        self.generation = self.generation.wrapping_add(1);
+        let end = start + len;
+        let first_word = start / 64;
+        let last_word = (end - 1) / 64;
+
+        if first_word == last_word {
+            let mask = ((!0u64) << (start % 64)) & ((!0u64) >> (63 - ((end - 1) % 64)));
+            unsafe {
+                *self.dirty.get_unchecked_mut(first_word) |= mask;
+            }
+        } else {
+            unsafe {
+                *self.dirty.get_unchecked_mut(first_word) |= !0u64 << (start % 64);
+                for w in first_word + 1..last_word {
+                    *self.dirty.get_unchecked_mut(w) = !0u64;
+                }
+                *self.dirty.get_unchecked_mut(last_word) |= !0u64 >> (63 - ((end - 1) % 64));
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn mark_all_dirty(&mut self) {
+        self.dirty.fill(!0u64);
+        self.all_dirty = true;
+        self.generation = self.generation.wrapping_add(1);
+    }
+
+    pub fn mark_cell_dirty(&mut self, row: usize, col: usize) {
+        if row >= self.rows || col >= self.cols {
+            return;
+        }
+
+        let phys = self.physical_row(row);
+        self.mark_dirty(phys * self.cols + col);
+    }
+
+    pub fn clear_dirty(&mut self) {
+        self.dirty.fill(0);
+        self.all_dirty = false;
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    #[inline]
+    pub fn is_cell_dirty(&self, row: usize, col: usize) -> bool {
+        if self.all_dirty {
+            return true;
+        }
+        let phys = self.physical_row(row);
+        let idx = phys * self.cols + col;
+        let word = idx / 64;
+        let bit = idx % 64;
+        (self.dirty[word] >> bit) & 1 != 0
+    }
+
+    #[inline]
+    pub fn row_has_dirty_cells(&self, row: usize) -> bool {
+        if self.all_dirty {
+            return true;
+        }
+        if row >= self.rows {
+            return false;
+        }
+
+        let phys = self.physical_row(row);
+        let start = phys * self.cols;
+        let end = start + self.cols;
+        let first_word = start / 64;
+        let last_word = (end - 1) / 64;
+
+        if first_word == last_word {
+            let start_bit = start % 64;
+            let end_bit = (end - 1) % 64;
+            let mask = ((!0u64) << start_bit) & ((!0u64) >> (63 - end_bit));
+            return self.dirty[first_word] & mask != 0;
+        }
+
+        let start_bit = start % 64;
+        if self.dirty[first_word] & (!0u64 << start_bit) != 0 {
+            return true;
+        }
+        for word in first_word + 1..last_word {
+            if self.dirty[word] != 0 {
+                return true;
+            }
+        }
+        let end_bit = (end - 1) % 64;
+        self.dirty[last_word] & (!0u64 >> (63 - end_bit)) != 0
+    }
+
+    #[allow(dead_code)]
+    pub fn dirty_cell_count(&self) -> usize {
+        if self.all_dirty {
+            return self.rows * self.cols;
+        }
+        self.dirty
+            .iter()
+            .map(|word| word.count_ones() as usize)
+            .sum()
+    }
+
+    #[inline(always)]
+    fn physical_row(&self, logical_row: usize) -> usize {
+        (self.top_row + logical_row) % self.rows
+    }
+
+    fn cell_index_at(&self, logical_row: usize, col: usize) -> usize {
+        self.physical_row(logical_row) * self.cols + col
+    }
+
+    pub fn cell_at(&self, row: usize, col: usize) -> &Cell {
+        let idx = self.cell_index_at(row, col);
+        &self.cells[idx]
+    }
+
+    #[allow(dead_code)]
+    pub fn set_cell(&mut self, row: usize, col: usize, cell: Cell) {
+        self.set_cell_with_grapheme(row, col, cell, None);
+    }
+
+    pub fn set_cell_with_grapheme(
+        &mut self,
+        row: usize,
+        col: usize,
+        cell: Cell,
+        grapheme: Option<Box<str>>,
+    ) {
+        if row >= self.rows || col >= self.cols {
+            return;
+        }
+        let idx = self.cell_index_at(row, col);
+        self.cells[idx] = cell;
+        if grapheme.is_some() {
+            self.has_graphemes = true;
+        }
+        self.graphemes[idx] = grapheme;
+        self.mark_dirty(idx);
+    }
+
+    pub fn cell_grapheme_at(&self, row: usize, col: usize) -> Option<&str> {
+        if row >= self.rows || col >= self.cols {
+            return None;
+        }
+        let idx = self.cell_index_at(row, col);
+        self.graphemes[idx].as_deref()
+    }
+
+    pub fn get_selection_text(&self) -> String {
+        let Some(sel) = &self.selection else {
+            return String::new();
+        };
+
+        let (sr, sc, er, ec) = if sel.start_row < sel.end_row
+            || (sel.start_row == sel.end_row && sel.start_col <= sel.end_col)
+        {
+            (sel.start_row, sel.start_col, sel.end_row, sel.end_col)
+        } else {
+            (sel.end_row, sel.end_col, sel.start_row, sel.start_col)
+        };
+
+        let mut text = String::new();
+        for row in sr..=er {
+            let col_start = if row == sr { sc } else { 0 };
+            let col_end = if row == er { ec + 1 } else { self.cols };
+
+            for col in col_start..col_end.min(self.cols) {
+                let cell = self.cell_at_scroll(row, col);
+                if cell.flags & FLAG_WIDE_CONT != 0 {
+                    continue;
+                }
+                if let Some(grapheme) = self.cell_grapheme_at_scroll(row, col) {
+                    text.push_str(grapheme);
+                } else if let Some(c) = char::from_u32(cell.ch) {
+                    if c > ' ' {
+                        text.push(c);
+                    } else {
+                        text.push(' ');
+                    }
+                }
+            }
+            if row < er {
+                let trimmed = text.trim_end();
+                text = trimmed.to_string();
+                text.push('\n');
+            }
+        }
+        text.trim_end().to_string()
+    }
+
+    pub fn scrollback_len(&self) -> usize {
+        self.scrollback_len
+    }
+
+    /// Number of cells currently backed by the lazily-allocated scrollback
+    /// grapheme ring. Stays `0` for pure-text terminals; exposed for tests and
+    /// memory introspection.
+    #[allow(dead_code)]
+    pub fn scrollback_graphemes_capacity(&self) -> usize {
+        self.scrollback_graphemes.len()
+    }
+
+    /// Approximate heap bytes retained by the scrollback ring: the cell array
+    /// plus the (lazily allocated) parallel grapheme ring and any boxed cluster
+    /// strings it points at. For pure ASCII/BMP output the grapheme ring stays
+    /// empty, so this reports only the dense cell array.
+    #[allow(dead_code)]
+    pub fn scrollback_memory_bytes(&self) -> usize {
+        let cell_bytes = self.scrollback.capacity() * std::mem::size_of::<Cell>();
+        let ring_bytes =
+            self.scrollback_graphemes.capacity() * std::mem::size_of::<Option<Box<str>>>();
+        let string_bytes: usize = self
+            .scrollback_graphemes
+            .iter()
+            .filter_map(|g| g.as_ref().map(|s| s.len()))
+            .sum();
+        cell_bytes + ring_bytes + string_bytes
+    }
+
+    pub fn cell_at_scrollback_offset(&self, scroll_offset: usize, row: usize, col: usize) -> &Cell {
+        if scroll_offset == 0 {
+            return self.cell_at(row, col);
+        }
+        let sb_len = self.scrollback_len;
+        if scroll_offset > sb_len {
+            return &Cell::BLANK;
+        }
+        let sb_start = sb_len - scroll_offset;
+        let line_in_sb = sb_start + row;
+        if line_in_sb < sb_len {
+            let ring_idx = if self.scrollback_len >= self.scrollback_max {
+                (self.scrollback_head + line_in_sb) % self.scrollback_max
+            } else {
+                line_in_sb
+            };
+            let offset = ring_idx * self.cols;
+            if col < self.cols && offset + col < self.scrollback.len() {
+                &self.scrollback[offset + col]
+            } else {
+                &Cell::BLANK
+            }
+        } else {
+            let grid_row = line_in_sb - sb_len;
+            if grid_row < self.rows && col < self.cols {
+                self.cell_at(grid_row, col)
+            } else {
+                &Cell::BLANK
+            }
+        }
+    }
+
+    pub fn cell_at_scroll(&self, row: usize, col: usize) -> &Cell {
+        self.cell_at_scrollback_offset(self.scroll_offset, row, col)
+    }
+
+    pub fn cell_grapheme_at_scrollback_offset(
+        &self,
+        scroll_offset: usize,
+        row: usize,
+        col: usize,
+    ) -> Option<&str> {
+        if scroll_offset == 0 {
+            return self.cell_grapheme_at(row, col);
+        }
+        let sb_len = self.scrollback_len;
+        if scroll_offset > sb_len {
+            return None;
+        }
+        let sb_start = sb_len - scroll_offset;
+        let line_in_sb = sb_start + row;
+        if line_in_sb < sb_len {
+            let ring_idx = if self.scrollback_len >= self.scrollback_max {
+                (self.scrollback_head + line_in_sb) % self.scrollback_max
+            } else {
+                line_in_sb
+            };
+            let offset = ring_idx * self.cols;
+            if col < self.cols && offset + col < self.scrollback_graphemes.len() {
+                self.scrollback_graphemes[offset + col].as_deref()
+            } else {
+                None
+            }
+        } else {
+            let grid_row = line_in_sb - sb_len;
+            if grid_row < self.rows && col < self.cols {
+                self.cell_grapheme_at(grid_row, col)
+            } else {
+                None
+            }
+        }
+    }
+
+    pub fn cell_grapheme_at_scroll(&self, row: usize, col: usize) -> Option<&str> {
+        self.cell_grapheme_at_scrollback_offset(self.scroll_offset, row, col)
+    }
+
+    #[allow(dead_code)]
+    pub fn cell_char(&self, row: usize, col: usize) -> char {
+        if row >= self.rows || col >= self.cols {
+            return ' ';
+        }
+        self.cell_at(row, col).char_display()
+    }
+
+    pub fn get_text(&self, start_row: usize, end_row: usize) -> String {
+        let end = end_row.min(self.rows);
+        let mut out = String::with_capacity(self.cols * (end - start_row) + end - start_row);
+        for row in start_row..end {
+            for col in 0..self.cols {
+                let cell = self.cell_at(row, col);
+                if cell.flags & FLAG_WIDE_CONT != 0 {
+                    continue;
+                }
+                if let Some(grapheme) = self.cell_grapheme_at(row, col) {
+                    out.push_str(grapheme);
+                } else {
+                    out.push(cell.char_display());
+                }
+            }
+            let trimmed = out.trim_end_matches(' ');
+            let trimmed_len = trimmed.len();
+            out.truncate(trimmed_len);
+            if row + 1 < end {
+                out.push('\n');
+            }
+        }
+        out
+    }
+
+    pub fn get_all_text(&self) -> String {
+        self.get_text(0, self.rows)
+    }
+
+    #[inline]
+    pub fn write_bytes(&mut self, bytes: &[u8]) {
+        if !bytes.is_ascii()
+            && bytes_need_grapheme_clusters(bytes)
+            && let Ok(text) = std::str::from_utf8(bytes)
+        {
+            self.write_text(text);
+            return;
+        }
+
+        let mut i = 0;
+        let len = bytes.len();
+
+        while i < len {
+            let b = unsafe { *bytes.get_unchecked(i) };
+
+            if b.wrapping_sub(0x20) < 0x5f {
+                let run_start = i;
+                i += 1;
+                while i < len {
+                    let next = unsafe { *bytes.get_unchecked(i) };
+                    if next.wrapping_sub(0x20) >= 0x5f {
+                        break;
+                    }
+                    i += 1;
+                }
+                self.write_ascii_run(&bytes[run_start..i]);
+            } else if b >= 0xc0 {
+                let (cp, consumed) = decode_utf8(&bytes[i..]);
+                if cp != 0 {
+                    self.put_char(cp);
+                }
+                i += consumed;
+            } else if b >= 0x80 {
+                i += 1;
+            } else {
+                match b {
+                    b'\n' => self.line_feed(),
+                    b'\r' => self.cursor_col = 0,
+                    b'\t' => self.tab(),
+                    _ => {}
+                }
+                i += 1;
+            }
+        }
+    }
+
+    fn write_text(&mut self, text: &str) {
+        use unicode_segmentation::UnicodeSegmentation;
+
+        for grapheme in UnicodeSegmentation::graphemes(text, true) {
+            match grapheme {
+                "\r\n" => {
+                    self.carriage_return();
+                    self.line_feed();
+                    continue;
+                }
+                "\n" => {
+                    self.line_feed();
+                    continue;
+                }
+                "\r" => {
+                    self.carriage_return();
+                    continue;
+                }
+                "\t" => {
+                    self.tab();
+                    continue;
+                }
+                _ => {}
+            }
+
+            if grapheme.len() == 1 {
+                let ch = grapheme.chars().next().unwrap_or('\0');
+                match ch {
+                    c if c >= ' ' => self.put_char(c as u32),
+                    _ => {}
+                }
+            } else {
+                self.put_grapheme(grapheme);
+            }
+        }
+    }
+
+    #[inline]
+    fn write_ascii_run(&mut self, run: &[u8]) {
+        let mut ri = 0;
+        let run_len = run.len();
+        let cols = self.cols;
+        let rows = self.rows;
+        let is_full_scroll = self.scroll_top == 0 && self.scroll_bottom == rows;
+        // Build the style template once. Each cell in the run differs only in
+        // `ch`, so we materialize the shared attributes into a single `Cell`
+        // value and write the whole 24-byte struct in one store per cell. This
+        // lets the compiler emit wide stores instead of eight field writes.
+        let mut template = Cell {
+            ch: b' ' as u32,
+            fg: self.current_fg,
+            bg: self.current_bg,
+            underline_color: self.current_underline_color,
+            hyperlink_id: self.current_hyperlink_id,
+            attrs: self.current_attrs,
+            flags: 0,
+            underline_style: self.current_underline_style,
+            _pad: [0; 3],
+        };
+        // Only the BMP/ASCII fast path runs here, so the grapheme slots for the
+        // written cells must end up `None`. When the grid has never stored a
+        // grapheme cluster they are already `None`, so we can skip touching the
+        // grapheme array entirely.
+        let clear_graphemes = self.has_graphemes;
+
+        while ri < run_len {
+            if self.cursor_row >= rows {
+                return;
+            }
+
+            if self.pending_wrap {
+                if !self.autowrap {
+                    self.cursor_col = cols.saturating_sub(1);
+                    self.pending_wrap = false;
+                } else {
+                    self.pending_wrap = false;
+                    self.cursor_col = 0;
+                    if self.cursor_row + 1 >= self.scroll_bottom {
+                        if is_full_scroll {
+                            self.scroll_up_ring();
+                        } else {
+                            self.scroll_up();
+                        }
+                    } else {
+                        self.cursor_row += 1;
+                    }
+                }
+            }
+
+            let remaining_in_row = cols - self.cursor_col;
+            let chunk_len = remaining_in_row.min(run_len - ri);
+
+            let phys_row = (self.top_row + self.cursor_row) % rows;
+            let dest_start = phys_row * cols + self.cursor_col;
+
+            unsafe {
+                let base_ptr = self.cells.as_mut_ptr().add(dest_start);
+                let src_ptr = run.as_ptr().add(ri);
+                for j in 0..chunk_len {
+                    template.ch = *src_ptr.add(j) as u32;
+                    *base_ptr.add(j) = template;
+                }
+                if clear_graphemes {
+                    let g_ptr = self.graphemes.as_mut_ptr().add(dest_start);
+                    for j in 0..chunk_len {
+                        *g_ptr.add(j) = None;
+                    }
+                }
+            }
+
+            ri += chunk_len;
+            self.cursor_col += chunk_len;
+            self.mark_dirty_range(dest_start, chunk_len);
+
+            if self.cursor_col >= cols {
+                self.pending_wrap = true;
+                self.cursor_col = cols - 1;
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn scroll_up_ring(&mut self) {
+        self.record_scroll(-1);
+        let cols = self.cols;
+        let old_top = self.top_row;
+        let blank_start = old_top * cols;
+
+        self.push_row_into_scrollback(blank_start);
+
+        self.cells[blank_start..blank_start + cols].fill(Cell::BLANK);
+        if self.has_graphemes {
+            self.graphemes[blank_start..blank_start + cols].fill(None);
+        }
+        self.top_row = (old_top + 1) % self.rows;
+        self.all_dirty = true;
+    }
+
+    /// Copy the physical row beginning at `row_start` into the scrollback ring.
+    ///
+    /// The parallel `scrollback_graphemes` ring is only materialized once the
+    /// grid has actually stored a grapheme cluster (`has_graphemes`). For the
+    /// overwhelmingly common pure-text terminal, this keeps the 16-byte/cell
+    /// grapheme ring empty, saving real RSS proportional to scrollback depth.
+    #[inline]
+    fn push_row_into_scrollback(&mut self, row_start: usize) {
+        if self.scrollback_max == 0 {
+            return;
+        }
+        let cols = self.cols;
+
+        let dest = if self.scrollback_len < self.scrollback_max {
+            let needed = (self.scrollback_len + 1) * cols;
+            if self.scrollback.len() < needed {
+                self.scrollback.resize(needed, Cell::BLANK);
+            }
+            let dest = self.scrollback_len * cols;
+            self.scrollback_len += 1;
+            dest
+        } else {
+            let dest = self.scrollback_head * cols;
+            self.scrollback_head = (self.scrollback_head + 1) % self.scrollback_max;
+            dest
+        };
+
+        self.scrollback[dest..dest + cols]
+            .copy_from_slice(&self.cells[row_start..row_start + cols]);
+
+        if self.has_graphemes {
+            if self.scrollback_graphemes.len() < self.scrollback.len() {
+                self.scrollback_graphemes
+                    .resize(self.scrollback.len(), None);
+            }
+            for col in 0..cols {
+                self.scrollback_graphemes[dest + col] = self.graphemes[row_start + col].clone();
+            }
+        }
+    }
+
+    pub fn put_char(&mut self, ch: u32) {
+        let width = if let Some(c) = char::from_u32(ch) {
+            match unicode_width::UnicodeWidthChar::width(c) {
+                Some(0) => {
+                    // Zero-width codepoint (combining mark, variation
+                    // selector, ZWJ, keycap combiner, ...): it modifies the
+                    // previously written cell instead of occupying its own.
+                    let mut buf = [0u8; 4];
+                    self.merge_zero_width_into_previous_cell(c.encode_utf8(&mut buf));
+                    return;
+                }
+                Some(w) => w.clamp(1, 2),
+                None => 1,
+            }
+        } else {
+            1
+        };
+        self.put_cluster_parts(ch, width, None);
+    }
+
+    pub fn put_grapheme(&mut self, grapheme: &str) {
+        let measured = unicode_width::UnicodeWidthStr::width(grapheme);
+        if measured == 0 {
+            // A zero-width cluster (e.g. a lone combining mark, or a
+            // `VS16 + U+20E3` keycap fragment split from its base by chunked
+            // input) attaches to the previously written cell.
+            self.merge_zero_width_into_previous_cell(grapheme);
+            return;
+        }
+        let ch = grapheme
+            .chars()
+            .next()
+            .map(|c| c as u32)
+            .unwrap_or(b' ' as u32);
+        let width = measured.clamp(1, 2);
+        self.put_cluster_parts(
+            ch,
+            width,
+            needs_grapheme_storage(grapheme).then(|| grapheme.into()),
+        );
+    }
+
+    /// Appends a zero-width codepoint/cluster to the most recently written
+    /// cell, forming (or extending) a grapheme cluster there. If the merged
+    /// cluster gains emoji presentation and becomes wide (e.g. `U+2764` +
+    /// `VS16`), the cell is widened in place when the next column is
+    /// available.
+    fn merge_zero_width_into_previous_cell(&mut self, zero_width: &str) {
+        if self.cursor_row >= self.rows || self.cols == 0 {
+            return;
+        }
+
+        // The most recently written cell: with a pending wrap the cursor
+        // still points at it; otherwise it is the cell left of the cursor.
+        let mut col = if self.pending_wrap {
+            self.cursor_col
+        } else if self.cursor_col > 0 {
+            self.cursor_col - 1
+        } else {
+            // Nothing on this row to attach to; drop the mark.
+            return;
+        };
+
+        let mut idx = self.cell_index_at(self.cursor_row, col);
+        // Attach to the head of a wide pair, not its continuation.
+        if self.cells[idx].flags & FLAG_WIDE_CONT != 0 && col > 0 {
+            col -= 1;
+            idx -= 1;
+        }
+
+        let existing = if self.has_graphemes {
+            self.graphemes[idx].as_deref()
+        } else {
+            None
+        };
+        let mut merged = match existing {
+            Some(cluster) => String::from(cluster),
+            None => match char::from_u32(self.cells[idx].ch) {
+                Some(base) => String::from(base),
+                None => return,
+            },
+        };
+        merged.push_str(zero_width);
+
+        // Re-measure: a variation selector can upgrade a narrow text-style
+        // glyph to a wide emoji-presentation cluster.
+        let new_width = unicode_width::UnicodeWidthStr::width(merged.as_str()).clamp(1, 2);
+        self.has_graphemes = true;
+        self.graphemes[idx] = Some(merged.into_boxed_str());
+        self.mark_dirty(idx);
+
+        if new_width == 2
+            && self.cells[idx].flags & FLAG_WIDE == 0
+            && !self.pending_wrap
+            && col + 1 < self.cols
+        {
+            self.cells[idx].flags |= FLAG_WIDE;
+            let mut cont = self.cells[idx];
+            cont.ch = 0;
+            cont.flags = FLAG_WIDE_CONT;
+            let idx2 = idx + 1;
+            self.cells[idx2] = cont;
+            self.graphemes[idx2] = None;
+            self.mark_dirty(idx2);
+            // Step the cursor past the new continuation cell when it was
+            // sitting immediately after the head.
+            if self.cursor_col == col + 1 {
+                self.cursor_col += 1;
+                if self.cursor_col >= self.cols {
+                    self.pending_wrap = true;
+                    self.cursor_col = self.cols - 1;
+                }
+            }
+        }
+    }
+
+    fn put_cluster_parts(&mut self, ch: u32, width: usize, grapheme: Option<Box<str>>) {
+        if self.cursor_row >= self.rows {
+            return;
+        }
+
+        if self.pending_wrap {
+            if !self.autowrap {
+                self.cursor_col = self.cols.saturating_sub(1);
+                self.pending_wrap = false;
+            } else {
+                self.pending_wrap = false;
+                self.cursor_col = 0;
+                if self.cursor_row + 1 >= self.scroll_bottom {
+                    self.scroll_up();
+                } else {
+                    self.cursor_row += 1;
+                }
+            }
+        }
+
+        if self.cursor_col >= self.cols {
+            return;
+        }
+
+        if width == 2 && self.cursor_col + 1 >= self.cols {
+            if !self.autowrap {
+                return;
+            }
+            let idx = self.cell_index_at(self.cursor_row, self.cursor_col);
+            self.cells[idx] = Cell::BLANK;
+            if self.has_graphemes {
+                self.graphemes[idx] = None;
+            }
+            self.cursor_col = 0;
+            if self.cursor_row + 1 >= self.scroll_bottom {
+                self.scroll_up();
+            } else {
+                self.cursor_row += 1;
+            }
+        }
+
+        // Materialize the shared style once and write the whole 24-byte Cell in
+        // one store instead of eight separate field assignments.
+        let mut cell = Cell {
+            ch,
+            fg: self.current_fg,
+            bg: self.current_bg,
+            underline_color: self.current_underline_color,
+            hyperlink_id: self.current_hyperlink_id,
+            attrs: self.current_attrs,
+            flags: if width == 2 { FLAG_WIDE } else { 0 },
+            underline_style: self.current_underline_style,
+            _pad: [0; 3],
+        };
+
+        let idx = self.cell_index_at(self.cursor_row, self.cursor_col);
+        self.cells[idx] = cell;
+        if grapheme.is_some() {
+            self.has_graphemes = true;
+            self.graphemes[idx] = grapheme;
+        } else if self.has_graphemes {
+            self.graphemes[idx] = None;
+        }
+        self.mark_dirty(idx);
+
+        self.cursor_col += 1;
+
+        if width == 2 && self.cursor_col < self.cols {
+            let idx2 = self.cell_index_at(self.cursor_row, self.cursor_col);
+            cell.ch = 0;
+            cell.flags = FLAG_WIDE_CONT;
+            self.cells[idx2] = cell;
+            if self.has_graphemes {
+                self.graphemes[idx2] = None;
+            }
+            self.mark_dirty(idx2);
+            self.cursor_col += 1;
+        }
+
+        if self.cursor_col >= self.cols {
+            self.pending_wrap = true;
+            self.cursor_col = self.cols - 1;
+        }
+    }
+
+    pub fn line_feed(&mut self) {
+        if self.cursor_row + 1 >= self.scroll_bottom {
+            self.scroll_up();
+        } else {
+            self.cursor_row += 1;
+        }
+    }
+
+    pub fn carriage_return(&mut self) {
+        self.cursor_col = 0;
+        self.pending_wrap = false;
+    }
+
+    pub fn tab(&mut self) {
+        let next = ((self.cursor_col / 8) + 1) * 8;
+        self.cursor_col = next.min(self.cols.saturating_sub(1));
+        self.pending_wrap = false;
+    }
+
+    pub fn backspace(&mut self) {
+        if self.cursor_col > 0 {
+            self.cursor_col -= 1;
+        }
+        self.pending_wrap = false;
+    }
+
+    pub fn reverse_index(&mut self) {
+        if self.cursor_row == self.scroll_top {
+            self.scroll_down();
+        } else if self.cursor_row > 0 {
+            self.cursor_row -= 1;
+        }
+    }
+
+    pub fn set_cursor(&mut self, row: usize, col: usize) {
+        self.cursor_row = row.min(self.rows.saturating_sub(1));
+        self.cursor_col = col.min(self.cols.saturating_sub(1));
+        self.pending_wrap = false;
+    }
+
+    pub fn set_cursor_row(&mut self, row: usize) {
+        self.cursor_row = row.min(self.rows.saturating_sub(1));
+        self.pending_wrap = false;
+    }
+
+    pub fn set_cursor_col(&mut self, col: usize) {
+        self.cursor_col = col.min(self.cols.saturating_sub(1));
+        self.pending_wrap = false;
+    }
+
+    pub fn move_cursor_up(&mut self, n: usize) {
+        self.cursor_row = self.cursor_row.saturating_sub(n);
+    }
+
+    pub fn move_cursor_down(&mut self, n: usize) {
+        self.cursor_row = (self.cursor_row + n).min(self.rows.saturating_sub(1));
+    }
+
+    pub fn move_cursor_right(&mut self, n: usize) {
+        self.cursor_col = (self.cursor_col + n).min(self.cols.saturating_sub(1));
+    }
+
+    pub fn move_cursor_left(&mut self, n: usize) {
+        self.cursor_col = self.cursor_col.saturating_sub(n);
+    }
+
+    pub fn erase_all(&mut self) {
+        for r in 0..self.rows {
+            self.erase_row(r);
+        }
+    }
+
+    pub fn erase_below(&mut self) {
+        self.erase_line_right();
+        for r in (self.cursor_row + 1)..self.rows {
+            self.erase_row(r);
+        }
+    }
+
+    pub fn erase_above(&mut self) {
+        self.erase_line_left();
+        for r in 0..self.cursor_row {
+            self.erase_row(r);
+        }
+    }
+
+    fn erase_row(&mut self, row: usize) {
+        let phys = self.physical_row(row);
+        let start = phys * self.cols;
+        let end = start + self.cols;
+        self.cells[start..end].fill(Cell::BLANK);
+        self.clear_graphemes(start, end);
+        self.mark_dirty_range(start, self.cols);
+    }
+
+    /// Reset the grapheme slots in `start..end` to `None`. When the grid has
+    /// never stored a grapheme cluster the slots are already `None`, so this is
+    /// a no-op and we skip touching the parallel array entirely.
+    #[inline(always)]
+    fn clear_graphemes(&mut self, start: usize, end: usize) {
+        if self.has_graphemes {
+            self.graphemes[start..end].fill(None);
+        }
+    }
+
+    pub fn erase_line_right(&mut self) {
+        if self.cursor_row >= self.rows {
+            return;
+        }
+        let phys = self.physical_row(self.cursor_row);
+        let start = phys * self.cols + self.cursor_col;
+        let end = phys * self.cols + self.cols;
+        let len = end - start;
+        self.cells[start..end].fill(Cell::BLANK);
+        self.clear_graphemes(start, end);
+        self.mark_dirty_range(start, len);
+    }
+
+    pub fn erase_line_left(&mut self) {
+        if self.cursor_row >= self.rows {
+            return;
+        }
+        let phys = self.physical_row(self.cursor_row);
+        let start = phys * self.cols;
+        let end = phys * self.cols + self.cursor_col + 1;
+        let actual_end = end.min(start + self.cols);
+        let len = actual_end - start;
+        self.cells[start..actual_end].fill(Cell::BLANK);
+        self.clear_graphemes(start, actual_end);
+        self.mark_dirty_range(start, len);
+    }
+
+    pub fn erase_line_all(&mut self) {
+        self.erase_row(self.cursor_row);
+    }
+
+    pub fn erase_chars(&mut self, n: usize) {
+        if self.cursor_row >= self.rows {
+            return;
+        }
+        let phys = self.physical_row(self.cursor_row);
+        let start = phys * self.cols + self.cursor_col;
+        let end = (start + n).min(phys * self.cols + self.cols);
+        let len = end - start;
+        self.cells[start..end].fill(Cell::BLANK);
+        self.clear_graphemes(start, end);
+        self.mark_dirty_range(start, len);
+    }
+
+    pub fn insert_lines(&mut self, n: usize) {
+        for _ in 0..n {
+            self.scroll_down();
+        }
+    }
+
+    pub fn delete_lines(&mut self, n: usize) {
+        for _ in 0..n {
+            self.scroll_up();
+        }
+    }
+
+    pub fn insert_chars(&mut self, n: usize) {
+        if self.cursor_row >= self.rows {
+            return;
+        }
+        let phys = self.physical_row(self.cursor_row);
+        let row_start = phys * self.cols;
+        let col = self.cursor_col;
+        let n = n.min(self.cols - col);
+        let src = row_start + col;
+        let dest = row_start + col + n;
+        let move_count = self.cols - col - n;
+        if move_count > 0 {
+            self.cells.copy_within(src..src + move_count, dest);
+            if self.has_graphemes {
+                clone_optional_slice(&mut self.graphemes, src, dest, move_count);
+            }
+        }
+        self.cells[src..src + n].fill(Cell::BLANK);
+        self.clear_graphemes(src, src + n);
+        self.mark_dirty_range(row_start + col, self.cols - col);
+    }
+
+    pub fn delete_chars(&mut self, n: usize) {
+        if self.cursor_row >= self.rows {
+            return;
+        }
+        let phys = self.physical_row(self.cursor_row);
+        let row_start = phys * self.cols;
+        let col = self.cursor_col;
+        let n = n.min(self.cols - col);
+        let src = row_start + col + n;
+        let dest = row_start + col;
+        let move_count = self.cols - col - n;
+        if move_count > 0 {
+            self.cells.copy_within(src..src + move_count, dest);
+            if self.has_graphemes {
+                clone_optional_slice(&mut self.graphemes, src, dest, move_count);
+            }
+        }
+        let blank_start = row_start + self.cols - n;
+        self.cells[blank_start..row_start + self.cols].fill(Cell::BLANK);
+        self.clear_graphemes(blank_start, row_start + self.cols);
+        self.mark_dirty_range(row_start + col, self.cols - col);
+    }
+
+    pub fn set_scroll_region(&mut self, top: usize, bottom: usize) {
+        self.scroll_top = top.min(self.rows.saturating_sub(1));
+        self.scroll_bottom = bottom.min(self.rows).max(self.scroll_top + 1);
+        self.cursor_row = 0;
+        self.cursor_col = 0;
+    }
+
+    pub fn scroll_up_n(&mut self, n: usize) {
+        for _ in 0..n {
+            self.scroll_up();
+        }
+    }
+
+    pub fn scroll_down_n(&mut self, n: usize) {
+        for _ in 0..n {
+            self.scroll_down();
+        }
+    }
+
+    #[inline]
+    fn scroll_up(&mut self) {
+        if self.rows == 0 || self.cols == 0 {
+            return;
+        }
+        self.record_scroll(-1);
+
+        if self.scroll_top == 0 && self.scroll_bottom == self.rows {
+            let old_top = self.physical_row(0);
+            let blank_start = old_top * self.cols;
+            let cols = self.cols;
+
+            self.push_row_into_scrollback(blank_start);
+
+            self.cells[blank_start..blank_start + cols].fill(Cell::BLANK);
+            if self.has_graphemes {
+                self.graphemes[blank_start..blank_start + cols].fill(None);
+            }
+            self.top_row = (self.top_row + 1) % self.rows;
+        } else {
+            let cols = self.cols;
+            let has_graphemes = self.has_graphemes;
+            for r in self.scroll_top..self.scroll_bottom.saturating_sub(1) {
+                let src = self.physical_row(r + 1) * cols;
+                let dst = self.physical_row(r) * cols;
+                self.cells.copy_within(src..src + cols, dst);
+                if has_graphemes {
+                    clone_optional_slice(&mut self.graphemes, src, dst, cols);
+                }
+            }
+            let last = self.physical_row(self.scroll_bottom.saturating_sub(1));
+            let start = last * self.cols;
+            self.cells[start..start + self.cols].fill(Cell::BLANK);
+            if has_graphemes {
+                self.graphemes[start..start + self.cols].fill(None);
+            }
+        }
+        self.all_dirty = true;
+    }
+
+    fn scroll_down(&mut self) {
+        if self.rows == 0 || self.cols == 0 {
+            return;
+        }
+        self.record_scroll(1);
+
+        let cols = self.cols;
+        let has_graphemes = self.has_graphemes;
+        for r in (self.scroll_top + 1..self.scroll_bottom).rev() {
+            let src = self.physical_row(r - 1) * cols;
+            let dst = self.physical_row(r) * cols;
+            self.cells.copy_within(src..src + cols, dst);
+            if has_graphemes {
+                clone_optional_slice(&mut self.graphemes, src, dst, cols);
+            }
+        }
+        let first = self.physical_row(self.scroll_top);
+        let start = first * self.cols;
+        self.cells[start..start + self.cols].fill(Cell::BLANK);
+        if has_graphemes {
+            self.graphemes[start..start + self.cols].fill(None);
+        }
+        self.all_dirty = true;
+    }
+
+    pub fn reset_attrs(&mut self) {
+        self.current_fg = COLOR_DEFAULT;
+        self.current_bg = COLOR_DEFAULT;
+        self.current_attrs = 0;
+        self.current_underline_color = COLOR_DEFAULT;
+        self.current_underline_style = UnderlineStyle::None;
+    }
+
+    pub fn set_bold(&mut self, on: bool) {
+        if on {
+            self.current_attrs |= ATTR_BOLD;
+        } else {
+            self.current_attrs &= !ATTR_BOLD;
+        }
+    }
+
+    pub fn set_dim(&mut self, on: bool) {
+        if on {
+            self.current_attrs |= ATTR_DIM;
+        } else {
+            self.current_attrs &= !ATTR_DIM;
+        }
+    }
+
+    pub fn set_italic(&mut self, on: bool) {
+        if on {
+            self.current_attrs |= ATTR_ITALIC;
+        } else {
+            self.current_attrs &= !ATTR_ITALIC;
+        }
+    }
+
+    pub fn set_inverse(&mut self, on: bool) {
+        if on {
+            self.current_attrs |= ATTR_INVERSE;
+        } else {
+            self.current_attrs &= !ATTR_INVERSE;
+        }
+    }
+
+    pub fn set_strikethrough(&mut self, on: bool) {
+        if on {
+            self.current_attrs |= ATTR_STRIKETHROUGH;
+        } else {
+            self.current_attrs &= !ATTR_STRIKETHROUGH;
+        }
+    }
+
+    pub fn set_fg(&mut self, color: u32) {
+        self.current_fg = color;
+    }
+
+    pub fn set_bg(&mut self, color: u32) {
+        self.current_bg = color;
+    }
+
+    pub fn set_fg_rgb(&mut self, r: u8, g: u8, b: u8) {
+        self.current_fg = COLOR_FLAG_RGB | ((r as u32) << 16) | ((g as u32) << 8) | (b as u32);
+    }
+
+    pub fn set_bg_rgb(&mut self, r: u8, g: u8, b: u8) {
+        self.current_bg = COLOR_FLAG_RGB | ((r as u32) << 16) | ((g as u32) << 8) | (b as u32);
+    }
+
+    pub fn set_underline_style(&mut self, style: UnderlineStyle) {
+        self.current_underline_style = style;
+        if style != UnderlineStyle::None {
+            self.current_attrs |= ATTR_UNDERLINE;
+        } else {
+            self.current_attrs &= !ATTR_UNDERLINE;
+        }
+    }
+
+    pub fn set_underline_color(&mut self, color: u32) {
+        self.current_underline_color = color;
+        if color != COLOR_DEFAULT {
+            self.current_attrs |= ATTR_HAS_UCOLOR;
+        } else {
+            self.current_attrs &= !ATTR_HAS_UCOLOR;
+        }
+    }
+
+    pub fn set_underline_color_rgb(&mut self, r: u8, g: u8, b: u8) {
+        self.set_underline_color(
+            COLOR_FLAG_RGB | ((r as u32) << 16) | ((g as u32) << 8) | (b as u32),
+        );
+    }
+
+    pub fn reset_underline_color(&mut self) {
+        self.current_underline_color = COLOR_DEFAULT;
+        self.current_attrs &= !ATTR_HAS_UCOLOR;
+    }
+
+    pub fn set_hyperlink(&mut self, url: &str) {
+        if url.is_empty() {
+            self.current_hyperlink_id = 0;
+            return;
+        }
+        if let Some(pos) = self.hyperlinks.iter().position(|u| u == url) {
+            self.current_hyperlink_id = pos as u16;
+        } else if self.hyperlinks.len() < u16::MAX as usize {
+            self.current_hyperlink_id = self.hyperlinks.len() as u16;
+            self.hyperlinks.push(url.to_string());
+        }
+    }
+
+    pub fn clear_hyperlink(&mut self) {
+        self.current_hyperlink_id = 0;
+    }
+
+    pub fn hyperlink_url(&self, id: u16) -> Option<&str> {
+        if id == 0 {
+            None
+        } else {
+            self.hyperlinks.get(id as usize).map(|s| s.as_str())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FLAG_WIDE, FLAG_WIDE_CONT, Grid, bytes_need_grapheme_clusters};
+
+    #[test]
+    fn writes_simple_text() {
+        let mut g = Grid::new(8, 2, [1, 2, 3], [0, 0, 0]);
+        g.write_bytes(b"abc");
+        assert_eq!(g.cell_char(0, 0), 'a');
+        assert_eq!(g.cell_char(0, 1), 'b');
+        assert_eq!(g.cell_char(0, 2), 'c');
+    }
+
+    #[test]
+    fn wraps_and_scrolls() {
+        let mut g = Grid::new(4, 2, [1, 2, 3], [0, 0, 0]);
+        g.write_bytes(b"abcdefghij");
+        assert_eq!(g.cell_char(0, 0), 'e');
+        assert_eq!(g.cell_char(1, 0), 'i');
+    }
+
+    #[test]
+    fn cursor_movement() {
+        let mut g = Grid::new(10, 5, [0, 0, 0], [0, 0, 0]);
+        g.set_cursor(2, 3);
+        g.put_char(b'X' as u32);
+        assert_eq!(g.cell_char(2, 3), 'X');
+    }
+
+    #[test]
+    fn erase_line() {
+        let mut g = Grid::new(10, 2, [0, 0, 0], [0, 0, 0]);
+        g.write_bytes(b"helloworld");
+        g.set_cursor(0, 3);
+        g.erase_line_right();
+        assert_eq!(g.cell_char(0, 0), 'h');
+        assert_eq!(g.cell_char(0, 2), 'l');
+        assert_eq!(g.cell_char(0, 3), ' ');
+        assert_eq!(g.cell_char(0, 9), ' ');
+    }
+
+    #[test]
+    fn cell_is_24_bytes() {
+        assert_eq!(std::mem::size_of::<super::Cell>(), 24);
+    }
+
+    #[test]
+    fn writes_utf8_codepoints() {
+        let mut g = super::Grid::new(80, 24, [0xff; 3], [0; 3]);
+        g.write_bytes("héllo".as_bytes());
+        assert_eq!(g.cell_char(0, 0), 'h');
+        assert_eq!(g.cell_at(0, 1).ch, 0xe9);
+        assert_eq!(g.cell_char(0, 2), 'l');
+        assert_eq!(g.cell_char(0, 3), 'l');
+        assert_eq!(g.cell_char(0, 4), 'o');
+    }
+
+    #[test]
+    fn writes_3byte_utf8() {
+        let mut g = super::Grid::new(80, 24, [0xff; 3], [0; 3]);
+        let input = b"A\xe2\x80\x93B";
+        g.write_bytes(input);
+        assert_eq!(g.cell_char(0, 0), 'A');
+        assert_eq!(g.cell_at(0, 1).ch, 0x2013);
+        assert_eq!(g.cell_char(0, 2), 'B');
+    }
+
+    #[test]
+    fn writes_4byte_utf8_emoji() {
+        let mut g = super::Grid::new(80, 24, [0xff; 3], [0; 3]);
+        g.write_bytes("😀".as_bytes());
+        assert_eq!(g.cell_at(0, 0).ch, 0x1F600);
+    }
+
+    #[test]
+    fn writes_emoji_grapheme_clusters_into_single_cells() {
+        let mut g = super::Grid::new(80, 24, [0xff; 3], [0; 3]);
+        g.write_bytes("❤️👨‍💻".as_bytes());
+
+        assert_eq!(g.cell_grapheme_at(0, 0), Some("❤️"));
+        assert_eq!(g.cell_grapheme_at(0, 2), Some("👨‍💻"));
+        assert_eq!(g.get_text(0, 1), "❤️👨‍💻");
+    }
+
+    #[test]
+    fn pending_wrap_defers_line_advance() {
+        let mut g = Grid::new(4, 2, [0; 3], [0; 3]);
+        g.write_bytes(b"abcd");
+        assert_eq!(g.cell_char(0, 3), 'd');
+        let (col, row) = g.cursor_pos();
+        assert_eq!((col, row), (3, 0));
+        g.write_bytes(b"e");
+        assert_eq!(g.cell_char(1, 0), 'e');
+    }
+
+    #[test]
+    fn autowrap_off_stays_at_last_col() {
+        let mut g = Grid::new(4, 2, [0; 3], [0; 3]);
+        g.autowrap = false;
+        g.write_bytes(b"abcdef");
+        assert_eq!(g.cell_char(0, 3), 'f');
+        let (col, row) = g.cursor_pos();
+        assert_eq!((col, row), (3, 0));
+    }
+
+    #[test]
+    fn zero_scrollback_scrolls_without_history() {
+        let mut g = Grid::new_with_scrollback(4, 2, [0; 3], [0; 3], 0);
+        g.write_bytes(b"abcdefghij");
+
+        assert_eq!(g.scrollback_len(), 0);
+        assert_eq!(g.cell_char(0, 0), 'e');
+        assert_eq!(g.cell_char(0, 3), 'h');
+        assert_eq!(g.cell_char(1, 0), 'i');
+        assert_eq!(g.cell_char(1, 1), 'j');
+        assert_eq!(g.cell_char(1, 2), ' ');
+
+        g.scroll_offset = 1;
+        assert_eq!(g.cell_char(0, 0), 'e');
+        assert_eq!(g.cell_at_scroll(0, 0).char_display(), ' ');
+        assert_eq!(g.cell_grapheme_at_scroll(0, 0), None);
+    }
+
+    #[test]
+    fn zero_scrollback_preserves_grapheme_integrity_when_scrolling() {
+        let mut g = Grid::new_with_scrollback(4, 2, [0xff; 3], [0; 3], 0);
+        g.write_bytes("❤️\r\n👨‍💻\r\nxy".as_bytes());
+
+        assert_eq!(g.scrollback_len(), 0);
+        assert_eq!(g.cell_grapheme_at(0, 0), Some("👨‍💻"));
+        assert_eq!(g.cell_grapheme_at(1, 0), None);
+        assert_eq!(g.cell_char(1, 0), 'x');
+        assert_eq!(g.cell_char(1, 1), 'y');
+    }
+
+    #[test]
+    fn detects_complex_emoji_sequences_for_grapheme_segmentation() {
+        for sample in [
+            "🇺🇸",
+            "👨‍👩‍👧‍👦",
+            "👍🏻",
+            "1️⃣",
+            "🏴\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}",
+        ] {
+            assert!(
+                bytes_need_grapheme_clusters(sample.as_bytes()),
+                "expected {:?} to route through grapheme-aware path",
+                sample
+            );
+        }
+    }
+
+    #[test]
+    fn writes_complex_emoji_sequences_into_single_grapheme_cells() {
+        for sample in [
+            "🇺🇸",
+            "👨‍👩‍👧‍👦",
+            "👍🏻",
+            "1️⃣",
+            "🏴\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}",
+        ] {
+            let mut g = Grid::new(80, 24, [0xff; 3], [0; 3]);
+            g.write_bytes(sample.as_bytes());
+
+            assert_eq!(
+                g.cell_grapheme_at(0, 0),
+                Some(sample),
+                "expected {:?} to be stored as a grapheme cluster",
+                sample
+            );
+            assert_eq!(
+                g.get_text(0, 2).trim_end_matches('\n'),
+                sample,
+                "expected {:?} to roundtrip from the grid text view",
+                sample
+            );
+        }
+    }
+
+    #[test]
+    fn generic_emoji_keep_following_text_aligned() {
+        for (sample, expect_grapheme) in [
+            ("🪸", None),
+            ("🫠", None),
+            ("🫡", None),
+            ("🩷", None),
+            ("😀", None),
+            ("❤️", Some("❤️")),
+            ("👨‍💻", Some("👨‍💻")),
+            ("🇺🇸", Some("🇺🇸")),
+            ("👍🏻", Some("👍🏻")),
+            ("1️⃣", Some("1️⃣")),
+        ] {
+            let mut g = Grid::new(80, 24, [0xff; 3], [0; 3]);
+            g.write_bytes(format!("A{sample}B").as_bytes());
+
+            assert_eq!(
+                g.cell_char(0, 0),
+                'A',
+                "left sentinel should stay aligned for {sample}"
+            );
+            assert_eq!(
+                g.cell_char(0, 3),
+                'B',
+                "right sentinel should stay aligned for {sample}"
+            );
+            assert_eq!(
+                g.cell_at(0, 1).flags & FLAG_WIDE,
+                FLAG_WIDE,
+                "emoji should occupy a wide leading cell for {sample}"
+            );
+            assert_eq!(
+                g.cell_at(0, 2).flags & FLAG_WIDE_CONT,
+                FLAG_WIDE_CONT,
+                "emoji should occupy a wide continuation cell for {sample}"
+            );
+            assert_eq!(
+                g.cell_grapheme_at(0, 1),
+                expect_grapheme,
+                "unexpected grapheme storage for {sample}"
+            );
+        }
+    }
+
+    #[test]
+    fn row_has_dirty_cells_tracks_cleared_and_marked_rows() {
+        let mut g = Grid::new(8, 4, [0xff; 3], [0; 3]);
+
+        assert!(g.row_has_dirty_cells(0));
+        assert!(g.row_has_dirty_cells(3));
+
+        g.clear_dirty();
+        for row in 0..g.rows {
+            assert!(!g.row_has_dirty_cells(row), "row {row} should be clean");
+        }
+
+        g.mark_cell_dirty(2, 5);
+        assert!(!g.row_has_dirty_cells(0));
+        assert!(!g.row_has_dirty_cells(1));
+        assert!(g.row_has_dirty_cells(2));
+        assert!(!g.row_has_dirty_cells(3));
+    }
+
+    #[test]
+    fn row_has_dirty_cells_handles_rows_crossing_dirty_word_boundaries() {
+        let mut g = Grid::new(40, 3, [0xff; 3], [0; 3]);
+        g.clear_dirty();
+
+        g.mark_cell_dirty(1, 39);
+        assert!(!g.row_has_dirty_cells(0));
+        assert!(g.row_has_dirty_cells(1));
+        assert!(!g.row_has_dirty_cells(2));
+    }
+
+    #[test]
+    fn pure_ascii_grid_never_materializes_grapheme_ring() {
+        // A grid that only ever sees ASCII/BMP text must keep both the live
+        // grapheme array semantically empty and the scrollback grapheme ring
+        // unallocated, which is the basis for the lazy-grapheme memory win.
+        let mut g = Grid::new(8, 2, [0xff; 3], [0; 3]);
+        for i in 0..50u8 {
+            // Short lines (well under 8 cols) avoid the pending-wrap quirk so
+            // each logical line maps to exactly one scrollback row.
+            let line = format!("hi{}\r\n", (b'a' + (i % 26)) as char);
+            g.write_bytes(line.as_bytes());
+        }
+        assert!(
+            !g.has_graphemes,
+            "ASCII-only grid should not latch graphemes"
+        );
+        assert_eq!(
+            g.scrollback_graphemes_capacity(),
+            0,
+            "scrollback grapheme ring should stay unallocated for ASCII-only output"
+        );
+        assert!(g.scrollback_len() > 0);
+        // Scrolled-out content must still read back as the original text.
+        assert_eq!(g.cell_at_scrollback_offset(1, 0, 0).char_display(), 'h');
+        assert_eq!(g.cell_at_scrollback_offset(1, 0, 1).char_display(), 'i');
+        assert_eq!(g.cell_grapheme_at_scrollback_offset(1, 0, 0), None);
+    }
+
+    #[test]
+    fn grapheme_clusters_survive_scrolling_into_scrollback() {
+        // Once a grapheme cluster is written, it must be preserved when the row
+        // is pushed into scrollback even though the ring is lazily allocated.
+        let mut g = Grid::new(8, 2, [0xff; 3], [0; 3]);
+        g.write_bytes("👨‍💻ab\r\n".as_bytes());
+        assert!(g.has_graphemes, "writing a cluster must latch graphemes");
+        // Push the cluster row off the screen into scrollback.
+        for _ in 0..4 {
+            g.write_bytes(b"x\r\n");
+        }
+        assert!(g.scrollback_len() >= 1);
+        // The very first scrolled-back line should still carry the cluster.
+        let depth = g.scrollback_len();
+        assert_eq!(
+            g.cell_grapheme_at_scrollback_offset(depth, 0, 0),
+            Some("👨‍💻"),
+            "grapheme cluster must be retained in scrollback"
+        );
+    }
+
+    #[test]
+    fn ascii_run_template_preserves_active_style() {
+        // The templated ASCII fast path must apply the current SGR style to
+        // every cell in a run, including across a wrap boundary.
+        let mut g = Grid::new(4, 2, [0xff; 3], [0; 3]);
+        g.set_fg(0x0102_0304);
+        g.set_bg(0x0a0b_0c0d);
+        g.set_bold(true);
+        g.write_bytes(b"abcdef");
+        for (r, c) in [(0, 0), (0, 3), (1, 0), (1, 1)] {
+            let cell = g.cell_at(r, c);
+            assert_eq!(cell.fg, 0x0102_0304, "fg at {r},{c}");
+            assert_eq!(cell.bg, 0x0a0b_0c0d, "bg at {r},{c}");
+            assert_eq!(cell.attrs, super::ATTR_BOLD, "attrs at {r},{c}");
+            assert_eq!(cell.flags, 0, "flags at {r},{c}");
+        }
+    }
+
+    #[test]
+    fn ascii_run_clears_stale_grapheme_after_latch() {
+        // If a grapheme has been latched, overwriting a former cluster cell with
+        // ASCII text must clear the stored grapheme so it does not leak through.
+        let mut g = Grid::new(8, 1, [0xff; 3], [0; 3]);
+        g.write_bytes("👨‍💻".as_bytes());
+        assert_eq!(g.cell_grapheme_at(0, 0), Some("👨‍💻"));
+        g.set_cursor(0, 0);
+        g.write_bytes(b"hello");
+        assert_eq!(g.cell_char(0, 0), 'h');
+        assert_eq!(g.cell_grapheme_at(0, 0), None);
+        assert_eq!(g.cell_grapheme_at(0, 1), None);
+    }
+
+    #[test]
+    fn full_ascii_scrollback_keeps_grapheme_ring_unallocated() {
+        // Fill a full 10k-line, 80-col scrollback with pure ASCII and confirm
+        // the parallel grapheme ring is never allocated. Old behavior eagerly
+        // grew scrollback_graphemes to match scrollback (16 bytes/cell), i.e.
+        // ~12.8 MB for this geometry; the lazy ring keeps that at zero.
+        let cols = 80usize;
+        let lines = super::DEFAULT_SCROLLBACK_MAX;
+        let mut g = Grid::new(cols as u16, 2, [0xff; 3], [0; 3]);
+        for _ in 0..(lines + 50) {
+            g.write_bytes(b"x\r\n");
+        }
+        assert_eq!(g.scrollback_len(), lines);
+        assert_eq!(
+            g.scrollback_graphemes_capacity(),
+            0,
+            "ASCII-only scrollback must not allocate the grapheme ring"
+        );
+        let option_box_bytes = std::mem::size_of::<Option<Box<str>>>();
+        let saved = lines * cols * option_box_bytes;
+        assert!(
+            saved >= 12_000_000,
+            "expected the lazy ring to avoid >=12MB, computed {saved} bytes"
+        );
+        // The dense cell array is still retained, as expected.
+        assert!(g.scrollback_memory_bytes() >= lines * cols);
+    }
+
+    #[test]
+    fn resize_preserves_wrapped_history_rows_and_graphemes() {
+        let mut grid = Grid::new_with_scrollback(4, 2, [0; 3], [0; 3], 3);
+        for line in ["a\u{301}aaa", "bbbb", "cccc", "dddd", "eeee"] {
+            grid.write_bytes(line.as_bytes());
+            grid.carriage_return();
+            grid.line_feed();
+        }
+        assert_eq!(grid.scrollback_len(), 3);
+        let before: Vec<_> = (0..3)
+            .map(|r| grid.cell_at_scrollback_offset(3, r, 0).ch)
+            .collect();
+        grid.scroll_offset = 3;
+        grid.resize(6, 3);
+        assert_eq!(grid.scrollback_len(), 3);
+        assert_eq!(grid.scroll_offset, 3);
+        for (r, expected) in before.iter().enumerate() {
+            assert_eq!(grid.cell_at_scroll(r, 0).ch, *expected);
+            assert_eq!(grid.cell_at_scroll(r, 4).ch, b' ' as u32);
+        }
+        grid.resize(2, 2);
+        for (r, expected) in before.iter().enumerate() {
+            assert_eq!(grid.cell_at_scrollback_offset(3, r, 0).ch, *expected);
+        }
+        grid.write_bytes(b"ff");
+        grid.line_feed();
+        assert_eq!(grid.scrollback_len(), 3);
+    }
+
+    #[test]
+    fn resize_preserves_history_graphemes_and_handles_late_grapheme_storage() {
+        let mut grid = Grid::new_with_scrollback(4, 2, [0; 3], [0; 3], 3);
+        grid.write_bytes("a\u{301}".as_bytes());
+        grid.carriage_return();
+        grid.line_feed();
+        grid.line_feed();
+        grid.resize(6, 2);
+        assert_eq!(
+            grid.cell_grapheme_at_scrollback_offset(1, 0, 0),
+            Some("a\u{301}")
+        );
+
+        let mut grid = Grid::new_with_scrollback(4, 2, [0; 3], [0; 3], 3);
+        grid.write_bytes(b"abcdefghi");
+        assert_eq!(grid.scrollback_len(), 1);
+        grid.write_bytes("x\u{301}".as_bytes()); // History still has no grapheme backing.
+        grid.resize(6, 2);
+        assert_eq!(grid.cell_at_scrollback_offset(1, 0, 0).ch, b'a' as u32);
+        assert_eq!(grid.cell_grapheme_at_scrollback_offset(1, 0, 0), None);
+    }
+}

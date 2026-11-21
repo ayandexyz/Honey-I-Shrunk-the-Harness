@@ -1,0 +1,1836 @@
+use super::*;
+use std::{
+    ffi::OsString,
+    sync::{Mutex, MutexGuard, OnceLock},
+};
+
+pub(super) static TEST_DELIVERY_MODES: Mutex<Vec<DeliveryMode>> = Mutex::new(Vec::new());
+
+// All of these tests mutate process-global state: the env-var opt-out tests
+// flip `JCODE_NO_TELEMETRY` / `DO_NOT_TRACK`, while the session tests drive the
+// global `SESSION_STATE`. They must be serialized against *each other* with a
+// single shared lock. Using two separate locks previously let an env test
+// disable telemetry (`is_enabled() == false`) while a session test was calling
+// `begin_session_with_mode`, which then returned early and left `SESSION_STATE`
+// as `None`; the session test's `expect(...)` panicked while holding the
+// `SESSION_STATE` lock and poisoned it, cascading into `PoisonError` failures
+// in every other session test.
+struct TestEnvironment {
+    _home: tempfile::TempDir,
+    previous_home: Option<OsString>,
+    previous_no_telemetry: Option<OsString>,
+    previous_do_not_track: Option<OsString>,
+    _lock: MutexGuard<'static, ()>,
+}
+
+impl Drop for TestEnvironment {
+    fn drop(&mut self) {
+        restore_env_var("JCODE_HOME", self.previous_home.take());
+        restore_env_var("JCODE_NO_TELEMETRY", self.previous_no_telemetry.take());
+        restore_env_var("DO_NOT_TRACK", self.previous_do_not_track.take());
+    }
+}
+
+fn restore_env_var(key: &str, value: Option<OsString>) {
+    if let Some(value) = value {
+        jcode_core::env::set_var(key, value);
+    } else {
+        jcode_core::env::remove_var(key);
+    }
+}
+
+fn global_test_lock() -> TestEnvironment {
+    static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    let lock = TEST_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let home = tempfile::tempdir().expect("create isolated telemetry test home");
+    let previous_home = std::env::var_os("JCODE_HOME");
+    let previous_no_telemetry = std::env::var_os("JCODE_NO_TELEMETRY");
+    let previous_do_not_track = std::env::var_os("DO_NOT_TRACK");
+    jcode_core::env::set_var("JCODE_HOME", home.path());
+    jcode_core::env::remove_var("JCODE_NO_TELEMETRY");
+    jcode_core::env::remove_var("DO_NOT_TRACK");
+
+    TestEnvironment {
+        _home: home,
+        previous_home,
+        previous_no_telemetry,
+        previous_do_not_track,
+        _lock: lock,
+    }
+}
+
+#[test]
+fn permanent_telemetry_statuses_trip_the_process_breaker() {
+    assert!(telemetry_status_is_permanent(400));
+    assert!(telemetry_status_is_permanent(401));
+    assert!(telemetry_status_is_permanent(404));
+    assert!(!telemetry_status_is_permanent(408));
+    assert!(!telemetry_status_is_permanent(425));
+    assert!(!telemetry_status_is_permanent(429));
+    assert!(!telemetry_status_is_permanent(500));
+}
+
+#[test]
+fn background_delivery_queue_is_bounded() {
+    let (started_tx, started_rx) = std::sync::mpsc::sync_channel(1);
+    let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+    let sender = spawn_background_worker(1, move |_| {
+        let _ = started_tx.send(());
+        let _ = release_rx.recv();
+    })
+    .expect("start test telemetry worker");
+
+    sender
+        .send(serde_json::json!({"event": "first"}))
+        .expect("enqueue first payload");
+    started_rx.recv().expect("worker started first payload");
+    sender
+        .try_send(serde_json::json!({"event": "second"}))
+        .expect("bounded queue accepts one waiting payload");
+    assert!(matches!(
+        sender.try_send(serde_json::json!({"event": "third"})),
+        Err(std::sync::mpsc::TrySendError::Full(_))
+    ));
+
+    release_tx.send(()).expect("release telemetry worker");
+}
+
+#[test]
+fn telemetry_endpoint_uses_production_custom_domain() {
+    assert_eq!(TELEMETRY_ENDPOINT, "https://telemetry.jcode.sh/v1/event");
+    assert_eq!(
+        TRANSCRIPT_ENDPOINT,
+        "https://telemetry.jcode.sh/v1/transcript"
+    );
+}
+
+#[test]
+fn transcript_upload_requires_separate_content_consent() {
+    let _guard = lock_test_env();
+    TEST_EMITTED_PAYLOADS.lock().unwrap().clear();
+
+    assert!(!record_transcript(
+        "provider",
+        "model",
+        SessionEndReason::NormalExit,
+        serde_json::json!([{"role": "user", "content": "secret prompt"}]),
+    ));
+    assert!(TEST_EMITTED_PAYLOADS.lock().unwrap().is_empty());
+}
+
+#[test]
+fn opted_in_transcript_payload_contains_full_structured_messages() {
+    let _guard = lock_test_env();
+    TEST_EMITTED_PAYLOADS.lock().unwrap().clear();
+    assert!(set_content_sharing_enabled(true));
+    let messages = serde_json::json!([
+        {"role": "user", "content": [{"type": "text", "text": "secret prompt"}]},
+        {"role": "assistant", "content": [{"type": "reasoning", "text": "private reasoning"}]}
+    ]);
+
+    assert!(record_transcript(
+        "provider",
+        "model",
+        SessionEndReason::NormalExit,
+        messages.clone(),
+    ));
+    let payloads = TEST_EMITTED_PAYLOADS.lock().unwrap();
+    let payload = payloads.last().expect("transcript payload");
+    assert_eq!(payload["event"], "transcript");
+    assert_eq!(payload["consent_version"], 1);
+    assert_eq!(payload["message_count"], 2);
+    assert_eq!(payload["messages"], messages);
+    assert!(uuid::Uuid::parse_str(payload["upload_id"].as_str().unwrap()).is_ok());
+}
+
+fn lock_test_env() -> TestEnvironment {
+    global_test_lock()
+}
+
+fn lock_telemetry_test_state() -> TestEnvironment {
+    global_test_lock()
+}
+
+#[test]
+fn test_opt_out_env_var() {
+    let _guard = lock_test_env();
+    jcode_core::env::set_var("JCODE_NO_TELEMETRY", "1");
+    assert!(!is_enabled());
+    jcode_core::env::remove_var("JCODE_NO_TELEMETRY");
+}
+
+#[test]
+fn test_do_not_track() {
+    let _guard = lock_test_env();
+    jcode_core::env::set_var("DO_NOT_TRACK", "1");
+    assert!(!is_enabled());
+    jcode_core::env::remove_var("DO_NOT_TRACK");
+}
+
+#[test]
+fn false_opt_out_values_keep_telemetry_enabled() {
+    let _guard = lock_test_env();
+    for value in ["", "0", "false", "no", "off"] {
+        jcode_core::env::set_var("JCODE_NO_TELEMETRY", value);
+        jcode_core::env::set_var("DO_NOT_TRACK", value);
+        assert!(is_enabled(), "{value:?} should not opt out");
+    }
+}
+
+#[test]
+fn in_app_opt_out_emits_once_then_stops_telemetry() {
+    let _guard = lock_test_env();
+    TEST_EMITTED_PAYLOADS.lock().unwrap().clear();
+
+    assert!(set_usage_telemetry_enabled(false));
+    assert!(!is_enabled());
+    assert!(set_usage_telemetry_enabled(false));
+
+    let payloads = TEST_EMITTED_PAYLOADS.lock().unwrap();
+    let opt_outs = payloads
+        .iter()
+        .filter(|payload| payload["event"] == "telemetry_opt_out")
+        .collect::<Vec<_>>();
+    assert_eq!(opt_outs.len(), 1);
+    assert_eq!(opt_outs[0]["step"], "telemetry_settings");
+}
+
+#[test]
+fn record_turn_emits_prompt_submitted_immediately() {
+    let _guard = lock_telemetry_test_state();
+    TEST_EMITTED_PAYLOADS.lock().unwrap().clear();
+    if let Ok(mut session) = SESSION_STATE.lock() {
+        *session = None;
+    }
+    begin_session_with_mode("openai", "gpt-test", None, false);
+
+    record_turn();
+
+    let payloads = TEST_EMITTED_PAYLOADS.lock().unwrap().clone();
+    let prompt = payloads
+        .iter()
+        .find(|payload| payload["event"] == "prompt_submitted")
+        .expect("prompt_submitted should be emitted before turn completion");
+    assert_eq!(prompt["turn_index"], 1);
+    assert!(prompt["session_id"].is_string());
+    if let Ok(mut session) = SESSION_STATE.lock() {
+        *session = None;
+    }
+}
+
+#[test]
+fn telemetry_status_on_fresh_home_is_read_only() {
+    let _guard = lock_test_env();
+
+    let snapshot = status();
+
+    assert!(snapshot.enabled);
+    assert_eq!(snapshot.opt_out_source, None);
+    assert_eq!(snapshot.telemetry_id, None);
+    assert!(!snapshot.content_sharing_enabled);
+    assert!(!telemetry_id_path().expect("telemetry id path").exists());
+}
+
+#[test]
+fn telemetry_status_reads_an_existing_id_without_replacing_it() {
+    let _guard = lock_test_env();
+    let path = telemetry_id_path().expect("telemetry id path");
+    write_private_file(&path, "existing-id\n");
+
+    assert_eq!(status().telemetry_id.as_deref(), Some("existing-id"));
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "existing-id\n");
+}
+
+#[test]
+fn telemetry_status_reports_marker_file_opt_out() {
+    let _guard = lock_test_env();
+    assert!(set_usage_telemetry_enabled(false));
+
+    let snapshot = status();
+
+    assert!(!snapshot.enabled);
+    assert_eq!(
+        snapshot.opt_out_source,
+        Some(TelemetryOptOutSource::MarkerFile)
+    );
+}
+
+#[test]
+fn environment_opt_out_takes_precedence_over_marker_file() {
+    let _guard = lock_test_env();
+    assert!(set_usage_telemetry_enabled(false));
+    jcode_core::env::set_var("DO_NOT_TRACK", "1");
+
+    let snapshot = status();
+
+    assert!(!snapshot.enabled);
+    assert_eq!(
+        snapshot.opt_out_source,
+        Some(TelemetryOptOutSource::Environment)
+    );
+}
+
+#[test]
+fn test_is_ci_detects_ci_env() {
+    let _guard = lock_test_env();
+    // Clear any inherited CI markers so the baseline is deterministic.
+    for key in [
+        "JCODE_CI",
+        "CI",
+        "CONTINUOUS_INTEGRATION",
+        "BUILD_NUMBER",
+        "GITHUB_ACTIONS",
+        "BUILDKITE",
+        "JENKINS_URL",
+        "GITLAB_CI",
+        "CIRCLECI",
+        "TRAVIS",
+        "TEAMCITY_VERSION",
+        "TF_BUILD",
+        "CODEBUILD_BUILD_ID",
+        "DRONE",
+        "APPVEYOR",
+        "WOODPECKER",
+        "BITBUCKET_BUILD_NUMBER",
+        "NEXTEST",
+        "JCODE_E2E_BIN",
+    ] {
+        jcode_core::env::remove_var(key);
+    }
+    assert!(
+        !is_ci(),
+        "expected non-CI baseline after clearing CI markers"
+    );
+    jcode_core::env::set_var("CI", "true");
+    assert!(
+        is_ci(),
+        "CI env var should mark the run as CI (gates install skip)"
+    );
+    jcode_core::env::remove_var("CI");
+    assert!(!is_ci());
+
+    jcode_core::env::set_var("JCODE_CI", "1");
+    assert!(is_ci(), "explicit JCODE_CI=1 should mark any runtime as CI");
+    jcode_core::env::remove_var("JCODE_CI");
+
+    jcode_core::env::set_var("CI", "true");
+    jcode_core::env::set_var("JCODE_CI", "0");
+    assert!(
+        !is_ci(),
+        "explicit JCODE_CI=0 should override inherited provider markers"
+    );
+    jcode_core::env::remove_var("JCODE_CI");
+    jcode_core::env::remove_var("CI");
+
+    jcode_core::env::set_var("CI", "true");
+    jcode_core::env::set_var("JCODE_CI", "invalid");
+    assert!(
+        is_ci(),
+        "invalid explicit values should fall back to provider detection"
+    );
+    jcode_core::env::remove_var("JCODE_CI");
+    jcode_core::env::remove_var("CI");
+
+    // Vendor-specific markers count on their own: several providers never set
+    // the generic `CI` variable, and those runners used to look like people.
+    for key in [
+        "TEAMCITY_VERSION",
+        "TF_BUILD",
+        "DRONE",
+        "BITBUCKET_BUILD_NUMBER",
+    ] {
+        jcode_core::env::set_var(key, "1");
+        assert!(is_ci(), "{key} should mark the run as CI");
+        jcode_core::env::remove_var(key);
+        assert!(!is_ci());
+    }
+
+    // Test harnesses are automation: they mint a throwaway id per process.
+    jcode_core::env::set_var("NEXTEST", "1");
+    assert!(is_ci(), "nextest runs should be tagged as automation");
+    jcode_core::env::remove_var("NEXTEST");
+    assert!(!is_ci());
+}
+
+#[test]
+fn test_error_counters() {
+    let _guard = lock_telemetry_test_state();
+    if let Ok(mut session) = SESSION_STATE.lock() {
+        *session = None;
+    }
+    begin_session_with_mode("openai", "gpt-5.4", None, false);
+    record_error(ErrorCategory::ProviderTimeout);
+    record_error(ErrorCategory::ProviderTimeout);
+    record_error(ErrorCategory::ToolError);
+    {
+        let guard = SESSION_STATE.lock().unwrap();
+        let state = guard.as_ref().expect("session telemetry state");
+        assert_eq!(state.error_provider_timeout, 2);
+        assert_eq!(state.error_tool_error, 1);
+        let errors = current_error_counts(state);
+        assert_eq!(errors.provider_timeout, 2);
+        assert_eq!(errors.tool_error, 1);
+    }
+    if let Ok(mut session) = SESSION_STATE.lock() {
+        *session = None;
+    }
+}
+
+#[test]
+fn test_error_counter_caps_per_session() {
+    let _guard = lock_telemetry_test_state();
+    if let Ok(mut session) = SESSION_STATE.lock() {
+        *session = None;
+    }
+    begin_session_with_mode("openai", "gpt-5.4", None, false);
+    // A runaway retry loop once logged 18k+ auth failures in one session and
+    // distorted daily aggregates. The counter must saturate at the cap.
+    for _ in 0..600 {
+        record_error(ErrorCategory::AuthFailed);
+    }
+    {
+        let guard = SESSION_STATE.lock().unwrap();
+        let state = guard.as_ref().expect("session telemetry state");
+        assert_eq!(state.error_auth_failed, 500);
+    }
+    if let Ok(mut session) = SESSION_STATE.lock() {
+        *session = None;
+    }
+}
+
+#[test]
+fn test_error_counters_no_session_is_noop() {
+    let _guard = lock_telemetry_test_state();
+    // Errors recorded with no active session must not bump any counter that a
+    // future session could observe (issue #394: counts drifting across the
+    // session boundary).
+    if let Ok(mut session) = SESSION_STATE.lock() {
+        *session = None;
+    }
+    record_error(ErrorCategory::AuthFailed);
+    record_provider_switch();
+    record_model_switch();
+    begin_session_with_mode("openai", "gpt-5.4", None, false);
+    {
+        let guard = SESSION_STATE.lock().unwrap();
+        let state = guard.as_ref().expect("session telemetry state");
+        assert_eq!(state.error_auth_failed, 0);
+        assert_eq!(state.provider_switches, 0);
+        assert_eq!(state.model_switches, 0);
+    }
+    if let Ok(mut session) = SESSION_STATE.lock() {
+        *session = None;
+    }
+}
+
+#[test]
+fn test_session_reason_labels() {
+    assert_eq!(SessionEndReason::NormalExit.as_str(), "normal_exit");
+    assert_eq!(SessionEndReason::Disconnect.as_str(), "disconnect");
+}
+
+#[test]
+fn test_session_start_event_serialization() {
+    let event = SessionStartEvent {
+        event_id: "event-1".to_string(),
+        id: "test-uuid".to_string(),
+        session_id: "session-1".to_string(),
+        event: "session_start",
+        version: "0.6.1".to_string(),
+        os: "linux",
+        arch: "x86_64",
+        provider_start: "claude".to_string(),
+        model_start: "claude-sonnet-4".to_string(),
+        resumed_session: true,
+        session_start_hour_utc: 13,
+        session_start_weekday_utc: 2,
+        previous_session_gap_secs: Some(3600),
+        sessions_started_24h: 3,
+        sessions_started_7d: 8,
+        active_sessions_at_start: 2,
+        other_active_sessions_at_start: 1,
+        schema_version: TELEMETRY_SCHEMA_VERSION,
+        build_channel: "release".to_string(),
+        is_git_checkout: false,
+        is_ci: false,
+        ran_from_cargo: false,
+    };
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(json["event"], "session_start");
+    assert_eq!(json["resumed_session"], true);
+    assert_eq!(json["session_id"], "session-1");
+    assert_eq!(json["sessions_started_24h"], 3);
+}
+
+#[test]
+fn test_discovery_event_serialization_excludes_free_text() {
+    let event = DiscoveryEvent {
+        event_id: "event-discovery-1".to_string(),
+        id: "test-uuid".to_string(),
+        session_id: Some("session-1".to_string()),
+        event: "discovery",
+        version: "0.41.0".to_string(),
+        os: "linux",
+        arch: "x86_64",
+        request_id: "request-1".to_string(),
+        phase: "select".to_string(),
+        category: Some("payments".to_string()),
+        selected_tool: Some("agentcard".to_string()),
+        outcome: "success".to_string(),
+        failure_reason: None,
+        http_status: Some(200),
+        latency_ms: 123,
+        response_bytes: Some(456),
+        result_count: Some(1),
+        query_present: true,
+        reason_present: true,
+        benchmark_run: true,
+        custom_endpoint: false,
+        schema_version: TELEMETRY_SCHEMA_VERSION,
+        build_channel: "release".to_string(),
+        is_git_checkout: false,
+        is_ci: false,
+        ran_from_cargo: false,
+    };
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(json["event"], "discovery");
+    assert_eq!(json["request_id"], "request-1");
+    assert_eq!(json["phase"], "select");
+    assert_eq!(json["selected_tool"], "agentcard");
+    assert_eq!(json["latency_ms"], 123);
+    assert_eq!(json["benchmark_run"], true);
+    assert!(json.get("query").is_none());
+    assert!(json.get("reason").is_none());
+}
+
+#[test]
+fn test_session_end_event_serialization() {
+    let event = SessionLifecycleEvent {
+        event_id: "event-2".to_string(),
+        id: "test-uuid".to_string(),
+        session_id: "session-2".to_string(),
+        event: "session_end",
+        version: "0.6.1".to_string(),
+        os: "linux",
+        arch: "x86_64",
+        provider_start: "claude".to_string(),
+        provider_end: "openrouter".to_string(),
+        model_start: "claude-sonnet-4-20250514".to_string(),
+        model_end: "anthropic/claude-sonnet-4".to_string(),
+        provider_switches: 1,
+        model_switches: 2,
+        duration_mins: 45,
+        duration_secs: 2700,
+        turns: 23,
+        had_user_prompt: true,
+        had_assistant_response: true,
+        assistant_responses: 3,
+        first_assistant_response_ms: Some(1200),
+        first_tool_call_ms: Some(900),
+        first_tool_success_ms: Some(1500),
+        first_file_edit_ms: Some(2200),
+        first_test_pass_ms: Some(4100),
+        tool_calls: 4,
+        tool_failures: 1,
+        executed_tool_calls: 5,
+        executed_tool_successes: 4,
+        executed_tool_failures: 1,
+        tool_latency_total_ms: 3200,
+        tool_latency_max_ms: 1400,
+        file_write_calls: 2,
+        tests_run: 1,
+        tests_passed: 1,
+        input_tokens: 1234,
+        output_tokens: 567,
+        cache_read_input_tokens: 890,
+        cache_creation_input_tokens: 12,
+        total_tokens: 2703,
+        feature_memory_used: true,
+        feature_swarm_used: false,
+        feature_web_used: true,
+        feature_email_used: false,
+        feature_mcp_used: true,
+        feature_side_panel_used: true,
+        feature_goal_used: false,
+        feature_selfdev_used: false,
+        feature_background_used: false,
+        feature_subagent_used: true,
+        feature_todo_used: false,
+        unique_mcp_servers: 2,
+        session_success: true,
+        abandoned_before_response: false,
+        session_stop_reason: "completed_successfully",
+        agent_role: "foreground",
+        parent_session_id: None,
+        agent_active_ms_total: 180_000,
+        agent_model_ms_total: 120_000,
+        agent_tool_ms_total: 60_000,
+        session_idle_ms_total: 30_000,
+        agent_blocked_ms_total: 0,
+        time_to_first_agent_action_ms: Some(900),
+        time_to_first_useful_action_ms: Some(1500),
+        spawned_agent_count: 3,
+        background_task_count: 1,
+        background_task_completed_count: 1,
+        subagent_task_count: 1,
+        subagent_success_count: 1,
+        swarm_task_count: 1,
+        swarm_success_count: 0,
+        user_cancelled_count: 1,
+        transport_https: 2,
+        transport_persistent_ws_fresh: 1,
+        transport_persistent_ws_reuse: 5,
+        transport_cli_subprocess: 0,
+        transport_native_http2: 0,
+        transport_other: 0,
+        tool_cat_read_search: 2,
+        tool_cat_write: 2,
+        tool_cat_shell: 1,
+        tool_cat_web: 1,
+        tool_cat_memory: 1,
+        tool_cat_subagent: 1,
+        tool_cat_swarm: 0,
+        tool_cat_email: 0,
+        tool_cat_side_panel: 1,
+        tool_cat_goal: 0,
+        tool_cat_mcp: 1,
+        tool_cat_other: 0,
+        tool_cat_todo: 0,
+        todo_gate_ownership_count: 0,
+        todo_gate_feedback_loop_count: 0,
+        todo_gate_alignment_count: 0,
+        todo_gate_intent_count: 0,
+        todo_gate_completion_count: 0,
+        todo_gate_spike_count: 0,
+        command_login_used: false,
+        command_model_used: true,
+        command_usage_used: false,
+        command_resume_used: false,
+        command_memory_used: true,
+        command_swarm_used: false,
+        command_goal_used: false,
+        command_selfdev_used: false,
+        command_feedback_used: false,
+        command_other_used: false,
+        workflow_chat_only: false,
+        workflow_coding_used: true,
+        workflow_research_used: true,
+        workflow_tests_used: true,
+        workflow_background_used: false,
+        workflow_subagent_used: true,
+        workflow_swarm_used: false,
+        project_repo_present: true,
+        project_lang_rust: true,
+        project_lang_js_ts: false,
+        project_lang_python: false,
+        project_lang_go: false,
+        project_lang_markdown: true,
+        project_lang_mixed: true,
+        days_since_install: Some(12),
+        active_days_7d: 4,
+        active_days_30d: 9,
+        session_start_hour_utc: 13,
+        session_start_weekday_utc: 2,
+        session_end_hour_utc: 14,
+        session_end_weekday_utc: 2,
+        previous_session_gap_secs: Some(1800),
+        sessions_started_24h: 5,
+        sessions_started_7d: 12,
+        active_sessions_at_start: 2,
+        other_active_sessions_at_start: 1,
+        max_concurrent_sessions: 3,
+        multi_sessioned: true,
+        resumed_session: false,
+        end_reason: "normal_exit",
+        schema_version: TELEMETRY_SCHEMA_VERSION,
+        build_channel: "release".to_string(),
+        is_git_checkout: false,
+        is_ci: false,
+        ran_from_cargo: false,
+        errors: ErrorCounts {
+            provider_timeout: 2,
+            auth_failed: 0,
+            tool_error: 1,
+            mcp_error: 0,
+            rate_limited: 0,
+        },
+    };
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(json["event"], "session_end");
+    assert_eq!(json["assistant_responses"], 3);
+    assert_eq!(json["duration_secs"], 2700);
+    assert_eq!(json["executed_tool_calls"], 5);
+    assert_eq!(json["transport_https"], 2);
+    assert_eq!(json["tool_cat_write"], 2);
+    assert_eq!(json["workflow_coding_used"], true);
+    assert_eq!(json["active_days_30d"], 9);
+    assert_eq!(json["transport_persistent_ws_reuse"], 5);
+    assert_eq!(json["multi_sessioned"], true);
+    assert_eq!(json["end_reason"], "normal_exit");
+    assert_eq!(json["input_tokens"], 1234);
+    assert_eq!(json["output_tokens"], 567);
+    assert_eq!(json["cache_read_input_tokens"], 890);
+    assert_eq!(json["cache_creation_input_tokens"], 12);
+    assert_eq!(json["total_tokens"], 2703);
+    assert_eq!(json["errors"]["provider_timeout"], 2);
+    assert_eq!(json["session_stop_reason"], "completed_successfully");
+    assert_eq!(json["agent_active_ms_total"], 180_000);
+    assert_eq!(json["time_to_first_useful_action_ms"], 1500);
+    assert_eq!(json["subagent_task_count"], 1);
+    assert_eq!(json["user_cancelled_count"], 1);
+}
+
+#[test]
+fn test_record_token_usage_aggregates_session_and_turn() {
+    let _guard = lock_telemetry_test_state();
+    if let Ok(mut session) = SESSION_STATE.lock() {
+        *session = None;
+    }
+    begin_session_with_mode("openai", "gpt-5.4", None, false);
+    record_turn();
+    record_token_usage(100, 25, Some(200), Some(10));
+    record_token_usage(50, 5, None, Some(2));
+
+    {
+        let guard = SESSION_STATE.lock().unwrap();
+        let state = guard.as_ref().expect("session telemetry state");
+        assert_eq!(state.input_tokens, 150);
+        assert_eq!(state.output_tokens, 30);
+        assert_eq!(state.cache_read_input_tokens, 200);
+        assert_eq!(state.cache_creation_input_tokens, 12);
+        assert_eq!(state.total_tokens, 392);
+        let turn = state.current_turn.as_ref().expect("current turn");
+        assert_eq!(turn.input_tokens, 150);
+        assert_eq!(turn.output_tokens, 30);
+        assert_eq!(turn.cache_read_input_tokens, 200);
+        assert_eq!(turn.cache_creation_input_tokens, 12);
+        assert_eq!(turn.total_tokens, 392);
+    }
+    if let Ok(mut session) = SESSION_STATE.lock() {
+        *session = None;
+    }
+}
+
+#[test]
+fn usage_report_rejections_do_not_trip_the_process_breaker() {
+    assert!(payload_is_breaker_exempt(
+        &serde_json::json!({"event": "usage_report"})
+    ));
+    assert!(!payload_is_breaker_exempt(
+        &serde_json::json!({"event": "session_end"})
+    ));
+    assert!(!payload_is_breaker_exempt(&serde_json::json!({})));
+}
+
+#[test]
+fn usage_report_is_attributed_to_caller_session_not_global_slot() {
+    let _guard = lock_telemetry_test_state();
+    if let Ok(mut session) = SESSION_STATE.lock() {
+        *session = None;
+    }
+    // The global slot belongs to a different (most recently created) agent,
+    // as happens when a swarm worker is constructed in a shared server.
+    begin_session_with_mode("claude", "claude-opus-5", None, false);
+    let global_session = SESSION_STATE
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|state| state.session_id.clone())
+        .unwrap();
+    TEST_EMITTED_PAYLOADS.lock().unwrap().clear();
+
+    record_provider_usage(
+        Some("agent-session-a"),
+        "OpenAI",
+        "gpt-6-astra",
+        UsageSource::Agent,
+        ProviderUsage {
+            input_tokens: 1_000,
+            output_tokens: 200,
+            cache_read_input_tokens: Some(800),
+            cache_creation_input_tokens: None,
+        },
+    );
+
+    let emitted = TEST_EMITTED_PAYLOADS.lock().unwrap().clone();
+    let report = emitted
+        .iter()
+        .find(|payload| payload["event"] == "usage_report")
+        .expect("usage_report emitted");
+    assert_eq!(report["session_id"], "agent-session-a");
+    assert_ne!(report["session_id"], global_session.as_str());
+    assert_eq!(report["provider"], "OpenAI");
+    assert_eq!(report["model"], "gpt-6-astra");
+    assert_eq!(report["source"], "agent");
+    assert_eq!(report["input_tokens"], 200);
+    assert_eq!(report["output_tokens"], 200);
+    assert_eq!(report["cache_read_input_tokens"], 800);
+    assert_eq!(report["cache_creation_input_tokens"], 0);
+    assert_eq!(report["total_tokens"], 1_200);
+    assert_eq!(report["usage_contract_version"], 2);
+    assert!(chrono::DateTime::parse_from_rfc3339(report["occurred_at"].as_str().unwrap()).is_ok());
+    assert_eq!(report["responses"], 1);
+    assert!(report.get("build_channel").is_some());
+    assert!(report.get("is_ci").is_some());
+    // No content-bearing fields.
+    for forbidden in ["prompt", "text", "content", "messages"] {
+        assert!(
+            report.get(forbidden).is_none(),
+            "{forbidden} must not be sent"
+        );
+    }
+
+    if let Ok(mut session) = SESSION_STATE.lock() {
+        *session = None;
+    }
+}
+
+#[test]
+fn usage_report_falls_back_to_global_session_and_skips_zero_usage() {
+    let _guard = lock_telemetry_test_state();
+    if let Ok(mut session) = SESSION_STATE.lock() {
+        *session = None;
+    }
+    begin_session_with_mode("openai", "gpt-5.6-luna", None, false);
+    let global_session = SESSION_STATE
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|state| state.session_id.clone())
+        .unwrap();
+    TEST_EMITTED_PAYLOADS.lock().unwrap().clear();
+
+    record_provider_usage(
+        None,
+        "openai",
+        "gpt-5.6-luna",
+        UsageSource::Compaction,
+        ProviderUsage::default(),
+    );
+    assert!(
+        TEST_EMITTED_PAYLOADS
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|payload| payload["event"] != "usage_report"),
+        "zero usage must not emit"
+    );
+
+    record_simple_completion_usage(
+        None,
+        "openai",
+        "gpt-5.6-luna",
+        UsageSource::Compaction,
+        jcode_provider_core::SimpleCompletionUsage {
+            input_tokens: Some(3_000),
+            output_tokens: Some(400),
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
+        },
+    );
+    let emitted = TEST_EMITTED_PAYLOADS.lock().unwrap().clone();
+    let report = emitted
+        .iter()
+        .find(|payload| payload["event"] == "usage_report")
+        .expect("compaction usage_report emitted");
+    assert_eq!(report["session_id"], global_session.as_str());
+    assert_eq!(report["source"], "compaction");
+    assert_eq!(report["total_tokens"], 3_400);
+
+    if let Ok(mut session) = SESSION_STATE.lock() {
+        *session = None;
+    }
+}
+
+#[test]
+fn provider_usage_normalizes_cache_subsets_by_transport_not_model() {
+    let usage = ProviderUsage {
+        input_tokens: 100,
+        output_tokens: 20,
+        cache_read_input_tokens: Some(60),
+        cache_creation_input_tokens: Some(10),
+    };
+    for provider in [
+        "openai",
+        "OpenAI",
+        "openrouter",
+        "gemini",
+        "antigravity",
+        "copilot",
+    ] {
+        let normalized = usage.normalized(provider);
+        assert_eq!(normalized.input_tokens, 30, "{provider}");
+        assert_eq!(normalized.output_tokens, 20);
+        assert_eq!(normalized.cache_read_input_tokens, Some(60));
+        assert_eq!(normalized.cache_creation_input_tokens, Some(10));
+    }
+    for provider in ["anthropic", "claude", "bedrock", "unknown"] {
+        assert_eq!(usage.normalized(provider), usage, "{provider}");
+    }
+    let cache_only = ProviderUsage {
+        cache_read_input_tokens: Some(100),
+        cache_creation_input_tokens: Some(20),
+        ..ProviderUsage::default()
+    };
+    assert_eq!(cache_only.normalized("openai").input_tokens, 0);
+    assert!(!cache_only.normalized("openai").is_zero());
+    let missing_details = ProviderUsage {
+        input_tokens: 100,
+        ..ProviderUsage::default()
+    };
+    assert_eq!(missing_details.normalized("openai"), missing_details);
+}
+
+#[test]
+fn simple_completion_failure_reports_only_observed_usage() {
+    let _guard = lock_telemetry_test_state();
+    TEST_EMITTED_PAYLOADS.lock().unwrap().clear();
+    let error = anyhow::Error::new(jcode_provider_core::SimpleCompletionError::new(
+        anyhow::anyhow!("private provider response content"),
+        jcode_provider_core::SimpleCompletionUsage {
+            input_tokens: Some(100),
+            output_tokens: None,
+            cache_read_input_tokens: Some(60),
+            cache_creation_input_tokens: None,
+        },
+        "openai".into(),
+        "served-model".into(),
+    ))
+    .context("completion failed");
+    record_simple_completion_failure_usage(Some("failed-side-call"), UsageSource::Sidecar, &error);
+    let emitted = TEST_EMITTED_PAYLOADS.lock().unwrap().clone();
+    assert_eq!(emitted.len(), 1);
+    let report = &emitted[0];
+    assert_eq!(report["event"], "usage_report");
+    assert_eq!(report["session_id"], "failed-side-call");
+    assert_eq!(report["provider"], "openai");
+    assert_eq!(report["model"], "served-model");
+    assert_eq!(report["source"], "sidecar");
+    assert_eq!(report["input_tokens"], 40);
+    assert_eq!(report["output_tokens"], 0);
+    assert_eq!(report["cache_read_input_tokens"], 60);
+    assert_eq!(report["total_tokens"], 100);
+    assert!(
+        !report
+            .to_string()
+            .contains("private provider response content")
+    );
+
+    TEST_EMITTED_PAYLOADS.lock().unwrap().clear();
+    record_simple_completion_failure_usage(
+        None,
+        UsageSource::Compaction,
+        &anyhow::anyhow!("untyped"),
+    );
+    for input_tokens in [None, Some(0)] {
+        let empty = jcode_provider_core::SimpleCompletionError::new(
+            anyhow::anyhow!("no spend observed"),
+            jcode_provider_core::SimpleCompletionUsage {
+                input_tokens,
+                ..Default::default()
+            },
+            "openai".into(),
+            "served-model".into(),
+        )
+        .into();
+        record_simple_completion_failure_usage(None, UsageSource::Compaction, &empty);
+    }
+    assert!(TEST_EMITTED_PAYLOADS.lock().unwrap().is_empty());
+    jcode_core::env::set_var("JCODE_NO_TELEMETRY", "1");
+    record_simple_completion_failure_usage(Some("failed-side-call"), UsageSource::Sidecar, &error);
+    jcode_core::env::remove_var("JCODE_NO_TELEMETRY");
+    assert!(TEST_EMITTED_PAYLOADS.lock().unwrap().is_empty());
+}
+
+#[test]
+fn usage_report_respects_opt_out() {
+    let _guard = lock_telemetry_test_state();
+    TEST_EMITTED_PAYLOADS.lock().unwrap().clear();
+    jcode_core::env::set_var("JCODE_NO_TELEMETRY", "1");
+    record_provider_usage(
+        Some("s"),
+        "openai",
+        "gpt-5.6-luna",
+        UsageSource::Sidecar,
+        ProviderUsage {
+            input_tokens: 10,
+            output_tokens: 10,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
+        },
+    );
+    jcode_core::env::remove_var("JCODE_NO_TELEMETRY");
+    assert!(
+        TEST_EMITTED_PAYLOADS
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|payload| payload["event"] != "usage_report")
+    );
+}
+
+#[test]
+fn test_record_todo_tool_and_gates_aggregate_session_and_turn() {
+    let _guard = lock_telemetry_test_state();
+    if let Ok(mut session) = SESSION_STATE.lock() {
+        *session = None;
+    }
+    begin_session_with_mode("openai", "gpt-5.4", None, false);
+    record_turn();
+    record_tool_execution("todo", &serde_json::json!({}), true, 5);
+    record_tool_execution("todo", &serde_json::json!({}), true, 5);
+    record_todo_gate(TodoGateKind::Ownership);
+    record_todo_gate(TodoGateKind::ClosedFeedbackLoop);
+    record_todo_gate(TodoGateKind::Alignment);
+    record_todo_gate(TodoGateKind::IntentUnderstanding);
+    record_todo_gate(TodoGateKind::Completion);
+    record_todo_gate(TodoGateKind::ConfidenceSpike);
+    record_todo_gate(TodoGateKind::ClosedFeedbackLoop);
+    record_todo_gate(TodoGateKind::FeedbackLoopRelevance);
+    record_todo_gate(TodoGateKind::FeedbackLoopCoverage);
+
+    {
+        let guard = SESSION_STATE.lock().unwrap();
+        let state = guard.as_ref().expect("session telemetry state");
+        assert_eq!(state.tool_cat_todo, 2);
+        assert!(state.feature_todo_used);
+        assert_eq!(state.tool_cat_other, 0);
+        assert_eq!(state.todo_gate_ownership_count, 1);
+        assert_eq!(state.todo_gate_feedback_loop_count, 4);
+        assert_eq!(state.todo_gate_alignment_count, 1);
+        assert_eq!(state.todo_gate_intent_count, 1);
+        assert_eq!(state.todo_gate_completion_count, 1);
+        assert_eq!(state.todo_gate_spike_count, 1);
+        let turn = state.current_turn.as_ref().expect("current turn");
+        assert_eq!(turn.tool_cat_todo, 2);
+        assert!(turn.feature_todo_used);
+        assert_eq!(turn.todo_gate_ownership_count, 1);
+        assert_eq!(turn.todo_gate_feedback_loop_count, 4);
+        assert_eq!(turn.todo_gate_alignment_count, 1);
+        assert_eq!(turn.todo_gate_intent_count, 1);
+        assert_eq!(turn.todo_gate_completion_count, 1);
+        assert_eq!(turn.todo_gate_spike_count, 1);
+    }
+    if let Ok(mut session) = SESSION_STATE.lock() {
+        *session = None;
+    }
+}
+
+#[test]
+fn test_record_connection_type_buckets_transport() {
+    let _guard = lock_telemetry_test_state();
+    if let Ok(mut session) = SESSION_STATE.lock() {
+        *session = None;
+    }
+    begin_session_with_mode("openai", "gpt-5.4", None, false);
+    record_connection_type("websocket/persistent-fresh");
+    record_connection_type("websocket/persistent-reuse");
+    record_connection_type("https/sse");
+    record_connection_type("native http2");
+    record_connection_type("cli subprocess");
+    record_connection_type("weird-transport");
+
+    {
+        let guard = SESSION_STATE.lock().unwrap();
+        let state = guard.as_ref().expect("session telemetry state");
+        assert_eq!(state.transport_persistent_ws_fresh, 1);
+        assert_eq!(state.transport_persistent_ws_reuse, 1);
+        assert_eq!(state.transport_https, 1);
+        assert_eq!(state.transport_native_http2, 1);
+        assert_eq!(state.transport_cli_subprocess, 1);
+        assert_eq!(state.transport_other, 1);
+    }
+    if let Ok(mut session) = SESSION_STATE.lock() {
+        *session = None;
+    }
+}
+
+#[test]
+fn test_sanitize_telemetry_label_strips_ansi_and_controls() {
+    assert_eq!(
+        sanitize_telemetry_label("\u{1b}[1mclaude-opus-4-6\u{1b}[0m\n"),
+        "claude-opus-4-6"
+    );
+}
+
+#[test]
+fn test_onboarding_step_event_serialization_includes_failure_reason() {
+    let event = OnboardingStepEvent {
+        event_id: "event-3".to_string(),
+        id: "test-uuid".to_string(),
+        session_id: None,
+        event: "onboarding_step",
+        version: "0.6.1".to_string(),
+        os: "linux",
+        arch: "x86_64",
+        step: "auth_failed",
+        auth_provider: Some("openai".to_string()),
+        auth_method: Some("oauth".to_string()),
+        auth_failure_reason: Some("callback_timeout".to_string()),
+        milestone_elapsed_ms: Some(1234),
+        schema_version: TELEMETRY_SCHEMA_VERSION,
+        build_channel: "release".to_string(),
+        is_git_checkout: false,
+        is_ci: false,
+        ran_from_cargo: false,
+    };
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(json["step"], "auth_failed");
+    assert_eq!(json["auth_failure_reason"], "callback_timeout");
+}
+
+#[test]
+fn test_onboarding_step_milestone_key_includes_provider_and_method() {
+    assert_eq!(
+        onboarding_step_milestone_key("auth_success", Some("jcode"), Some("API key")),
+        "auth_success_jcode_api_key"
+    );
+    assert_eq!(
+        onboarding_step_milestone_key("login_picker_opened", None, None),
+        "login_picker_opened"
+    );
+}
+
+#[test]
+fn test_install_marker_tracks_current_telemetry_id() {
+    let _guard = lock_test_env();
+    let prev_home = std::env::var_os("JCODE_HOME");
+    let temp = tempfile::TempDir::new().expect("create temp dir");
+    jcode_core::env::set_var("JCODE_HOME", temp.path());
+
+    assert!(!install_recorded_for_id("id-a"));
+    mark_install_recorded("id-a");
+    assert!(install_recorded_for_id("id-a"));
+    assert!(!install_recorded_for_id("id-b"));
+
+    if let Some(prev_home) = prev_home {
+        jcode_core::env::set_var("JCODE_HOME", prev_home);
+    } else {
+        jcode_core::env::remove_var("JCODE_HOME");
+    }
+}
+
+#[test]
+fn test_install_conversion_id_is_validated_and_consumed() {
+    let _guard = lock_test_env();
+    let prev_home = std::env::var_os("JCODE_HOME");
+    let temp = tempfile::TempDir::new().expect("create temp dir");
+    jcode_core::env::set_var("JCODE_HOME", temp.path());
+
+    let path = install_conversion_id_path().expect("conversion path");
+    write_private_file(&path, "11111111-2222-4333-8444-555555555555\n");
+    assert_eq!(
+        read_install_conversion_id().as_deref(),
+        Some("11111111-2222-4333-8444-555555555555")
+    );
+    clear_install_conversion_id();
+    assert_eq!(read_install_conversion_id(), None);
+
+    write_private_file(&path, "not-a-conversion-id");
+    assert_eq!(read_install_conversion_id(), None);
+    assert!(!path.exists());
+
+    assert!(install_conversion_id_is_fresh(std::time::SystemTime::now()));
+    assert!(!install_conversion_id_is_fresh(
+        std::time::SystemTime::now() - std::time::Duration::from_secs(91 * 24 * 60 * 60)
+    ));
+
+    if let Some(prev_home) = prev_home {
+        jcode_core::env::set_var("JCODE_HOME", prev_home);
+    } else {
+        jcode_core::env::remove_var("JCODE_HOME");
+    }
+}
+
+#[test]
+fn test_attributed_install_bypasses_existing_install_marker() {
+    let _guard = lock_test_env();
+    let prev_home = std::env::var_os("JCODE_HOME");
+    let temp = tempfile::TempDir::new().expect("create temp dir");
+    jcode_core::env::set_var("JCODE_HOME", temp.path());
+
+    let id = get_or_create_id().expect("telemetry id");
+    mark_install_recorded(&id);
+    assert!(install_recorded_for_id(&id));
+    assert!(read_install_conversion_id().is_none());
+    assert!(!should_record_install_for_id(&id, None));
+
+    let path = install_conversion_id_path().expect("conversion path");
+    write_private_file(&path, "11111111-2222-4333-8444-555555555555\n");
+    assert!(install_recorded_for_id(&id));
+    let conversion_id = read_install_conversion_id();
+    assert!(conversion_id.is_some());
+    assert!(should_record_install_for_id(&id, conversion_id.as_deref()));
+
+    if let Some(prev_home) = prev_home {
+        jcode_core::env::set_var("JCODE_HOME", prev_home);
+    } else {
+        jcode_core::env::remove_var("JCODE_HOME");
+    }
+}
+
+#[test]
+fn test_install_conversion_id_is_removed_when_telemetry_is_disabled() {
+    let _guard = lock_test_env();
+    let prev_home = std::env::var_os("JCODE_HOME");
+    let temp = tempfile::TempDir::new().expect("create temp dir");
+    jcode_core::env::set_var("JCODE_HOME", temp.path());
+    let path = install_conversion_id_path().expect("conversion path");
+    write_private_file(&path, "11111111-2222-4333-8444-555555555555\n");
+
+    jcode_core::env::set_var("JCODE_NO_TELEMETRY", "1");
+    record_install_if_first_run();
+    jcode_core::env::remove_var("JCODE_NO_TELEMETRY");
+    assert!(!path.exists());
+
+    if let Some(prev_home) = prev_home {
+        jcode_core::env::set_var("JCODE_HOME", prev_home);
+    } else {
+        jcode_core::env::remove_var("JCODE_HOME");
+    }
+}
+
+fn current_todo_payload(reason: SessionEndReason) -> serde_json::Value {
+    let state = SESSION_STATE
+        .lock()
+        .expect("session state lock")
+        .as_ref()
+        .expect("active telemetry session")
+        .clone();
+    serde_json::to_value(lifecycle::todo_session_event(
+        &state,
+        reason,
+        TELEMETRY_SCHEMA_VERSION,
+        "test".to_string(),
+        false,
+        false,
+        false,
+    ))
+    .expect("todo telemetry serializes")
+}
+
+#[test]
+fn todo_session_aggregates_transitions_abandonment_and_high_water_mark() {
+    let _guard = lock_telemetry_test_state();
+    *SESSION_STATE.lock().unwrap() = None;
+    begin_session("test", "test");
+
+    record_todo_update(TodoTelemetryUpdate {
+        todos_created: 3,
+        current_incomplete: 2,
+        list_size: 3,
+        groups_completed: 1,
+        groups_total: 2,
+        confidence: TelemetryScoreSummary::from_scores([70, 80, 90]),
+        ..Default::default()
+    });
+    record_todo_update(TodoTelemetryUpdate {
+        todos_created: 1,
+        todos_completed: 2,
+        todos_abandoned: 1,
+        current_incomplete: 1,
+        list_size: 2,
+        groups_completed: 2,
+        groups_total: 3,
+        confidence: TelemetryScoreSummary::from_scores([75, 95]),
+        completion_confidence: TelemetryScoreSummary::from_scores([96, 100]),
+        understands_user_intent: TelemetryScoreSummary::from_scores([94]),
+        closed_feedback_loop: TelemetryScoreSummary::from_scores([85, 95]),
+        feedback_loop_relevance: TelemetryScoreSummary::from_scores([75, 98]),
+        feedback_loop_coverage: TelemetryScoreSummary::from_scores([75, 98]),
+        end_to_end_ownership: TelemetryScoreSummary::from_scores([96, 100]),
+    });
+    {
+        let mut session = SESSION_STATE.lock().unwrap();
+        let state = session.as_mut().unwrap();
+        increment_tool_category(state, ToolCategory::Todo);
+        increment_tool_category(state, ToolCategory::Todo);
+    }
+
+    let payload = current_todo_payload(SessionEndReason::NormalExit);
+    assert_eq!(payload["todos_created"], 4);
+    assert_eq!(payload["todos_completed"], 2);
+    assert_eq!(payload["todos_abandoned"], 2);
+    assert_eq!(payload["todo_updates"], 2);
+    assert_eq!(payload["groups_completed"], 2);
+    assert_eq!(payload["groups_total"], 3);
+    assert_eq!(payload["max_todo_list_size"], 3);
+    assert_eq!(payload["confidence_min"], 75);
+    assert_eq!(payload["confidence_mean"], 85.0);
+    assert_eq!(payload["completion_confidence_count"], 2);
+    assert_eq!(payload["feedback_loop_relevance_min"], 75);
+    assert_eq!(payload["feedback_loop_relevance_count"], 2);
+    assert_eq!(payload["feedback_loop_coverage_min"], 75);
+    assert_eq!(payload["feedback_loop_coverage_count"], 2);
+    *SESSION_STATE.lock().unwrap() = None;
+}
+
+#[test]
+fn todo_session_with_zero_todos_emits_zero_numeric_state() {
+    let _guard = lock_telemetry_test_state();
+    *SESSION_STATE.lock().unwrap() = None;
+    begin_session("test", "test");
+    let payload = current_todo_payload(SessionEndReason::NormalExit);
+    for field in [
+        "todos_created",
+        "todos_completed",
+        "todos_abandoned",
+        "todo_updates",
+        "groups_completed",
+        "groups_total",
+        "max_todo_list_size",
+        "confidence_count",
+        "completion_confidence_count",
+        "understands_user_intent_count",
+        "closed_feedback_loop_count",
+        "end_to_end_ownership_count",
+    ] {
+        assert_eq!(payload[field], 0, "{field}");
+    }
+    assert!(payload["confidence_min"].is_null());
+    assert!(payload["confidence_mean"].is_null());
+    *SESSION_STATE.lock().unwrap() = None;
+}
+
+#[test]
+fn todo_session_payload_has_no_unapproved_string_fields() {
+    let _guard = lock_telemetry_test_state();
+    *SESSION_STATE.lock().unwrap() = None;
+    begin_session(
+        "provider text must not appear",
+        "model text must not appear",
+    );
+    record_todo_update(TodoTelemetryUpdate {
+        todos_created: 1,
+        current_incomplete: 1,
+        list_size: 1,
+        confidence: TelemetryScoreSummary::from_scores([88]),
+        ..Default::default()
+    });
+    let payload = current_todo_payload(SessionEndReason::Disconnect);
+    let allowed_string_fields = [
+        "event_id",
+        "id",
+        "correlation_id",
+        "event",
+        "version",
+        "os",
+        "arch",
+        "session_end_reason",
+        "build_channel",
+    ];
+
+    fn reject_unapproved_strings(value: &serde_json::Value, field: Option<&str>, allowed: &[&str]) {
+        match value {
+            serde_json::Value::String(_) => assert!(
+                field.is_some_and(|field| allowed.contains(&field)),
+                "unapproved string field in todo telemetry: {field:?}"
+            ),
+            serde_json::Value::Array(values) => {
+                for value in values {
+                    reject_unapproved_strings(value, field, allowed);
+                }
+            }
+            serde_json::Value::Object(values) => {
+                for (key, value) in values {
+                    reject_unapproved_strings(value, Some(key), allowed);
+                }
+            }
+            _ => {}
+        }
+    }
+    reject_unapproved_strings(&payload, None, &allowed_string_fields);
+    assert_eq!(payload["id"], payload["correlation_id"]);
+    assert_eq!(payload["event"], "todo_session");
+    let correlation = payload["correlation_id"].as_str().unwrap();
+    assert_eq!(
+        uuid::Uuid::parse_str(correlation)
+            .unwrap()
+            .get_version_num(),
+        4
+    );
+    assert!(!payload.to_string().contains("provider text"));
+    assert!(!payload.to_string().contains("model text"));
+    *SESSION_STATE.lock().unwrap() = None;
+}
+
+#[test]
+fn todo_correlation_id_is_fresh_for_each_session() {
+    let _guard = lock_telemetry_test_state();
+    *SESSION_STATE.lock().unwrap() = None;
+    begin_session("test", "test");
+    let first = current_session_correlation_id().expect("first correlation id");
+    begin_session("test", "test");
+    let second = current_session_correlation_id().expect("second correlation id");
+    assert_ne!(first, second);
+    assert_eq!(uuid::Uuid::parse_str(&first).unwrap().get_version_num(), 4);
+    assert_eq!(uuid::Uuid::parse_str(&second).unwrap().get_version_num(), 4);
+    *SESSION_STATE.lock().unwrap() = None;
+}
+
+#[test]
+fn todo_telemetry_opt_out_emits_nothing() {
+    let _guard = lock_telemetry_test_state();
+    *SESSION_STATE.lock().unwrap() = None;
+    TEST_EMITTED_PAYLOADS.lock().unwrap().clear();
+    jcode_core::env::set_var("JCODE_NO_TELEMETRY", "1");
+
+    begin_session("private-provider", "private-model");
+    record_todo_update(TodoTelemetryUpdate {
+        todos_created: 1,
+        current_incomplete: 1,
+        list_size: 1,
+        ..Default::default()
+    });
+    end_session("private-provider", "private-model");
+    let correlation = current_session_correlation_id();
+    let emitted = TEST_EMITTED_PAYLOADS.lock().unwrap().clone();
+
+    jcode_core::env::remove_var("JCODE_NO_TELEMETRY");
+    assert!(SESSION_STATE.lock().unwrap().is_none());
+    assert!(correlation.is_none());
+    assert!(emitted.is_empty(), "opt-out emitted payloads: {emitted:?}");
+}
+
+/// Regression: `begin_session` used to overwrite a live `SESSION_STATE`
+/// without ending it, orphaning the previous `session_start`. That is why
+/// only ~25% of release `session_start` events ever had a matching
+/// `session_end`. Starting a second session must close the first.
+#[test]
+fn test_begin_session_closes_superseded_session() {
+    let _guard = lock_telemetry_test_state();
+    jcode_core::env::set_var("JCODE_TELEMETRY_DISABLED", "1");
+
+    begin_session("prov-a", "model-a");
+    let first_id = SESSION_STATE
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|s| s.session_id.clone());
+
+    begin_session("prov-b", "model-b");
+    let second = SESSION_STATE.lock().unwrap();
+    let second_state = second.as_ref().expect("second session should be live");
+
+    assert_ne!(
+        first_id.as_deref(),
+        Some(second_state.session_id.as_str()),
+        "second begin_session should install a distinct session"
+    );
+    assert_eq!(second_state.provider_start, "prov-b");
+    assert!(
+        !second_state.start_event_sent,
+        "a fresh session must not inherit the superseded session's sent flag"
+    );
+    drop(second);
+
+    jcode_core::env::remove_var("JCODE_TELEMETRY_DISABLED");
+}
+
+#[test]
+fn test_superseded_reason_has_label() {
+    assert_eq!(SessionEndReason::Superseded.as_str(), "superseded");
+}
+
+#[test]
+fn superseded_session_queues_complete_lifecycle_without_blocking() {
+    let _guard = lock_telemetry_test_state();
+    *SESSION_STATE.lock().unwrap() = None;
+    begin_session("test", "first");
+    record_turn();
+    let first_id = SESSION_STATE
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .session_id
+        .clone();
+    TEST_EMITTED_PAYLOADS.lock().unwrap().clear();
+    TEST_DELIVERY_MODES.lock().unwrap().clear();
+
+    begin_session("test", "second");
+
+    let payloads = TEST_EMITTED_PAYLOADS.lock().unwrap().clone();
+    let events: Vec<_> = payloads
+        .iter()
+        .map(|p| p["event"].as_str().unwrap())
+        .collect();
+    assert_eq!(events, ["turn_end", "session_end", "todo_session"]);
+    assert_eq!(payloads[0]["session_id"], first_id);
+    assert_eq!(payloads[0]["turn_end_reason"], "superseded");
+    assert_eq!(payloads[1]["session_id"], first_id);
+    assert_eq!(payloads[1]["end_reason"], "superseded");
+    let modes = TEST_DELIVERY_MODES.lock().unwrap();
+    assert_eq!(modes.len(), payloads.len());
+    assert!(modes.iter().all(|m| matches!(m, DeliveryMode::Background)));
+    let state = SESSION_STATE.lock().unwrap();
+    assert_eq!(state.as_ref().unwrap().model_start, "second");
+    assert!(!state.as_ref().unwrap().start_event_sent);
+}
+
+#[test]
+fn process_shutdown_keeps_bounded_blocking_lifecycle_delivery() {
+    let _guard = lock_telemetry_test_state();
+    *SESSION_STATE.lock().unwrap() = None;
+    begin_session("test", "test");
+    record_turn();
+    TEST_DELIVERY_MODES.lock().unwrap().clear();
+    end_session("test", "test");
+    let modes = TEST_DELIVERY_MODES.lock().unwrap();
+    assert_eq!(modes.len(), 3);
+    assert!(modes.iter().all(
+        |m| matches!(m, DeliveryMode::Blocking(timeout) if *timeout == BLOCKING_LIFECYCLE_TIMEOUT)
+    ));
+    assert!(SESSION_STATE.lock().unwrap().is_none());
+}
+
+#[test]
+fn concurrency_guard_emits_versioned_runtime_events_without_counting_legacy_tui_activity() {
+    let _guard = lock_telemetry_test_state();
+    TEST_EMITTED_PAYLOADS.lock().unwrap().clear();
+    *SESSION_STATE.lock().unwrap() = None;
+    let mut root = begin_concurrency_session("root-session", None);
+    assert!(root.is_active());
+    assert_eq!(root.session_id(), "root-session");
+    // TUI/singleton begin calls must not add runtime ownership or inflate peaks.
+    begin_session("test", "test");
+    begin_session("test", "test");
+    record_turn();
+    let child = begin_concurrency_session("child-session", Some("root-session"));
+    drop(child);
+    root.finish();
+    root.finish();
+    assert!(!root.is_active());
+    end_session("test", "test");
+    drop(root);
+
+    let payloads = TEST_EMITTED_PAYLOADS.lock().unwrap().clone();
+    let events: Vec<_> = payloads
+        .iter()
+        .filter(|p| p["event"] == "session_concurrency")
+        .collect();
+    assert_eq!(
+        events.len(),
+        4,
+        "explicit finish followed by Drop emits only one end"
+    );
+    for event in &events {
+        assert_eq!(event["concurrency_tracking_version"], 2);
+        assert_eq!(
+            event["concurrency_tracking_scope"],
+            "runtime_agent_sessions"
+        );
+        assert_eq!(event["concurrency_tracking_available"], true);
+        assert_eq!(event["id"], events[0]["id"]);
+        assert!(uuid::Uuid::parse_str(event["concurrency_session_id"].as_str().unwrap()).is_ok());
+        let active = event["active_sessions_at_start"].as_u64().unwrap();
+        let peak = event["max_concurrent_sessions"].as_u64().unwrap();
+        assert!(peak >= active && active >= 1);
+        assert_eq!(event["other_active_sessions_at_start"], active - 1);
+        assert_eq!(event["multi_sessioned"], peak > 1);
+        assert_eq!(
+            event["root_sessions_at_start"].as_u64().unwrap()
+                + event["child_sessions_at_start"].as_u64().unwrap(),
+            active
+        );
+    }
+    assert_eq!(events[0]["phase"], "start");
+    assert_eq!(events[0]["active_sessions_at_start"], 1);
+    assert_eq!(events[1]["agent_role"], "child");
+    assert_eq!(events[1]["active_sessions_at_start"], 2);
+    assert_eq!(events[3]["phase"], "end");
+    assert_eq!(events[3]["max_concurrent_sessions"], 2);
+    assert_eq!(events[3]["max_concurrent_root_sessions"], 1);
+    assert_eq!(events[3]["max_concurrent_child_sessions"], 1);
+    assert_eq!(
+        events[0]["concurrency_session_id"],
+        events[3]["concurrency_session_id"]
+    );
+    assert_ne!(
+        events[0]["concurrency_session_id"],
+        events[1]["concurrency_session_id"]
+    );
+    let legacy: Vec<_> = payloads
+        .iter()
+        .filter(|p| matches!(p["event"].as_str(), Some("session_start" | "session_end")))
+        .collect();
+    assert_eq!(legacy.len(), 2);
+    for event in legacy {
+        assert_eq!(event["concurrency_tracking_version"], 2);
+        assert_eq!(event["concurrency_tracking_scope"], "legacy_process_global");
+        assert_eq!(event["concurrency_tracking_available"], false);
+        for key in [
+            "active_sessions_at_start",
+            "other_active_sessions_at_start",
+            "max_concurrent_sessions",
+            "multi_sessioned",
+        ] {
+            assert!(event.get(key).is_none());
+        }
+    }
+    assert!(
+        !storage::jcode_dir()
+            .unwrap()
+            .join("telemetry_active_sessions")
+            .exists()
+    );
+}
+
+#[test]
+fn concurrency_guard_opt_out_is_inert_and_opt_out_after_start_still_releases_ownership() {
+    let _guard = lock_telemetry_test_state();
+    TEST_EMITTED_PAYLOADS.lock().unwrap().clear();
+    jcode_core::env::set_var("JCODE_NO_TELEMETRY", "1");
+    let mut disabled = begin_concurrency_session("disabled-session", None);
+    assert!(!disabled.is_active());
+    assert_eq!(disabled.session_id(), "disabled-session");
+    disabled.finish();
+    assert!(
+        !storage::jcode_dir()
+            .unwrap()
+            .join("telemetry_concurrency_v2")
+            .exists()
+    );
+    assert!(TEST_EMITTED_PAYLOADS.lock().unwrap().is_empty());
+    jcode_core::env::remove_var("JCODE_NO_TELEMETRY");
+    let mut active = begin_concurrency_session("active", None);
+    jcode_core::env::set_var("DO_NOT_TRACK", "1");
+    active.finish();
+    jcode_core::env::remove_var("DO_NOT_TRACK");
+    let mut fresh = begin_concurrency_session("fresh", None);
+    fresh.finish();
+    let payloads = TEST_EMITTED_PAYLOADS.lock().unwrap();
+    assert_eq!(payloads.len(), 3, "opted-out end must not emit");
+    assert_eq!(payloads[1]["active_sessions_at_start"], 1);
+    assert_eq!(payloads[2]["max_concurrent_sessions"], 1);
+}
+
+#[test]
+fn concurrency_guard_paths_never_use_untrusted_session_ids() {
+    let _guard = lock_telemetry_test_state();
+    let home = storage::jcode_dir().unwrap();
+    let escape = home.join("escaped");
+    let mut first = begin_concurrency_session("../../escaped", None);
+    let mut second = begin_concurrency_session(escape.to_str().unwrap(), Some(".."));
+    // Registration is asynchronous; inspect the directory once it has run.
+    first.wait_registered();
+    second.wait_registered();
+    assert!(!escape.exists());
+    for entry in std::fs::read_dir(home.join("telemetry_concurrency_v2")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|s| s.to_str()) == Some("lease") {
+            assert!(uuid::Uuid::parse_str(path.file_stem().unwrap().to_str().unwrap()).is_ok());
+        }
+    }
+    first.finish();
+    second.finish();
+}
+
+#[test]
+fn concurrency_guard_io_failure_omits_numbers_instead_of_fabricating_zero() {
+    let _guard = lock_telemetry_test_state();
+    TEST_EMITTED_PAYLOADS.lock().unwrap().clear();
+    std::fs::write(
+        storage::jcode_dir()
+            .unwrap()
+            .join("telemetry_concurrency_v2"),
+        "not a directory",
+    )
+    .unwrap();
+    let mut session = begin_concurrency_session("unavailable", None);
+    assert!(session.is_active());
+    session.finish();
+    let payloads = TEST_EMITTED_PAYLOADS.lock().unwrap();
+    assert_eq!(payloads.len(), 2);
+    for event in payloads.iter() {
+        assert_eq!(event["concurrency_tracking_version"], 2);
+        assert_eq!(event["concurrency_tracking_available"], false);
+        for key in [
+            "active_sessions_at_start",
+            "other_active_sessions_at_start",
+            "max_concurrent_sessions",
+            "multi_sessioned",
+            "root_sessions_at_start",
+            "child_sessions_at_start",
+            "max_concurrent_root_sessions",
+            "max_concurrent_child_sessions",
+        ] {
+            assert!(event.get(key).is_none());
+        }
+    }
+}
+
+#[test]
+fn concurrent_first_sessions_share_one_persisted_install_id() {
+    let _guard = lock_telemetry_test_state();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(12));
+    let threads: Vec<_> = (0..12)
+        .map(|_| {
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                get_or_create_id().unwrap()
+            })
+        })
+        .collect();
+    let ids: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+    assert!(ids.iter().all(|id| id == &ids[0]));
+    assert_eq!(read_existing_id().as_ref(), Some(&ids[0]));
+}
+
+#[test]
+fn concurrency_crash_lifecycle_does_not_emit_untrusted_legacy_counts() {
+    let _guard = lock_telemetry_test_state();
+    TEST_EMITTED_PAYLOADS.lock().unwrap().clear();
+    *SESSION_STATE.lock().unwrap() = None;
+    begin_session("test", "test");
+    record_turn();
+    record_crash("test", "test", SessionEndReason::Panic);
+    let payloads = TEST_EMITTED_PAYLOADS.lock().unwrap();
+    let crash = payloads
+        .iter()
+        .find(|p| p["event"] == "session_crash")
+        .unwrap();
+    assert_eq!(crash["concurrency_tracking_version"], 2);
+    assert_eq!(crash["concurrency_tracking_scope"], "legacy_process_global");
+    assert_eq!(crash["concurrency_tracking_available"], false);
+    assert!(crash.get("max_concurrent_sessions").is_none());
+    assert!(crash.get("active_sessions_at_start").is_none());
+    assert!(crash.get("multi_sessioned").is_none());
+}
+
+fn emitted_events() -> Vec<Value> {
+    TEST_EMITTED_PAYLOADS.lock().unwrap().clone()
+}
+
+#[test]
+fn desktop_active_is_sent_once_per_utc_day_per_version() {
+    let _guard = lock_test_env();
+    TEST_EMITTED_PAYLOADS.lock().unwrap().clear();
+    desktop::record_desktop_active_on("0.5.0", "2026-10-10");
+    desktop::record_desktop_active_on("0.5.0", "2026-10-10");
+    let events = emitted_events();
+    assert_eq!(events.len(), 1);
+    let payload = &events[0];
+    assert_eq!(payload["event"], "desktop_active");
+    assert_eq!(payload["version"], "0.5.0");
+    assert_eq!(payload["os"], std::env::consts::OS);
+    assert!(payload["from_version"].is_null());
+    assert!(payload["is_ci"].is_boolean());
+    assert!(payload["schema_version"].is_number());
+    desktop::record_desktop_active_on("0.5.0", "2026-10-11");
+    assert_eq!(emitted_events().len(), 2);
+}
+
+#[test]
+fn desktop_upgrade_is_sent_only_on_version_change() {
+    let _guard = lock_test_env();
+    TEST_EMITTED_PAYLOADS.lock().unwrap().clear();
+    desktop::record_desktop_active_on("0.5.0", "2026-10-10");
+    assert!(
+        emitted_events()
+            .iter()
+            .all(|p| p["event"] != "desktop_upgrade")
+    );
+    desktop::record_desktop_active_on("0.6.0", "2026-10-10");
+    let events = emitted_events();
+    let upgrades: Vec<_> = events
+        .iter()
+        .filter(|p| p["event"] == "desktop_upgrade")
+        .collect();
+    assert_eq!(upgrades.len(), 1);
+    assert_eq!(upgrades[0]["from_version"], "0.5.0");
+    assert_eq!(upgrades[0]["version"], "0.6.0");
+    assert_eq!(
+        events
+            .iter()
+            .filter(|p| p["event"] == "desktop_active")
+            .count(),
+        2
+    );
+    desktop::record_desktop_active_on("0.6.0", "2026-10-11");
+    assert_eq!(
+        emitted_events()
+            .iter()
+            .filter(|p| p["event"] == "desktop_upgrade")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn desktop_telemetry_respects_opt_out() {
+    let _guard = lock_test_env();
+    TEST_EMITTED_PAYLOADS.lock().unwrap().clear();
+    jcode_core::env::set_var("JCODE_NO_TELEMETRY", "1");
+    record_desktop_active("0.5.0");
+    record_desktop_update("0.5.0", "0.6.0", "portable", "failure", Some("download"));
+    assert!(emitted_events().is_empty());
+}
+
+#[test]
+fn desktop_update_sanitizes_tokens() {
+    let _guard = lock_test_env();
+    TEST_EMITTED_PAYLOADS.lock().unwrap().clear();
+    let long = "x".repeat(200);
+    record_desktop_update(
+        "0.5.0",
+        "0.6.0",
+        "Linux Managed",
+        "failure",
+        Some("Verify: /home/user/secret path failed!"),
+    );
+    record_desktop_update("0.5.0", "0.6.0", "portable", "up_to_date", Some(&long));
+    record_desktop_update("0.6.0", "0.6.0", "macos_sparkle", "success", None);
+    let events = emitted_events();
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[0]["event"], "desktop_update");
+    assert_eq!(events[0]["version"], "0.6.0");
+    assert_eq!(events[0]["from_version"], "0.5.0");
+    assert_eq!(events[0]["install_kind"], "linux_managed");
+    assert_eq!(events[0]["update_outcome"], "failure");
+    assert_eq!(
+        events[0]["update_failure_stage"],
+        "verify_home_user_secret_path_failed"
+    );
+    let stage = events[1]["update_failure_stage"].as_str().unwrap();
+    assert_eq!(stage.len(), 64);
+    assert!(events[2]["update_failure_stage"].is_null());
+    for value in ["Ünïcode/..", "a-b c", "___"] {
+        let token = desktop::sanitize_token(value);
+        assert!(token.len() <= 64);
+        assert!(
+            token
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        );
+    }
+}
+
+#[test]
+fn telemetry_categories_gate_events_independently() {
+    let _guard = lock_test_env();
+    set_category_settings([false, true, false, true, true, true]);
+    assert!(is_enabled());
+    assert!(!TelemetryCategory::Crashes.enabled());
+    assert!(TelemetryCategory::Usage.enabled());
+    assert!(!categories::payload_allowed(
+        &serde_json::json!({"event": "session_crash"})
+    ));
+    assert!(!categories::payload_allowed(
+        &serde_json::json!({"event": "transcript"})
+    ));
+    assert!(categories::payload_allowed(
+        &serde_json::json!({"event": "session_start"})
+    ));
+    assert_eq!(category_settings(), [false, true, false, true, true, true]);
+
+    set_category_settings([false; 6]);
+    assert!(!is_enabled());
+    set_category_settings([true; 6]);
+    assert!(content_sharing_enabled());
+    assert_eq!(category_settings(), [true; 6]);
+}

@@ -79,12 +79,7 @@ if [ -n "$(git status --porcelain)" ]; then
   git commit -q -am "desktop: re-apply Honey rebrand"
 fi
 
-jcode="$(cd apps/jcode-upstream 2>/dev/null && pwd -P || true)"
-if [ -n "$jcode" ] && git -C "$jcode" rev-parse -q --verify '@{u}' >/dev/null; then
-  git -C "$jcode" fetch -q
-  behind=$(git -C "$jcode" rev-list --count 'HEAD..@{u}')
-  [ "$behind" -gt 0 ] && echo "Note: your jcode checkout ($jcode) is $behind commit(s) behind; upstream desktop changes often need its matching crates — pull it too."
-fi
+echo "Note: the jcode crates are vendored at $(cut -c1-12 vendor/jcode/REV); upstream desktop changes often need newer ones — refresh with scripts/vendor-jcode.sh <jcode checkout>."
 
 if [ "$build" -eq 1 ]; then
   bash scripts/desktop-overlay.sh

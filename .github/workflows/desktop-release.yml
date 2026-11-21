@@ -72,18 +72,9 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
-      - name: Read pinned jcode commit
-        id: jcode
-        run: echo "rev=$(cat apps/desktop-shim/JCODE_REV)" >> "$GITHUB_OUTPUT"
-      # apps/desktop path-depends on jcode's crates; the overlay links them
-      # from here (scripts/desktop-overlay.sh), with jcode-sdk swapped for
-      # our shim. Pinned so every release builds the exact tested sources.
-      - uses: actions/checkout@v4
-        with:
-          repository: 1jehuang/jcode
-          ref: ${{ steps.jcode.outputs.rev }}
-          path: apps/jcode-upstream
-          submodules: recursive
+      # apps/desktop path-depends on jcode's crates. They are vendored in
+      # vendor/jcode (vendor/README.md); the overlay links them, with
+      # jcode-sdk swapped for our shim. Nothing is fetched from jcode.
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:

@@ -3352,7 +3352,6 @@ dependencies = [
 [[package]]
 name = "handterm-common"
 version = "0.1.0"
-source = "git+https://github.com/1jehuang/handterm?rev=ead926b6f13a1f30d58836c4fd8fb325660bae96#ead926b6f13a1f30d58836c4fd8fb325660bae96"
 dependencies = [
  "anyhow",
  "flate2",

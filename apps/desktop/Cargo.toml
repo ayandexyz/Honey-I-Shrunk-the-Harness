@@ -85,7 +85,7 @@ global-hotkey = "0.7"
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_Pipes", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Threading", "Win32_Security", "Win32_UI_WindowsAndMessaging"] }
 
 [dev-dependencies]
-handterm-common = { git = "https://github.com/1jehuang/handterm", rev = "ead926b6f13a1f30d58836c4fd8fb325660bae96" }
+handterm-common = { path = "../../vendor/handterm/handterm-common" }
 async-channel = "2"
 global-hotkey = "0.7"
 gpui.workspace = true

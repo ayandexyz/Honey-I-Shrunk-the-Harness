@@ -1,0 +1,1335 @@
+use super::*;
+mod catalog_memo;
+mod saved_account_selection;
+mod session_binding;
+mod startup_pool;
+use crate::provider::models::{ensure_model_allowed_for_subscription, filtered_display_models};
+
+fn with_clean_provider_test_env<T>(f: impl FnOnce() -> T) -> T {
+    let _guard = crate::storage::lock_test_env();
+    // Concrete provider runtimes live downstream (jcode-provider-*-runtime),
+    // so base tests register shared stubs through the same composition-root
+    // registry the binary uses. Registration is idempotent (last write wins),
+    // and per-test overrides can re-register a different stub.
+    register_test_external_runtimes();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let prev_home = std::env::var_os("JCODE_HOME");
+    let prev_subscription =
+        std::env::var_os(crate::subscription_catalog::JCODE_SUBSCRIPTION_ACTIVE_ENV);
+    let mut profile_env_keys = vec![
+        "OPENROUTER_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "KIMI_API_KEY",
+        "JCODE_OPENROUTER_API_BASE",
+        "JCODE_OPENROUTER_API_KEY_NAME",
+        "JCODE_OPENROUTER_ENV_FILE",
+        "JCODE_OPENROUTER_CACHE_NAMESPACE",
+        "JCODE_OPENROUTER_PROVIDER_FEATURES",
+        "JCODE_OPENROUTER_TRANSPORT_STATE",
+        "JCODE_OPENROUTER_ALLOW_NO_AUTH",
+        "JCODE_OPENROUTER_MODEL_CATALOG",
+        "JCODE_OPENROUTER_MODEL",
+        "JCODE_OPENROUTER_STATIC_MODELS",
+        "JCODE_OPENAI_COMPAT_API_BASE",
+        "JCODE_OPENAI_COMPAT_API_KEY_NAME",
+        "JCODE_OPENAI_COMPAT_ENV_FILE",
+        "JCODE_OPENAI_COMPAT_DEFAULT_MODEL",
+        "JCODE_OPENAI_COMPAT_LOCAL_ENABLED",
+        "OPENAI_COMPAT_API_KEY",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "JCODE_RUNTIME_PROVIDER",
+        "JCODE_ACTIVE_PROVIDER",
+        "JCODE_INITIAL_PROVIDER_EXPLICIT",
+        "JCODE_OPENAI_MODEL",
+        "JCODE_SAME_PROVIDER_ACCOUNT_FAILOVER",
+        "JCODE_NAMED_PROVIDER_PROFILE",
+        "JCODE_PROVIDER_PROFILE_ACTIVE",
+        "JCODE_PROVIDER_PROFILE_NAME",
+    ];
+    for profile in crate::provider_catalog::openai_compatible_profiles() {
+        if !profile_env_keys.contains(&profile.api_key_env) {
+            profile_env_keys.push(profile.api_key_env);
+        }
+    }
+    let saved_profile_env = profile_env_keys
+        .into_iter()
+        .map(|key| (key, std::env::var_os(key)))
+        .collect::<Vec<_>>();
+    crate::env::set_var("JCODE_HOME", temp.path());
+    for (key, _) in &saved_profile_env {
+        crate::env::remove_var(key);
+    }
+    crate::subscription_catalog::clear_runtime_env();
+    crate::auth::claude::set_active_account_override(None);
+    crate::auth::codex::set_active_account_override(None);
+    // The in-memory model catalog services are process-global; earlier tests
+    // may have hydrated scopes (fixture models) that would corrupt this test's
+    // known_*_model_ids() validation, and vice versa. Reset on entry and exit
+    // so neither direction leaks.
+    crate::provider::models::reset_model_catalog_services_for_tests();
+
+    let result = f();
+
+    crate::provider::models::reset_model_catalog_services_for_tests();
+    crate::auth::claude::set_active_account_override(None);
+    crate::auth::codex::set_active_account_override(None);
+    if let Some(prev_home) = prev_home {
+        crate::env::set_var("JCODE_HOME", prev_home);
+    } else {
+        crate::env::remove_var("JCODE_HOME");
+    }
+    if let Some(prev_subscription) = prev_subscription {
+        crate::env::set_var(
+            crate::subscription_catalog::JCODE_SUBSCRIPTION_ACTIVE_ENV,
+            prev_subscription,
+        );
+    } else {
+        crate::env::remove_var(crate::subscription_catalog::JCODE_SUBSCRIPTION_ACTIVE_ENV);
+    }
+    for (key, value) in saved_profile_env {
+        if let Some(value) = value {
+            crate::env::set_var(key, value);
+        } else {
+            crate::env::remove_var(key);
+        }
+    }
+    crate::subscription_catalog::clear_runtime_env();
+    result
+}
+
+fn enter_test_runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build tokio runtime")
+}
+
+#[test]
+fn openai_compatible_profile_catalog_cache_is_fresh_before_soft_refresh_boundary() {
+    assert!(!openai_compatible_profile_catalog_cache_is_stale(
+        1_000,
+        1_000 + OPENAI_COMPATIBLE_PROFILE_CATALOG_SOFT_REFRESH_SECS - 1,
+    ));
+}
+
+#[test]
+fn openai_compatible_profile_catalog_cache_is_stale_at_soft_refresh_boundary() {
+    assert!(openai_compatible_profile_catalog_cache_is_stale(
+        1_000,
+        1_000 + OPENAI_COMPATIBLE_PROFILE_CATALOG_SOFT_REFRESH_SECS,
+    ));
+    assert!(!openai_compatible_profile_catalog_cache_is_stale(
+        2_000, 1_000
+    ));
+}
+
+fn with_env_var<T>(key: &str, value: &str, f: impl FnOnce() -> T) -> T {
+    let prev = std::env::var_os(key);
+    crate::env::set_var(key, value);
+    let result = f();
+    if let Some(prev) = prev {
+        crate::env::set_var(key, prev);
+    } else {
+        crate::env::remove_var(key);
+    }
+    result
+}
+
+fn save_test_openai_compatible_login_config(default_model: &str) {
+    let env_file = crate::provider_catalog::OPENAI_COMPAT_PROFILE.env_file;
+    crate::provider_catalog::save_env_value_to_env_file(
+        "JCODE_OPENAI_COMPAT_API_BASE",
+        env_file,
+        Some("https://example-openai-compatible.test/v1"),
+    )
+    .expect("save api base");
+    crate::provider_catalog::save_env_value_to_env_file(
+        "OPENAI_COMPAT_API_KEY",
+        env_file,
+        Some("sk-test-openai-compatible"),
+    )
+    .expect("save api key");
+    crate::provider_catalog::save_env_value_to_env_file(
+        "JCODE_OPENAI_COMPAT_DEFAULT_MODEL",
+        env_file,
+        Some(default_model),
+    )
+    .expect("save default model");
+}
+
+fn save_test_openrouter_model_cache(namespace: &str, source_api_base: &str, model_ids: &[&str]) {
+    let jcode_home = std::env::var_os("JCODE_HOME").expect("test JCODE_HOME should be set");
+    let cache_dir = std::path::PathBuf::from(jcode_home).join("cache");
+    std::fs::create_dir_all(&cache_dir).expect("create model cache dir");
+    let cache = jcode_provider_openrouter::DiskCache {
+        cached_at: jcode_provider_openrouter::current_unix_secs().expect("current unix time"),
+        source_api_base: Some(source_api_base.to_string()),
+        models: model_ids
+            .iter()
+            .map(|id| jcode_provider_openrouter::ModelInfo {
+                id: (*id).to_string(),
+                name: String::new(),
+                context_length: None,
+                pricing: jcode_provider_openrouter::ModelPricing::default(),
+                created: None,
+                ..Default::default()
+            })
+            .collect(),
+    };
+    let path = cache_dir.join(format!("{namespace}_models.json"));
+    std::fs::write(
+        path,
+        serde_json::to_string(&cache).expect("serialize model cache"),
+    )
+    .expect("write model cache");
+}
+
+fn clear_openai_compatible_runtime_env() {
+    for key in [
+        "JCODE_OPENAI_COMPAT_API_BASE",
+        "JCODE_OPENAI_COMPAT_API_KEY_NAME",
+        "JCODE_OPENAI_COMPAT_ENV_FILE",
+        "JCODE_OPENAI_COMPAT_DEFAULT_MODEL",
+        "JCODE_OPENAI_COMPAT_LOCAL_ENABLED",
+        "OPENAI_COMPAT_API_KEY",
+        "JCODE_OPENROUTER_CACHE_NAMESPACE",
+    ] {
+        crate::env::remove_var(key);
+    }
+}
+
+fn save_test_openai_oauth_credentials() {
+    crate::auth::codex::upsert_account_from_tokens(
+        &crate::auth::codex::primary_account_label(),
+        "test-oauth-access-token",
+        "test-oauth-refresh-token",
+        None,
+        Some(chrono::Utc::now().timestamp_millis() + 86_400_000),
+    )
+    .expect("save test OpenAI OAuth credentials");
+}
+
+fn test_multi_provider_with_openai() -> MultiProvider {
+    save_test_openai_oauth_credentials();
+    crate::env::set_var("OPENAI_API_KEY", "sk-test-openai-api-key");
+    MultiProvider {
+        anthropic: RwLock::new(None),
+        openai: RwLock::new(Some(test_openai_runtime() as Arc<dyn Provider>)),
+        copilot_api: RwLock::new(None),
+        antigravity: RwLock::new(None),
+        gemini: RwLock::new(None),
+        cursor: RwLock::new(None),
+        bedrock: RwLock::new(None),
+        openrouter: RwLock::new(None),
+        openai_compatible_profiles: RwLock::new(std::collections::HashMap::new()),
+        active_openai_compatible_profile: RwLock::new(None),
+        session_id: RwLock::new(None),
+        active: RwLock::new(ActiveProvider::OpenAI),
+        startup_notices: RwLock::new(Vec::new()),
+        initial_provider: None,
+        catalog_scope: next_catalog_scope(),
+        routes_memo: std::sync::Mutex::new(None),
+        post_auth_refreshes_pending: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+    }
+}
+
+#[test]
+fn model_capabilities_refresh_forwards_only_active_present_openai() {
+    struct RefreshMock(std::sync::atomic::AtomicBool);
+
+    #[async_trait::async_trait]
+    impl Provider for RefreshMock {
+        async fn complete(
+            &self,
+            _messages: &[Message],
+            _tools: &[ToolDefinition],
+            _system: &str,
+            _resume_session_id: Option<&str>,
+        ) -> Result<EventStream> {
+            unreachable!("refresh checks must not start a completion")
+        }
+
+        fn name(&self) -> &str {
+            "openai-refresh-mock"
+        }
+
+        fn model(&self) -> String {
+            "gpt-5.4".to_string()
+        }
+
+        fn fork(&self) -> Arc<dyn Provider> {
+            Arc::new(Self(std::sync::atomic::AtomicBool::new(
+                self.model_capabilities_need_refresh(),
+            )))
+        }
+
+        fn model_capabilities_need_refresh(&self) -> bool {
+            self.0.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    with_clean_provider_test_env(|| {
+        let runtime = enter_test_runtime();
+        let _enter = runtime.enter();
+        let provider = test_multi_provider_with_openai();
+        let underlying = Arc::new(RefreshMock(std::sync::atomic::AtomicBool::new(true)));
+        *provider.openai.write().unwrap() = Some(underlying.clone());
+
+        assert!(Provider::model_capabilities_need_refresh(&provider));
+
+        underlying
+            .0
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(!Provider::model_capabilities_need_refresh(&provider));
+        underlying
+            .0
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
+        *provider.active.write().unwrap() = ActiveProvider::Claude;
+        assert!(!Provider::model_capabilities_need_refresh(&provider));
+
+        *provider.active.write().unwrap() = ActiveProvider::OpenAI;
+        *provider.openai.write().unwrap() = None;
+        assert!(!Provider::model_capabilities_need_refresh(&provider));
+    });
+}
+
+#[test]
+fn openai_model_switch_prefixes_preserve_oauth_vs_api_state_space() {
+    with_clean_provider_test_env(|| {
+        let rt = enter_test_runtime();
+        let _runtime_guard = rt.enter();
+        let provider = test_multi_provider_with_openai();
+        let models = known_openai_model_ids();
+        let primary = models.first().expect("at least one OpenAI model").as_str();
+        let alternate = models.get(1).map(String::as_str).unwrap_or(primary);
+
+        let cases = [
+            vec![
+                (
+                    format!("openai-api:{primary}"),
+                    openai::OpenAICredentialMode::ApiKey,
+                    primary,
+                ),
+                (
+                    format!("openai-oauth:{alternate}"),
+                    openai::OpenAICredentialMode::OAuth,
+                    alternate,
+                ),
+            ],
+            vec![
+                (
+                    format!("openai-oauth:{primary}"),
+                    openai::OpenAICredentialMode::OAuth,
+                    primary,
+                ),
+                (
+                    format!("openai-api:{alternate}"),
+                    openai::OpenAICredentialMode::ApiKey,
+                    alternate,
+                ),
+                (
+                    format!("openai-oauth:{primary}"),
+                    openai::OpenAICredentialMode::OAuth,
+                    primary,
+                ),
+            ],
+        ];
+
+        for sequence in cases {
+            for (request, expected_mode, expected_model) in sequence {
+                provider
+                    .set_model(&request)
+                    .unwrap_or_else(|err| panic!("switch {request} should succeed: {err}"));
+                assert_eq!(
+                    provider.active_provider(),
+                    ActiveProvider::OpenAI,
+                    "{request}"
+                );
+                assert_eq!(provider.model(), expected_model, "{request}");
+                assert_eq!(
+                    provider
+                        .openai_provider()
+                        .expect("OpenAI provider")
+                        .credential_mode(),
+                    expected_mode,
+                    "{request}"
+                );
+            }
+        }
+    });
+}
+
+#[test]
+fn openai_model_route_roundtrip_preserves_auth_method_for_model_switches() {
+    with_clean_provider_test_env(|| {
+        let rt = enter_test_runtime();
+        let _runtime_guard = rt.enter();
+        let provider = test_multi_provider_with_openai();
+        let models = known_openai_model_ids();
+        let primary = models.first().expect("at least one OpenAI model").as_str();
+        let alternate = models.get(1).map(String::as_str).unwrap_or(primary);
+
+        // This mirrors the /model picker path: the selected ModelRoute becomes a
+        // default/session model + provider key, then a future /model switch uses
+        // that persisted provider key to reconstruct the provider-prefixed
+        // request. The important invariant is that OpenAI OAuth and API key are
+        // distinct states even though both execute in ActiveProvider::OpenAI.
+        let route_cases = [
+            (
+                primary,
+                "openai-oauth",
+                "openai-oauth",
+                "openai-oauth",
+                openai::OpenAICredentialMode::OAuth,
+            ),
+            (
+                alternate,
+                "openai-api-key",
+                "openai-api",
+                "openai-api",
+                openai::OpenAICredentialMode::ApiKey,
+            ),
+            (
+                primary,
+                "openai-api",
+                "openai-api",
+                "openai-api",
+                openai::OpenAICredentialMode::ApiKey,
+            ),
+        ];
+
+        for (bare_model, api_method, expected_provider_key, expected_prefix, expected_mode) in
+            route_cases
+        {
+            let selection =
+                MultiProvider::default_model_selection_from_route(bare_model, api_method, "OpenAI");
+            assert_eq!(
+                selection.model_spec,
+                format!("{expected_prefix}:{bare_model}")
+            );
+            assert_eq!(
+                selection.provider_key.as_deref(),
+                Some(expected_provider_key)
+            );
+
+            let request = MultiProvider::model_switch_request_for_session_model(
+                bare_model,
+                selection.provider_key.as_deref(),
+            );
+            assert_eq!(request, format!("{expected_prefix}:{bare_model}"));
+
+            provider
+                .set_model(&request)
+                .unwrap_or_else(|err| panic!("/model switch {request} should succeed: {err}"));
+            assert_eq!(
+                provider.active_provider(),
+                ActiveProvider::OpenAI,
+                "{request}"
+            );
+            assert_eq!(provider.model(), bare_model, "{request}");
+            assert_eq!(
+                provider
+                    .openai_provider()
+                    .expect("OpenAI provider")
+                    .credential_mode(),
+                expected_mode,
+                "{request}"
+            );
+        }
+    });
+}
+
+#[test]
+fn active_explicit_credential_reflects_openai_switch_immediately_and_none_for_auto() {
+    use jcode_provider_core::{Provider, ResolvedCredential};
+    with_clean_provider_test_env(|| {
+        let rt = enter_test_runtime();
+        let _runtime_guard = rt.enter();
+        let provider = test_multi_provider_with_openai();
+        let model = known_openai_model_ids()
+            .first()
+            .expect("at least one OpenAI model")
+            .clone();
+
+        // Fresh provider with both credentials present defaults to auto, which
+        // has no explicit pin: the info widget must fall back to its cached
+        // heuristic instead of asserting an OAuth-vs-API choice the user never
+        // made.
+        assert_eq!(
+            provider.active_explicit_credential(),
+            None,
+            "auto mode must not report an explicit pin"
+        );
+
+        // Switching to the API-key route pins the credential in memory, so the
+        // widget must report API key on the very next read with no cache delay.
+        provider
+            .set_model(&format!("openai-api:{model}"))
+            .expect("switch to OpenAI API key");
+        assert_eq!(
+            provider.active_explicit_credential(),
+            Some(ResolvedCredential::ApiKey),
+            "explicit API-key switch must be visible immediately"
+        );
+
+        // Switching back to OAuth flips it back just as immediately.
+        provider
+            .set_model(&format!("openai-oauth:{model}"))
+            .expect("switch to OpenAI OAuth");
+        assert_eq!(
+            provider.active_explicit_credential(),
+            Some(ResolvedCredential::Oauth),
+            "explicit OAuth switch must be visible immediately"
+        );
+    });
+}
+
+#[test]
+fn openai_model_routes_cover_oauth_api_and_no_auth_state_space() {
+    with_clean_provider_test_env(|| {
+        let rt = enter_test_runtime();
+        let _runtime_guard = rt.enter();
+        let model = known_openai_model_ids()
+            .first()
+            .expect("at least one OpenAI model")
+            .clone();
+
+        let provider = test_multi_provider_with_openai();
+        let routes = provider.model_routes();
+        let methods = routes
+            .iter()
+            .filter(|route| route.provider == "OpenAI" && route.model == model)
+            .map(|route| (route.api_method.as_str(), route.available))
+            .collect::<Vec<_>>();
+        let account_label =
+            crate::auth::codex::active_account_label().expect("saved OpenAI account");
+        assert!(
+            methods.iter().any(|(method, available)| {
+                ModelRouteApiMethod::parse(method) == ModelRouteApiMethod::OpenAIOAuth
+                    && jcode_provider_core::oauth_account_label(method)
+                        == Some(account_label.as_str())
+                    && *available
+            }),
+            "routes: {methods:?}"
+        );
+        assert!(
+            methods.contains(&("openai-api-key", true)),
+            "routes: {methods:?}"
+        );
+        let web_routes = routes
+            .iter()
+            .filter(|route| route.model == CHATGPT_WEB_MODEL)
+            .collect::<Vec<_>>();
+        assert_eq!(web_routes.len(), 1, "routes: {web_routes:?}");
+        assert_eq!(web_routes[0].api_method, "chatgpt-web");
+        assert!(web_routes[0].available);
+
+        crate::env::remove_var("OPENAI_API_KEY");
+        crate::auth::AuthStatus::invalidate_cache();
+        let oauth_only = provider.model_routes();
+        let oauth_only_methods = oauth_only
+            .iter()
+            .filter(|route| route.provider == "OpenAI" && route.model == model)
+            .map(|route| route.api_method.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(oauth_only_methods.len(), 1);
+        assert_eq!(
+            ModelRouteApiMethod::parse(oauth_only_methods[0]),
+            ModelRouteApiMethod::OpenAIOAuth
+        );
+        assert_eq!(
+            jcode_provider_core::oauth_account_label(oauth_only_methods[0]),
+            Some(account_label.as_str())
+        );
+
+        crate::env::set_var("OPENAI_API_KEY", "sk-test-openai-api-key");
+        std::fs::remove_file(
+            crate::storage::jcode_dir()
+                .unwrap()
+                .join("openai-auth.json"),
+        )
+        .expect("remove oauth credentials");
+        crate::auth::AuthStatus::invalidate_cache();
+        let api_only = provider.model_routes();
+        let api_only_methods = api_only
+            .iter()
+            .filter(|route| route.provider == "OpenAI" && route.model == model)
+            .map(|route| route.api_method.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(api_only_methods, vec!["openai-api-key"]);
+    });
+}
+
+fn assert_openai_compatible_route_available(provider: &MultiProvider, model: &str) {
+    let routes = provider.model_routes();
+    assert!(
+        routes.iter().any(|route| {
+            route.provider == "OpenAI-compatible"
+                && matches!(
+                    route.api_method.as_str(),
+                    "openai-compatible" | "openai-compatible:openai-compatible"
+                )
+                && route.model == model
+                && route.available
+        }),
+        "configured OpenAI-compatible model should be immediately visible after API-key setup; routes: {routes:?}"
+    );
+}
+
+#[test]
+fn openai_compatible_api_key_setup_makes_configured_model_route_available() {
+    with_clean_provider_test_env(|| {
+        save_test_openai_compatible_login_config("glm-test-login-flow");
+
+        assert!(
+            crate::provider_catalog::openai_compatible_profile_is_configured(
+                crate::provider_catalog::OPENAI_COMPAT_PROFILE,
+            )
+        );
+
+        let provider = MultiProvider::new();
+        assert_openai_compatible_route_available(&provider, "glm-test-login-flow");
+
+        provider
+            .set_model_on_openai_compatible_profile(
+                crate::provider_catalog::OPENAI_COMPAT_PROFILE,
+                "glm-test-login-flow",
+            )
+            .expect("configured OpenAI-compatible model should select without requiring another provider login");
+
+        assert_eq!(provider.model(), "glm-test-login-flow");
+    });
+}
+
+#[test]
+fn openai_compatible_api_key_setup_survives_process_restart_without_relogin() {
+    with_clean_provider_test_env(|| {
+        save_test_openai_compatible_login_config("restart-visible-model");
+
+        // Simulate a fresh process: the login command wrote the config file, but
+        // none of the runtime env vars from the login process remain populated.
+        clear_openai_compatible_runtime_env();
+
+        let resolved = crate::provider_catalog::resolve_openai_compatible_profile(
+            crate::provider_catalog::OPENAI_COMPAT_PROFILE,
+        );
+        assert_eq!(
+            resolved.api_base,
+            "https://example-openai-compatible.test/v1"
+        );
+        assert_eq!(
+            resolved.default_model.as_deref(),
+            Some("restart-visible-model")
+        );
+        assert!(
+            crate::provider_catalog::openai_compatible_profile_is_configured(
+                crate::provider_catalog::OPENAI_COMPAT_PROFILE,
+            )
+        );
+
+        let provider = MultiProvider::new();
+        assert_openai_compatible_route_available(&provider, "restart-visible-model");
+        provider
+            .set_model_on_openai_compatible_profile(
+                crate::provider_catalog::OPENAI_COMPAT_PROFILE,
+                "restart-visible-model",
+            )
+            .expect("saved credentials should be selectable after a fresh process restart");
+        assert_eq!(provider.model(), "restart-visible-model");
+    });
+}
+
+#[test]
+fn configured_openai_compatible_profile_routes_use_live_cache_when_not_active_provider() {
+    with_clean_provider_test_env(|| {
+        crate::provider_catalog::save_env_value_to_env_file(
+            "OPENROUTER_API_KEY",
+            "openrouter.env",
+            Some("sk-test-openrouter"),
+        )
+        .expect("save openrouter key");
+        crate::provider_catalog::save_env_value_to_env_file(
+            "OPENCODE_API_KEY",
+            "opencode.env",
+            Some("oc-test-opencode"),
+        )
+        .expect("save opencode key");
+        save_test_openrouter_model_cache(
+            "opencode",
+            "https://opencode.ai/zen/v1",
+            &["kimi-k2.6", "zen-live-only-model"],
+        );
+
+        let provider = MultiProvider::new();
+        let routes = provider.model_routes();
+        let opencode_routes = routes
+            .iter()
+            .filter(|route| route.provider == "OpenCode Zen")
+            .collect::<Vec<_>>();
+
+        assert!(
+            opencode_routes
+                .iter()
+                .any(|route| route.model == "zen-live-only-model"
+                    && route.api_method == "openai-compatible:opencode"
+                    && !route
+                        .detail
+                        .contains("fallback: static provider model list")),
+            "non-active configured direct profile should expose its live /models cache, routes: {opencode_routes:?}"
+        );
+        assert!(
+            !opencode_routes.iter().any(|route| route.model == "glm-4.7"),
+            "static fallback models should drop out once a live profile catalog is available, routes: {opencode_routes:?}"
+        );
+    });
+}
+
+#[test]
+fn standard_openrouter_catalog_refresh_is_noop_when_cache_fresh() {
+    with_clean_provider_test_env(|| {
+        let runtime = enter_test_runtime();
+        runtime.block_on(async {
+            crate::provider_catalog::save_env_value_to_env_file(
+                "OPENROUTER_API_KEY",
+                "openrouter.env",
+                Some("sk-test-openrouter"),
+            )
+            .expect("save openrouter key");
+            // A fresh, non-empty standard OpenRouter cache should suppress the
+            // background refresh entirely so we never fire a needless network
+            // request on every picker render.
+            save_test_openrouter_model_cache(
+                "openrouter",
+                "https://openrouter.ai/api/v1",
+                &["openrouter/owl-alpha"],
+            );
+
+            assert!(
+                !openrouter::maybe_schedule_standard_openrouter_catalog_refresh(
+                    "unit test fresh cache"
+                ),
+                "a fresh non-empty standard OpenRouter cache must not trigger a refresh"
+            );
+        });
+    });
+}
+
+#[test]
+fn standard_openrouter_catalog_refresh_skips_without_key() {
+    with_clean_provider_test_env(|| {
+        let runtime = enter_test_runtime();
+        runtime.block_on(async {
+            // No OPENROUTER_API_KEY configured: the refresh must not be
+            // scheduled regardless of cache state.
+            assert!(
+                !openrouter::maybe_schedule_standard_openrouter_catalog_refresh(
+                    "unit test missing key"
+                ),
+                "standard OpenRouter refresh must be skipped when no key is configured"
+            );
+        });
+    });
+}
+
+#[test]
+fn standard_openrouter_catalog_refresh_fires_when_named_profile_owns_slot() {
+    with_clean_provider_test_env(|| {
+        let runtime = enter_test_runtime();
+        runtime.block_on(async {
+            crate::provider_catalog::save_env_value_to_env_file(
+                "OPENROUTER_API_KEY",
+                "openrouter.env",
+                Some("sk-test-openrouter"),
+            )
+            .expect("save openrouter key");
+            // Simulate an active named profile (e.g. NVIDIA NIM) occupying the
+            // shared OpenRouter/OpenAI-compatible slot: it sets the runtime env
+            // vars to point at a non-openrouter.ai endpoint. The standard
+            // OpenRouter catalog refresh must STILL fire so `/model` can list
+            // openrouter.ai models (issue #292). Cache is missing -> not fresh.
+            crate::env::set_var(
+                "JCODE_OPENROUTER_API_BASE",
+                "https://integrate.api.nvidia.com/v1",
+            );
+            crate::env::set_var("JCODE_OPENROUTER_CACHE_NAMESPACE", "mynvidia");
+
+            // Other tests in this process may already have attempted (or be
+            // running) an `openrouter` catalog refresh; clear the process-wide
+            // backoff/in-flight tracker or this assertion is flaky under
+            // parallel test execution.
+            jcode_provider_openrouter_runtime::reset_profile_catalog_refresh_tracker_for_tests();
+
+            assert!(
+                openrouter::maybe_schedule_standard_openrouter_catalog_refresh(
+                    "unit test named profile owns slot"
+                ),
+                "standard OpenRouter refresh must fire even when a named profile sets JCODE_OPENROUTER_* env"
+            );
+        });
+    });
+}
+
+/// Parameterized test stand-in for provider runtimes that live downstream
+/// (jcode-provider-{gemini,cursor,antigravity}-runtime) and therefore cannot
+/// be constructed from base tests. Mirrors each runtime's catalog surface
+/// (static model list plus `ModelRoute`s) so routing/fallback tests stay
+/// meaningful.
+struct StubExternalRuntime {
+    name: &'static str,
+    provider_label: &'static str,
+    api_method: &'static str,
+    models: &'static [&'static str],
+    model: std::sync::RwLock<String>,
+    credential_mode: std::sync::RwLock<jcode_provider_core::CredentialMode>,
+    oauth_account: std::sync::RwLock<Option<String>>,
+}
+
+impl StubExternalRuntime {
+    fn new(
+        name: &'static str,
+        provider_label: &'static str,
+        api_method: &'static str,
+        models: &'static [&'static str],
+    ) -> Self {
+        Self {
+            name,
+            provider_label,
+            api_method,
+            models,
+            model: std::sync::RwLock::new(models[0].to_string()),
+            credential_mode: std::sync::RwLock::new(jcode_provider_core::CredentialMode::Auto),
+            oauth_account: std::sync::RwLock::new(None),
+        }
+    }
+
+    fn cursor() -> Self {
+        Self::new("cursor", "Cursor", "cursor", cursor::AVAILABLE_MODELS)
+    }
+
+    fn antigravity() -> Self {
+        Self::new(
+            "antigravity",
+            "Antigravity",
+            "https",
+            antigravity::AVAILABLE_MODELS,
+        )
+    }
+
+    fn copilot() -> Self {
+        Self::new(
+            "copilot",
+            "GitHub Copilot",
+            "copilot",
+            copilot::FALLBACK_MODELS,
+        )
+    }
+
+    fn anthropic() -> Self {
+        Self::new(
+            "anthropic",
+            "Anthropic",
+            "https",
+            anthropic::AVAILABLE_MODELS,
+        )
+    }
+
+    fn openai() -> Self {
+        Self::new("openai", "OpenAI", "https", ALL_OPENAI_MODELS)
+    }
+}
+
+#[async_trait::async_trait]
+impl Provider for StubExternalRuntime {
+    async fn complete(
+        &self,
+        _messages: &[Message],
+        _tools: &[ToolDefinition],
+        _system: &str,
+        _resume_session_id: Option<&str>,
+    ) -> anyhow::Result<EventStream> {
+        anyhow::bail!("stub {} runtime does not stream", self.name)
+    }
+    fn name(&self) -> &'static str {
+        self.name
+    }
+    fn model(&self) -> String {
+        self.model
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+    fn set_model(&self, model: &str) -> anyhow::Result<()> {
+        let trimmed = model.trim();
+        if trimmed.is_empty() {
+            anyhow::bail!("{} model cannot be empty", self.provider_label);
+        }
+        // Mirror the real runtimes' family validation: the registry is
+        // process-global, so hot-init can hand this stub to tests that expect
+        // cross-provider models to be rejected (e.g. a Claude model under a
+        // forced-OpenAI selection).
+        if !self.models.contains(&trimmed) {
+            anyhow::bail!(
+                "Unsupported {} model '{}'. Use /model to choose from the models available to your account.",
+                self.provider_label,
+                trimmed,
+            );
+        }
+        *self
+            .model
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = trimmed.to_string();
+        Ok(())
+    }
+    fn available_models(&self) -> Vec<&'static str> {
+        self.models.to_vec()
+    }
+    fn available_models_display(&self) -> Vec<String> {
+        self.models.iter().map(|model| model.to_string()).collect()
+    }
+    fn available_models_for_switching(&self) -> Vec<String> {
+        self.available_models_display()
+    }
+    fn model_routes(&self) -> Vec<ModelRoute> {
+        self.available_models_display()
+            .into_iter()
+            .map(|model| ModelRoute {
+                model,
+                provider: self.provider_label.to_string(),
+                api_method: self.api_method.to_string(),
+                available: true,
+                detail: String::new(),
+                usage: None,
+                cheapness: None,
+            })
+            .collect()
+    }
+    fn credential_mode(&self) -> jcode_provider_core::CredentialMode {
+        *self
+            .credential_mode
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+    fn set_credential_mode(&self, mode: jcode_provider_core::CredentialMode) -> anyhow::Result<()> {
+        *self
+            .credential_mode
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = mode;
+        Ok(())
+    }
+    fn fork(&self) -> Arc<dyn Provider> {
+        Arc::new(StubExternalRuntime::new(
+            self.name,
+            self.provider_label,
+            self.api_method,
+            self.models,
+        ))
+    }
+
+    fn set_oauth_account(&self, label: Option<&str>) -> anyhow::Result<()> {
+        *self.oauth_account.write().unwrap() = label.map(str::to_owned);
+        Ok(())
+    }
+
+    fn oauth_account_label(&self) -> Option<String> {
+        self.oauth_account.read().unwrap().clone()
+    }
+}
+
+fn test_cursor_runtime() -> Arc<dyn Provider> {
+    Arc::new(StubExternalRuntime::cursor())
+}
+
+fn test_antigravity_runtime() -> Arc<dyn Provider> {
+    Arc::new(StubExternalRuntime::antigravity())
+}
+
+fn test_copilot_runtime() -> Arc<dyn Provider> {
+    Arc::new(StubExternalRuntime::copilot())
+}
+
+fn test_anthropic_runtime() -> Arc<StubExternalRuntime> {
+    Arc::new(StubExternalRuntime::anthropic())
+}
+
+fn test_openai_runtime() -> Arc<StubExternalRuntime> {
+    Arc::new(StubExternalRuntime::openai())
+}
+
+/// Register the shared external-runtime stubs for every downstream provider
+/// slot base can hot-initialize. Called by `with_clean_provider_test_env` so
+/// hot-init/startup tests find a runtime the way the real binary does.
+fn register_test_external_runtimes() {
+    external::register_external_provider(external::ANTHROPIC_RUNTIME, || {
+        test_anthropic_runtime() as Arc<dyn Provider>
+    });
+    external::register_external_provider(external::OPENAI_RUNTIME, || {
+        test_openai_runtime() as Arc<dyn Provider>
+    });
+    external::register_external_provider(external::CURSOR_RUNTIME, test_cursor_runtime);
+    external::register_external_provider(external::ANTIGRAVITY_RUNTIME, test_antigravity_runtime);
+    external::register_external_provider(external::COPILOT_RUNTIME, test_copilot_runtime);
+    // OpenRouter tests exercise the real runtime (profile-scoped catalogs,
+    // transport identities), so register the real factory like the binary's
+    // composition root does. The dev-dependency cycle is test-only.
+    external::register_openrouter_factory(|spec| {
+        use external::OpenRouterRuntimeSpec;
+        use jcode_provider_openrouter_runtime::OpenRouterProvider;
+        let provider: Arc<dyn Provider> = match spec {
+            OpenRouterRuntimeSpec::Default => Arc::new(OpenRouterProvider::new()?),
+            OpenRouterRuntimeSpec::OpenRouterApiKey => {
+                Arc::new(OpenRouterProvider::new_openrouter_api_key_runtime()?)
+            }
+            OpenRouterRuntimeSpec::CompatibleProfile(profile) => Arc::new(
+                OpenRouterProvider::new_openai_compatible_profile_runtime(profile)?,
+            ),
+            OpenRouterRuntimeSpec::NamedProfile { name, config } => Arc::new(
+                OpenRouterProvider::new_named_openai_compatible(&name, &config)?,
+            ),
+        };
+        Ok(provider)
+    });
+    external::register_profile_catalog_refresh(
+        jcode_provider_openrouter_runtime::maybe_schedule_openai_compatible_profile_catalog_refresh,
+    );
+    external::register_standard_openrouter_catalog_refresh(
+        jcode_provider_openrouter_runtime::maybe_schedule_standard_openrouter_catalog_refresh,
+    );
+}
+
+/// Construct a real OpenRouter/OpenAI-compatible runtime for tests through
+/// the registry, mirroring production construction.
+fn test_openrouter_runtime() -> anyhow::Result<Arc<dyn Provider>> {
+    external::instantiate_openrouter_runtime(external::OpenRouterRuntimeSpec::Default)
+}
+
+fn test_multi_provider_with_cursor() -> MultiProvider {
+    MultiProvider {
+        anthropic: RwLock::new(None),
+        openai: RwLock::new(None),
+        copilot_api: RwLock::new(None),
+        antigravity: RwLock::new(None),
+        gemini: RwLock::new(None),
+        cursor: RwLock::new(Some(test_cursor_runtime())),
+        bedrock: RwLock::new(None),
+        openrouter: RwLock::new(None),
+        openai_compatible_profiles: RwLock::new(std::collections::HashMap::new()),
+        active_openai_compatible_profile: RwLock::new(None),
+        session_id: RwLock::new(None),
+        active: RwLock::new(ActiveProvider::Cursor),
+        startup_notices: RwLock::new(Vec::new()),
+        initial_provider: None,
+        catalog_scope: next_catalog_scope(),
+        routes_memo: std::sync::Mutex::new(None),
+        post_auth_refreshes_pending: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+    }
+}
+
+struct NativeBridgeProvider {
+    tx: NativeToolResultSender,
+}
+
+#[async_trait::async_trait]
+impl Provider for NativeBridgeProvider {
+    async fn complete(
+        &self,
+        _messages: &[Message],
+        _tools: &[ToolDefinition],
+        _system: &str,
+        _resume_session_id: Option<&str>,
+    ) -> anyhow::Result<EventStream> {
+        anyhow::bail!("native bridge provider must not complete")
+    }
+
+    fn name(&self) -> &'static str {
+        "cursor"
+    }
+
+    fn fork(&self) -> Arc<dyn Provider> {
+        Arc::new(Self {
+            tx: self.tx.clone(),
+        })
+    }
+
+    fn native_result_sender(&self) -> Option<NativeToolResultSender> {
+        Some(self.tx.clone())
+    }
+}
+
+/// Regression: Cursor's AgentService only resumes a turn after the MCP tool
+/// result is written back onto its stream. The agent loop reaches the runtime
+/// through `MultiProvider`, so a `None` here silently dropped every result and
+/// hung Cursor turns right after the local tool finished.
+#[test]
+fn cursor_native_result_sender_reaches_the_active_cursor_runtime() {
+    let runtime = enter_test_runtime();
+    runtime.block_on(async {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let provider = test_multi_provider_with_cursor();
+        *provider
+            .cursor
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            Some(Arc::new(NativeBridgeProvider { tx }));
+
+        let sender = provider
+            .native_result_sender()
+            .expect("Cursor must expose its native tool result bridge");
+        sender
+            .send(NativeToolResult::success(
+                "stream:1:exec".to_string(),
+                "ok".to_string(),
+            ))
+            .await
+            .expect("send native result");
+        let received = rx.recv().await.expect("runtime receives the result");
+        assert_eq!(received.request_id, "stream:1:exec");
+    });
+}
+
+struct PrewarmRecordingProvider {
+    name: &'static str,
+    prewarms: Arc<std::sync::atomic::AtomicUsize>,
+    completions: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[async_trait::async_trait]
+impl Provider for PrewarmRecordingProvider {
+    async fn prewarm(&self, _tools: &[ToolDefinition], _system_static: &str) {
+        self.prewarms
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    async fn complete(
+        &self,
+        _messages: &[Message],
+        _tools: &[ToolDefinition],
+        _system: &str,
+        _resume_session_id: Option<&str>,
+    ) -> anyhow::Result<EventStream> {
+        self.completions
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        anyhow::bail!("recording provider must not complete")
+    }
+
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn fork(&self) -> Arc<dyn Provider> {
+        Arc::new(Self {
+            name: self.name,
+            prewarms: Arc::clone(&self.prewarms),
+            completions: Arc::clone(&self.completions),
+        })
+    }
+}
+
+#[test]
+fn prewarm_delegates_only_to_active_provider_without_completing() {
+    let runtime = enter_test_runtime();
+    runtime.block_on(async {
+        let active_prewarms = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let inactive_prewarms = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let completions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let provider = test_multi_provider_with_cursor();
+        *provider
+            .cursor
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            Some(Arc::new(PrewarmRecordingProvider {
+                name: "active",
+                prewarms: Arc::clone(&active_prewarms),
+                completions: Arc::clone(&completions),
+            }));
+        *provider
+            .openai
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            Some(Arc::new(PrewarmRecordingProvider {
+                name: "inactive",
+                prewarms: Arc::clone(&inactive_prewarms),
+                completions: Arc::clone(&completions),
+            }));
+
+        provider.prewarm(&[], "static instructions").await;
+
+        assert_eq!(active_prewarms.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            inactive_prewarms.load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+        assert_eq!(completions.load(std::sync::atomic::Ordering::SeqCst), 0);
+    });
+}
+
+#[test]
+fn new_session_fork_reloads_changed_config_provider_and_model() {
+    with_clean_provider_test_env(|| {
+        let runtime = enter_test_runtime();
+        runtime.block_on(async {
+            crate::env::set_var("ANTHROPIC_API_KEY", "sk-ant-test");
+            crate::env::set_var("OPENAI_API_KEY", "sk-openai-test");
+
+            crate::config::Config::set_default_model(Some("claude-fable-5"), Some("anthropic-api"))
+                .expect("save initial Claude default");
+            let template = MultiProvider::new_fast();
+            assert_eq!(template.name(), "Claude");
+            assert_eq!(template.model(), "claude-fable-5");
+
+            crate::config::Config::set_default_model(Some("gpt-5.5"), Some("openai-api"))
+                .expect("save changed OpenAI default");
+
+            let fresh = template.fork_for_new_session();
+            assert_eq!(fresh.name(), "OpenAI");
+            assert_eq!(fresh.model(), "gpt-5.5");
+            assert_eq!(
+                fresh.active_resolved_credential(),
+                Some(jcode_provider_core::ResolvedCredential::ApiKey)
+            );
+
+            // Ordinary forks still preserve the existing session's selection.
+            let preserved = template.fork();
+            assert_eq!(preserved.name(), "Claude");
+            assert_eq!(preserved.model(), "claude-fable-5");
+        });
+    });
+}
+
+include!("tests/auth_refresh.rs");
+include!("tests/model_resolution.rs");
+include!("tests/issue_534_profile_preservation.rs");
+include!("tests/fallback_failover.rs");
+include!("tests/account_failover.rs");
+include!("tests/catalog_subscription.rs");
+
+/// Rendering the route catalog must never schedule network work.
+///
+/// Regression guard for the "spawning a session refetches every provider
+/// catalog" bug: route building used to schedule a background `/models` fetch
+/// for each stale or missing profile cache, so every session attach and picker
+/// open fanned out dozens of HTTP requests. Refresh cadence now belongs solely
+/// to the background catalog scheduler.
+#[test]
+fn building_direct_profile_routes_does_not_schedule_catalog_refreshes() {
+    with_clean_provider_test_env(|| {
+        let runtime = enter_test_runtime();
+        runtime.block_on(async {
+            crate::provider_catalog::save_env_value_to_env_file(
+                "OPENROUTER_API_KEY",
+                "openrouter.env",
+                Some("sk-test-openrouter"),
+            )
+            .expect("save openrouter key");
+
+            // Deliberately leave every profile cache missing/stale: under the
+            // old behavior this was the worst case that scheduled a refresh
+            // for each configured profile.
+            jcode_provider_openrouter_runtime::reset_profile_catalog_refresh_tracker_for_tests();
+
+            for profile in crate::provider_catalog::openai_compatible_profiles()
+                .iter()
+                .copied()
+            {
+                let _ = super::direct_openai_compatible_profile_routes(profile);
+            }
+
+            // If route building had scheduled refreshes, the profile tracker
+            // would have recorded attempts, and this direct call for the
+            // standard OpenRouter namespace would be throttled/in-flight.
+            assert!(
+                openrouter::maybe_schedule_standard_openrouter_catalog_refresh(
+                    "unit test post-render scheduling"
+                ),
+                "route building must leave the refresh tracker untouched"
+            );
+        });
+    });
+}
+
+/// The scheduler's staleness predicate must treat a missing or mismatched
+/// cache as needing a refresh, so the sweeper actually populates cold caches.
+#[test]
+fn profile_catalog_cache_needs_refresh_for_missing_cache() {
+    with_clean_provider_test_env(|| {
+        let profile = crate::provider_catalog::openai_compatible_profiles()
+            .first()
+            .copied()
+            .expect("at least one OpenAI-compatible profile is defined");
+        assert!(
+            super::catalog_scheduler::profile_catalog_cache_needs_refresh(profile),
+            "a missing catalog cache must be reported as needing a refresh"
+        );
+    });
+}
+
+#[test]
+fn jcode_subscription_model_prefix_parses_explicit_specs() {
+    assert_eq!(
+        super::jcode_subscription_model_prefix("jcode:gpt-5.5"),
+        Some("gpt-5.5")
+    );
+    assert_eq!(
+        super::jcode_subscription_model_prefix("jcode-subscription: gpt-5.5 "),
+        Some("gpt-5.5")
+    );
+    assert_eq!(super::jcode_subscription_model_prefix("jcode:"), None);
+    assert_eq!(super::jcode_subscription_model_prefix("gpt-5.5"), None);
+    assert_eq!(
+        super::jcode_subscription_model_prefix("openai:gpt-5.5"),
+        None
+    );
+}
+
+/// A session persisted on one credential (e.g. `claude-api:`) must not stay
+/// pinned to it after the deployment moved to the other credential. The
+/// runtime pin wins; with no pin, the bare provider prefix lets auto mode pick.
+#[test]
+fn stale_credential_route_fallback_follows_runtime_pin_or_drops_to_auto() {
+    with_clean_provider_test_env(|| {
+        // Runtime pinned to Claude OAuth, session persisted on the API key.
+        crate::env::set_var("JCODE_RUNTIME_PROVIDER", "claude");
+        let (request, healed) = stale_credential_route_fallback("claude-api:claude-sonnet-5")
+            .expect("stale API-key pin must fall back to the runtime's OAuth route");
+        assert_eq!(request, "claude-oauth:claude-sonnet-5");
+        assert_eq!(healed.provider_key.as_deref(), Some("claude-oauth"));
+        assert_eq!(healed.route_api_method.as_deref(), Some("claude-oauth"));
+        assert_eq!(healed.stale_request, "claude-api:claude-sonnet-5");
+
+        // The reverse move: runtime on the API key, session persisted on OAuth.
+        crate::env::set_var("JCODE_RUNTIME_PROVIDER", "claude-api");
+        let (request, healed) = stale_credential_route_fallback("claude-oauth:claude-sonnet-5")
+            .expect("stale OAuth pin must fall back to the runtime's API-key route");
+        assert_eq!(request, "claude-api:claude-sonnet-5");
+        assert_eq!(healed.provider_key.as_deref(), Some("claude-api"));
+        assert_eq!(
+            healed.route_api_method.as_deref(),
+            Some("anthropic-api-key")
+        );
+
+        // The runtime pins the very credential that failed: that is a real
+        // auth failure, not a stale session, so there is nothing to fall back to.
+        assert!(stale_credential_route_fallback("claude-api:claude-sonnet-5").is_none());
+
+        // A runtime pin for the *other* provider says nothing about this one:
+        // drop to auto mode.
+        crate::env::set_var("JCODE_RUNTIME_PROVIDER", "openai-api");
+        let (request, healed) = stale_credential_route_fallback("claude-api:claude-sonnet-5")
+            .expect("unpinned provider falls back to auto mode");
+        assert_eq!(request, "claude:claude-sonnet-5");
+        assert_eq!(healed.provider_key.as_deref(), Some("claude"));
+        assert_eq!(healed.route_api_method, None);
+
+        crate::env::remove_var("JCODE_RUNTIME_PROVIDER");
+        let (request, _) = stale_credential_route_fallback("openai-oauth:gpt-5.5")
+            .expect("no runtime pin falls back to auto mode");
+        assert_eq!(request, "openai:gpt-5.5");
+
+        // Requests that pin no credential have nothing to recover.
+        assert!(stale_credential_route_fallback("claude:claude-sonnet-5").is_none());
+        assert!(stale_credential_route_fallback("claude-sonnet-5").is_none());
+        assert!(stale_credential_route_fallback("openrouter:z-ai/glm-5.2@Novita").is_none());
+    });
+}
