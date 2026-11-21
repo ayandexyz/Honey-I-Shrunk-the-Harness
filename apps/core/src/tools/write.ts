@@ -10,6 +10,7 @@ import { buildTool } from "./factory.js";
 import { generateDiffString } from "./diff-format.js";
 import { getReadState } from "./read-state.js";
 import { noteEdit } from "./lsp/feedback.js";
+import { recordEditStats } from "../session/edit-stats.js";
 
 interface WriteParams {
   content: string;
@@ -102,6 +103,7 @@ async function executeWrite(
     const oldContent = exists ? fs.readFileSync(filepath, "utf-8") : "";
     fs.writeFileSync(filepath, params.content, "utf-8");
     noteEdit(ctx.sessionId, filepath, ctx.projectPath ?? ctx.cwd);
+    recordEditStats(ctx.sessionId, ctx.projectPath ?? ctx.cwd, oldContent, params.content);
 
     // Record the post-write state so `edit` does not later report the model's
     // own write as an external change. No offset/limit — this content was

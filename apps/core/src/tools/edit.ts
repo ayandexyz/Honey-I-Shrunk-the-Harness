@@ -10,6 +10,7 @@ import { buildTool } from "./factory.js";
 import { generateDiffString } from "./diff-format.js";
 import { getReadState, touchReadState } from "./read-state.js";
 import { noteEdit } from "./lsp/feedback.js";
+import { recordEditStats } from "../session/edit-stats.js";
 
 interface EditParams {
   filePath: string;
@@ -689,6 +690,7 @@ async function executeEdit(
 
     fs.writeFileSync(filepath, newContent, "utf-8");
     noteEdit(ctx.sessionId, filepath, ctx.projectPath ?? ctx.cwd);
+    recordEditStats(ctx.sessionId, ctx.projectPath ?? ctx.cwd, content, newContent);
 
     // Record the post-edit state so the next edit compares against it. No
     // offset/limit: the model has not been *shown* this content, so it must

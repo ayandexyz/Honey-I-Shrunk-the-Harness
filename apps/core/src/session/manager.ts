@@ -14,6 +14,7 @@ import {
   type SerializedMessage,
 } from "./store.js";
 import { CONFIG_FILE } from "../providers/config.js";
+import { readEditStats, type EditStats } from "./edit-stats.js";
 
 const SESSION_DIR = ".freecode";
 
@@ -39,6 +40,8 @@ export interface SessionContext {
   pinned?: boolean;
   pinnedLabel?: string;
   agent?: SessionMeta["agent"];
+  /** Lines the edit/write tools changed (`edit-stats.ts`); list only. */
+  editStats?: EditStats;
 }
 
 // =============================================================================
@@ -154,8 +157,11 @@ export class SessionManager {
     status?: SessionMeta["status"];
   }): Promise<SessionContext[]> {
     const metas = await this.sessionStore.list(filter);
+    const editStats = await Promise.all(
+      metas.map((meta) => readEditStats(meta.id, meta.projectPath)),
+    );
 
-    return metas.map((meta) => ({
+    return metas.map((meta, i) => ({
       id: meta.id,
       title: meta.title,
       projectPath: meta.projectPath,
@@ -170,6 +176,7 @@ export class SessionManager {
       pinned: meta.pinned,
       pinnedLabel: meta.pinnedLabel,
       agent: meta.agent,
+      editStats: editStats[i],
       messages: [], // Don't load messages for list
     }));
   }

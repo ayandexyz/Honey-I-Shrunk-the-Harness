@@ -413,6 +413,8 @@ fn session_info_with_activity(session: &Value, running: &HashSet<String>) -> Res
         "parent_session_id": session.pointer("/agent/parentId"),
         "agent_label": session.pointer("/agent/label"),
         "swarm_status": session.pointer("/agent/status"),
+        // `{added, removed}` from the edit/write tools; same shape as jcode's.
+        "edit_stats": session.get("editStats"),
     });
     serde_json::from_value(info).map_err(|e| {
         Error::new(ErrorKind::UnexpectedReply, format!("session.list: {e}"))
@@ -498,5 +500,16 @@ mod tests {
 
         let plain = session_info(&json!({ "id": "s2", "parentId": "fork-source" })).unwrap();
         assert_eq!(plain.parent_session_id, None, "a fork is not a swarm member");
+    }
+
+    #[test]
+    fn session_info_maps_edit_stats() {
+        let info = session_info(&json!({
+            "id": "s1", "editStats": {"added": 12, "removed": 3},
+        }))
+        .unwrap();
+        let stats = info.edit_stats.unwrap();
+        assert_eq!((stats.added, stats.removed, stats.approximate), (12, 3, false));
+        assert_eq!(session_info(&json!({ "id": "s2" })).unwrap().edit_stats, None);
     }
 }
