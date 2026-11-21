@@ -1,0 +1,33 @@
+//! Everything gpui-fast adds to GPUI lives under this module.
+//!
+//! The rest of this crate is kept as close to upstream GPUI (Zed's
+//! `crates/gpui`) as possible, so that pulling in upstream changes stays a
+//! matter of merging rather than of rewriting. Upstream files only *call into*
+//! this module: a field holding this module's state, a line forwarding a method
+//! to it, a hook at the point something happens. The logic itself — data
+//! structures, algorithms, bookkeeping, tests — is written here, one file per
+//! topic. See `docs/upstream-sync.md` for the rules and how they are checked.
+//!
+//! Nothing here is glob-imported or glob-re-exported. Code, upstream's or
+//! ours, names what it uses by its place in this module —
+//! `crate::fast::retained::RetainedSubtrees` — so it is always plain where it
+//! comes from. The few items that are public API are exported from the crate
+//! root one by one, in `gpui.rs`.
+
+pub(crate) mod dependencies;
+pub(crate) mod element_arena;
+pub(crate) mod global_id;
+pub(crate) mod glyphs;
+pub(crate) mod interactivity;
+pub(crate) mod layout;
+pub(crate) mod layout_key;
+pub(crate) mod retained;
+pub(crate) mod scene;
+pub(crate) mod splice;
+pub(crate) mod stats;
+#[cfg(any(test, feature = "test-api"))]
+pub(crate) mod test_api;
+pub(crate) mod text;
+
+#[cfg(test)]
+mod tests;

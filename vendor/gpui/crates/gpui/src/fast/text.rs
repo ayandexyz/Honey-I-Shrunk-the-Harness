@@ -1,0 +1,231 @@
+//! Where a reused range of shaped lines falls in a new frame, text measurements
+//! carried from one frame to the next, and shaping statistics.
+
+use crate::{
+    App, AvailableSpace, FontRun, LayoutId, LineLayout, LineLayoutIndex, Pixels,
+    PlatformTextSystem, SharedString, Size, Style, TextLayout, TextLayoutInner, TextRun, TextStyle,
+    Window, WindowTextSystem, WrappedLine,
+};
+use scheduler::Instant;
+use std::{
+    any::Any,
+    rc::Rc,
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
+};
+
+/// Everything a text element's measurement is taken from. Two measurements
+/// taken from equal inputs come out the same, whatever space they are given.
+#[derive(PartialEq)]
+pub(crate) struct TextMeasureInputs {
+    text: SharedString,
+    runs: Vec<TextRun>,
+    text_style: TextStyle,
+    font_size: Pixels,
+    line_height: Pixels,
+}
+
+impl TextMeasureInputs {
+    pub(crate) fn new(
+        text: &SharedString,
+        runs: &[TextRun],
+        text_style: &TextStyle,
+        font_size: Pixels,
+        line_height: Pixels,
+    ) -> Self {
+        Self {
+            text: text.clone(),
+            runs: runs.to_vec(),
+            text_style: text_style.clone(),
+            font_size,
+            line_height,
+        }
+    }
+}
+
+/// A text element's measurement, carried to the next frame's element at the
+/// same place for it to take over.
+struct TextMeasurement {
+    inputs: TextMeasureInputs,
+    layout: TextLayout,
+}
+
+/// Requests the layout of a text element whose measurement `measure` takes
+/// from `inputs` and keeps in `layout`.
+///
+/// A measured node is given a new closure every frame, and would be dirtied
+/// for it, with every node above it: a view built again would have all of its
+/// text measured and laid out again, though none of it changed. When last
+/// frame's element at this place measured the same inputs, its measurement is
+/// copied into `layout` instead, and the node is left clean, keeping what
+/// Taffy cached for it. The new closure is still installed, for when Taffy
+/// measures it again under other constraints.
+pub(crate) fn request_text_layout(
+    layout: &TextLayout,
+    inputs: TextMeasureInputs,
+    window: &mut Window,
+    measure: impl Fn(Size<Option<Pixels>>, Size<AvailableSpace>, &mut Window, &mut App) -> Size<Pixels>
+    + 'static,
+) -> LayoutId {
+    let measurement = Rc::new(TextMeasurement {
+        inputs,
+        layout: layout.clone(),
+    });
+    let adopt = {
+        let measurement = measurement.clone();
+        move |previous: &dyn Any| {
+            let Some(previous) = previous.downcast_ref::<TextMeasurement>() else {
+                return false;
+            };
+            if previous.inputs != measurement.inputs {
+                return false;
+            }
+            let Some(inner) = previous.layout.0.borrow().as_ref().map(copy_measurement) else {
+                return false;
+            };
+            *measurement.layout.0.borrow_mut() = Some(inner);
+            true
+        }
+    };
+    window.request_carried_measured_layout(measurement, adopt, measure)
+}
+
+/// A copy of what a measurement left, without where it was last painted.
+fn copy_measurement(inner: &TextLayoutInner) -> TextLayoutInner {
+    TextLayoutInner {
+        len: inner.len,
+        lines: inner
+            .lines
+            .iter()
+            .map(|line| WrappedLine {
+                layout: line.layout.clone(),
+                text: line.text.clone(),
+                decoration_runs: line.decoration_runs.clone(),
+            })
+            .collect(),
+        line_height: inner.line_height,
+        wrap_width: inner.wrap_width,
+        truncate_width: inner.truncate_width,
+        size: inner.size,
+        bounds: None,
+    }
+}
+
+impl Window {
+    /// Requests a self-measuring leaf, as [`Window::request_measured_layout`]
+    /// does, whose measurement can be carried over from the element at the
+    /// same place last frame. `adopt` is given what that element left in
+    /// `memo`, and takes its measurement over if it still stands.
+    pub(crate) fn request_carried_measured_layout(
+        &mut self,
+        memo: Rc<dyn Any>,
+        adopt: impl FnOnce(&dyn Any) -> bool,
+        measure: impl Fn(
+            Size<Option<Pixels>>,
+            Size<AvailableSpace>,
+            &mut Window,
+            &mut App,
+        ) -> Size<Pixels>
+        + 'static,
+    ) -> LayoutId {
+        self.invalidator.debug_assert_prepaint();
+        let rem_size = self.rem_size();
+        let scale_factor = self.scale_factor();
+        let key = self.layout_key();
+        self.layout_engine
+            .as_mut()
+            .unwrap()
+            .request_retained_carried_measured_layout(
+                key,
+                Style::default(),
+                rem_size,
+                scale_factor,
+                memo,
+                adopt,
+                measure,
+            )
+    }
+}
+
+impl LineLayoutIndex {
+    /// This index, taken from a range that started at `from`, as it falls in
+    /// a copy of that range starting at `to`.
+    pub(crate) fn shifted(&self, from: &Self, to: &Self) -> Self {
+        LineLayoutIndex {
+            lines_index: self.lines_index - from.lines_index + to.lines_index,
+            wrapped_lines_index: self.wrapped_lines_index - from.wrapped_lines_index
+                + to.wrapped_lines_index,
+            lines_by_hash_index: self.lines_by_hash_index - from.lines_by_hash_index
+                + to.lines_by_hash_index,
+            wrapped_lines_by_hash_index: self.wrapped_lines_by_hash_index
+                - from.wrapped_lines_by_hash_index
+                + to.wrapped_lines_by_hash_index,
+        }
+    }
+}
+
+/// Counts the lines the line layout cache hands to the platform to be shaped,
+/// because neither this frame nor the last one had them, and times them.
+#[derive(Default)]
+pub(crate) struct LineShaping {
+    /// Lines handed to the platform to be shaped. See [`LineShaping::stats`].
+    lines_shaped: AtomicU64,
+    /// Time spent in those calls, in nanoseconds.
+    shape_nanos: AtomicU64,
+    /// Whether to time shaping, which it does once the stats have been reset.
+    shape_timed: AtomicBool,
+}
+
+impl LineShaping {
+    /// How many lines have been shaped, and how long that took, since the last
+    /// [`LineShaping::reset`]. A line answered from the cache is not counted,
+    /// so this is the text work the cache failed to save.
+    #[cfg(any(test, feature = "test-api"))]
+    pub(crate) fn stats(&self) -> (u64, std::time::Duration) {
+        (
+            self.lines_shaped.load(Ordering::Relaxed),
+            std::time::Duration::from_nanos(self.shape_nanos.load(Ordering::Relaxed)),
+        )
+    }
+
+    /// Zeroes the counters reported by [`LineShaping::stats`], and from then
+    /// on times shaping too.
+    #[cfg(any(test, feature = "test-api"))]
+    pub(crate) fn reset(&self) {
+        self.lines_shaped.store(0, Ordering::Relaxed);
+        self.shape_nanos.store(0, Ordering::Relaxed);
+        self.shape_timed.store(true, Ordering::Relaxed);
+    }
+
+    /// Shapes a line the cache does not have, counting it.
+    pub(crate) fn shape_line(
+        &self,
+        platform_text_system: &dyn PlatformTextSystem,
+        text: &str,
+        font_size: Pixels,
+        runs: &[FontRun],
+    ) -> LineLayout {
+        let started_at = self.shape_timed.load(Ordering::Relaxed).then(Instant::now);
+        let layout = platform_text_system.layout_line(text, font_size, runs);
+        self.lines_shaped.fetch_add(1, Ordering::Relaxed);
+        if let Some(started_at) = started_at {
+            self.shape_nanos
+                .fetch_add(started_at.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        }
+        layout
+    }
+}
+
+impl WindowTextSystem {
+    /// Lines shaped by the platform, and the time that took, since the last
+    /// [`Self::reset_shaping_stats`]. Lines answered from the cache do not count.
+    #[cfg(any(test, feature = "test-api"))]
+    pub(crate) fn shaping_stats(&self) -> (u64, std::time::Duration) {
+        self.line_layout_cache.shaping.stats()
+    }
+
+    /// Zeroes the counters reported by [`Self::shaping_stats`].
+    #[cfg(any(test, feature = "test-api"))]
+    pub(crate) fn reset_shaping_stats(&self) {
+        self.line_layout_cache.shaping.reset()
+    }
+}
