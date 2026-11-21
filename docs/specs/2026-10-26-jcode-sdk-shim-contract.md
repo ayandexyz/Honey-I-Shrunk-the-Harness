@@ -342,6 +342,29 @@ never comes from upstream is this `jcode-sdk` shim.
      polls) are now provably redundant with this and were already
      returning nothing against freecode either way — left in place as
      inert, not touched, since removing them is cleanup, not a fix.
+   - **✅ DONE 2026-11-21 (branch `fix/desktop-sidebar-wiring`) — sidebar
+     metadata that read jcode's disk.** Three sidebar features were silently
+     empty against freecode: (1) **subagent nesting** — the `agent` tool
+     already persists each subagent as a session, so they showed as flat
+     rows; `SessionMeta.agent {parentId, label, status}` (spawner, not the
+     fork-source `parentId`) is written at spawn and settle
+     (`tools/agent.ts`) and the shim maps it to `parent_session_id` /
+     `agent_label` / `swarm_status`. A core that dies mid-run leaves
+     `running` behind (the roster is in-process, and the desktop's core is
+     not the TUI's, so it cannot reconcile). (2) **edit totals** —
+     `session/edit-stats.ts`: `edit`/`write` add line counts to
+     `edit-stats.json` beside `meta.json` (cumulative, like jcode's; no dir
+     ⇒ nothing recorded), `session.list` returns `editStats` → `edit_stats`.
+     Only edits made after this change count. (3) **unfinished work** —
+     `session.list` returns `openTodos` (uncached `readOpenTodos`, since
+     another process may own the session); jcode's `SessionInfo` has no
+     todo field, so the shim keeps them per id from the last list
+     (`jcode_sdk::open_todos`) and `harness.rs::unfinished_sessions_in`
+     prefers them over `<home>/todos/<id>.json` (a hand hook). Plus
+     `archive_session`/`restore_session` → `session.archive` / new
+     `session.unarchive` (were `todo!()`). The sidecar reads cost ~300ms per
+     poll on a 15k-session store, so `session.list` takes `limit` and
+     truncates first; the shim passes 100 (~300ms/poll, was ~390ms).
    - **Still open, deliberately not touched this pass** — both are
      perf/UX niceties, not correctness bugs (the authoritative data still
      loads via `session.resume`/`attach_session`); fixing them means
