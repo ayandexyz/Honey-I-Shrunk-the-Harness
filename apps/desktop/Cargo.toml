@@ -39,7 +39,7 @@ gpui = { path = "../../vendor/gpui/crates/gpui" }
 
 [package]
 name = "jcode-desktop"
-version = "0.6.19"
+version = "0.6.20"
 edition.workspace = true
 description = "Jcode Desktop: a spatial, niri-inspired canvas of Jcode sessions"
 license.workspace = true
