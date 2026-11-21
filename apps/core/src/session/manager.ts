@@ -16,6 +16,7 @@ import {
 import { CONFIG_FILE } from "../providers/config.js";
 import { readEditStats, type EditStats } from "./edit-stats.js";
 import { readOpenTodos } from "../tools/todo.js";
+import { pidAlive } from "../utils/pid.js";
 
 const SESSION_DIR = ".freecode";
 
@@ -50,6 +51,14 @@ export interface SessionContext {
 // =============================================================================
 // SessionManager
 // =============================================================================
+
+// A subagent whose core died mid-run is still recorded "running"; report it
+// killed. Checked on read rather than swept at startup because several cores
+// (one per desktop window, the TUI) share the store and each owns only its own.
+function settledAgent(agent: SessionMeta["agent"]): SessionMeta["agent"] {
+  if (agent?.status !== "running" || pidAlive(agent.pid)) return agent;
+  return { ...agent, status: "killed" };
+}
 
 export class SessionManager {
   private sessionStore: SessionStore;
@@ -186,7 +195,7 @@ export class SessionManager {
       parentId: meta.parentId,
       pinned: meta.pinned,
       pinnedLabel: meta.pinnedLabel,
-      agent: meta.agent,
+      agent: settledAgent(meta.agent),
       editStats: editStats[i],
       openTodos: readOpenTodos(meta.id, meta.projectPath),
       messages: [], // Don't load messages for list

@@ -349,9 +349,11 @@ never comes from upstream is this `jcode-sdk` shim.
      rows; `SessionMeta.agent {parentId, label, status}` (spawner, not the
      fork-source `parentId`) is written at spawn and settle
      (`tools/agent.ts`) and the shim maps it to `parent_session_id` /
-     `agent_label` / `swarm_status`. A core that dies mid-run leaves
-     `running` behind (the roster is in-process, and the desktop's core is
-     not the TUI's, so it cannot reconcile). (2) **edit totals** —
+     `agent_label` / `swarm_status`. A `running` record carries the core's
+     `pid`; `session.list` reports it `killed` once that pid is dead
+     (`settledAgent`, `session/manager.ts`) — on read, not swept at startup,
+     since every desktop window and the TUI run their own core over one
+     store. (2) **edit totals** —
      `session/edit-stats.ts`: `edit`/`write` add line counts to
      `edit-stats.json` beside `meta.json` (cumulative, like jcode's; no dir
      ⇒ nothing recorded), `session.list` returns `editStats` → `edit_stats`.

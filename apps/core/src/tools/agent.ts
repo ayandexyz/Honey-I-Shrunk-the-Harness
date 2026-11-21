@@ -326,7 +326,14 @@ async function executeSubagent(
     sessionStore!
       .updateMeta(
         subagentId,
-        { agent: { parentId: parentSessionId, label: agentLabel, status } },
+        {
+          agent: {
+            parentId: parentSessionId,
+            label: agentLabel,
+            status,
+            ...(status === "running" ? { pid: process.pid } : {}),
+          },
+        },
         projectPath,
       )
       .catch(() => {});

@@ -12,25 +12,9 @@ import { createGitOps } from "./git.js";
 import { renderReport, duration } from "./report.js";
 import { listRuns, readManifest, updateManifest } from "./run-store.js";
 import type { RunManifest } from "./types.js";
+import { pidAlive } from "../utils/pid.js";
 
-/**
- * Whether the process that owns a run is still alive.
- *
- * `kill(pid, 0)` tests existence without signalling. The pid could have been
- * recycled onto an unrelated process, which would read as "still running" —
- * accepted: the alternative is a liveness handshake for a foreground command
- * whose terminal the user can simply look at.
- */
-export function pidAlive(pid: number | undefined): boolean {
-  if (pid === undefined) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    // EPERM means it exists and belongs to someone else — still alive.
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
+export { pidAlive };
 
 /**
  * A run whose manifest says `running` but whose pid is gone did not stop, it

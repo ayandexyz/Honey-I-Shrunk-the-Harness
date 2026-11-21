@@ -162,6 +162,20 @@ describe("SessionManager", () => {
       const listed = await manager.list({ limit: 1 });
       assert.deepEqual(listed.map((s) => s.title), ["Touched last"]);
     });
+
+    it("reports a running subagent whose core died as killed", async () => {
+      const live = await manager.start("/tmp/p1", "claude", "Live");
+      const orphan = await manager.start("/tmp/p1", "claude", "Orphan");
+      const running = { parentId: "root", status: "running" as const };
+      await sessionStore.updateMeta(live, { agent: { ...running, pid: process.pid } });
+      // Above the kernel's pid_max, so never a live process.
+      await sessionStore.updateMeta(orphan, { agent: { ...running, pid: 4_194_304 } });
+
+      const status = Object.fromEntries(
+        (await manager.list()).map((s) => [s.title, s.agent?.status]),
+      );
+      assert.deepEqual(status, { Live: "running", Orphan: "killed" });
+    });
   });
 
   describe("archive", () => {

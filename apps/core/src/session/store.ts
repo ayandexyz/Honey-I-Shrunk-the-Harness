@@ -51,6 +51,9 @@ export interface SessionMeta {
     parentId: string;
     label?: string;
     status: "running" | "completed" | "failed" | "killed";
+    /** The core process running it, while `status` is "running": a core that
+     *  dies mid-run never settles the status, so a reader checks this. */
+    pid?: number;
   };
 }
 

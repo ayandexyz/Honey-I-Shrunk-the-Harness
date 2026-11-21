@@ -64,6 +64,7 @@ test("a finished subagent's session names its spawner and final status", async (
 
     const store = await createSessionStore(join(home, ".freecode"));
     const meta = await store.getMeta(id, project);
+    // The pid is written only while running: a settled status needs no check.
     assert.deepEqual(meta?.agent, {
       parentId: "root-meta",
       label: "general",
