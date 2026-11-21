@@ -163,6 +163,18 @@ describe("SessionManager", () => {
       const meta = await sessionStore.getMeta(sessionId);
       assert.equal(meta!.status, "archived");
     });
+
+    it("unarchive restores an archived session and leaves a deleted one alone", async () => {
+      const archived = await manager.start("/tmp/test-project", "claude");
+      await manager.archive(archived);
+      await manager.unarchive(archived);
+      assert.equal((await sessionStore.getMeta(archived))!.status, "active");
+
+      const deleted = await manager.start("/tmp/test-project", "claude");
+      await manager.delete(deleted);
+      await manager.unarchive(deleted);
+      assert.equal((await sessionStore.getMeta(deleted))!.status, "deleted");
+    });
   });
 
   describe("delete", () => {

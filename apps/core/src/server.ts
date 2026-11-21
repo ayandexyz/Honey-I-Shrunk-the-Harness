@@ -1966,6 +1966,12 @@ export const methodHandlers: Record<
     await endSessionOnce(sessionId, "archive");
   },
 
+  "session.unarchive": async (params: Record<string, unknown>): Promise<void> => {
+    const { sessionId } = params as { sessionId: string };
+    const manager = await getSessionManager();
+    await manager.unarchive(sessionId);
+  },
+
   "session.rename": async (
     params: Record<string, unknown>,
   ): Promise<{ title: string }> => {

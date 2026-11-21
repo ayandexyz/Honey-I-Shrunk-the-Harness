@@ -190,6 +190,14 @@ export class SessionManager {
     await this.sessionStore.updateStatus(sessionId, "archived");
   }
 
+  // Put an archived session back in the default list.
+  async unarchive(sessionId: string): Promise<void> {
+    const meta = await this.sessionStore.getMeta(sessionId);
+    if (meta?.status === "archived") {
+      await this.sessionStore.updateStatus(sessionId, "active");
+    }
+  }
+
   // Rename a session. `title` undefined clears back to the default
   // "Session <id>" placeholder session.start gives every new session.
   async rename(sessionId: string, title?: string): Promise<string> {

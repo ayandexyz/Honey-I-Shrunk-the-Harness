@@ -818,6 +818,10 @@ export const METHODS = {
     params: { sessionId: "" },
     result: undefined as void,
   },
+  "session.unarchive": {
+    params: { sessionId: "" },
+    result: undefined as void,
+  },
   "session.rename": {
     params: {} as { sessionId: string; title?: string },
     result: {} as { title: string },
@@ -989,6 +993,7 @@ export const REQUIRED_PARAMS: Record<
   "session.rewindPreview": { sessionId: "string", entryId: "string" },
   "session.rewind": { sessionId: "string", entryId: "string" },
   "session.archive": { sessionId: "string" },
+  "session.unarchive": { sessionId: "string" },
   "session.rename": { sessionId: "string" },
   "session.setReasoningEffort": { sessionId: "string", effort: "string" },
   "session.setAgentMode": { sessionId: "string", agentMode: "string" },

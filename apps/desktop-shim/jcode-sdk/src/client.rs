@@ -520,12 +520,14 @@ impl JcodeClient {
     /// Reversibly hide a session from the default list. Its transcript remains
     /// available for a later restore.
     pub fn archive_session(&self, session_id: &str) -> Result<()> {
-        todo!("jcode-sdk shim: archive_session")
+        crate::freecode::call(&self.inner, "session.archive", serde_json::json!({ "sessionId": session_id }))
+            .map(|_| ())
     }
 
     /// Put an archived session back in the default session list.
     pub fn restore_session(&self, session_id: &str) -> Result<()> {
-        todo!("jcode-sdk shim: restore_session")
+        crate::freecode::call(&self.inner, "session.unarchive", serde_json::json!({ "sessionId": session_id }))
+            .map(|_| ())
     }
 
     /// Automatically archive inactive sessions after `archive_after_days`.
