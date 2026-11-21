@@ -129,6 +129,12 @@ impl PromptInput {
         let before = text_before_cursor(&self.content, cursor);
         let working_dir = self.working_dir.clone();
         let content = self.content.clone();
+        let previous: Vec<String> = self
+            .mention_picker
+            .candidates
+            .iter()
+            .map(|candidate| candidate.value.clone())
+            .collect();
         let refreshed = self.mention_picker.refresh(
             before,
             &content,
@@ -140,6 +146,19 @@ impl PromptInput {
         }
         if self.mention_picker.selection >= self.mention_picker.candidates.len() {
             self.mention_picker.selection = 0;
+        }
+        // The overlay draws `mention_scroll`'s item count, not the candidate
+        // list: left at its initial 0, the picker opened as an empty border.
+        // Reset only when the rows changed, so an unchanged refresh keeps the
+        // scroll position (same rule as the command menu's `command_scroll`).
+        let changed = previous.len() != self.mention_picker.candidates.len()
+            || previous
+                .iter()
+                .zip(&self.mention_picker.candidates)
+                .any(|(old, new)| *old != new.value);
+        if changed {
+            self.mention_scroll
+                .reset_with_uniform_height(self.mention_picker.candidates.len(), px(34.));
         }
         let _ = cx;
     }
@@ -576,5 +595,13 @@ mod tests {
             vcx.debug_bounds("mention-scroll").is_some(),
             "the picker should paint its scroll area"
         );
+        // The list draws its own item count, not the candidates: it used to
+        // stay at its initial 0, so the picker opened as an empty border.
+        // (Row heights cannot be checked here — the test window lays out
+        // these popups at 0px, the working slash menu included.)
+        let counts = input.update(vcx, |input, _| {
+            (input.mention_candidates().len(), input.mention_scroll.item_count())
+        });
+        assert_eq!(counts, (1, 1), "(candidates, list items)");
     }
 }
