@@ -431,6 +431,21 @@ pub fn redirect_target(running: &Version) -> Option<PathBuf> {
     }
 }
 
+/// The update lock at `path` if no update holds it right now. Cleanup removes
+/// `.jcode-update-*` staging directories, so it must never run while an
+/// update — in this process or another window's — is still staging into one.
+pub(crate) fn try_idle_lock(path: &Path) -> Option<File> {
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .ok()?;
+    file.try_lock().ok()?;
+    Some(file)
+}
+
 /// Remove files an earlier update set aside. Best effort and quick.
 pub fn cleanup_after_update(running: &Version) {
     let Ok(environment) = Environment::current() else {

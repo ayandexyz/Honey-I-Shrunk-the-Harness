@@ -313,6 +313,9 @@ pub(crate) fn prune(home: &Path, running: &Version) {
     if secure_directory(&root).is_err() {
         return;
     }
+    let Some(_lock) = crate::try_idle_lock(&root.join(".update.lock")) else {
+        return;
+    };
     let launcher = fs::canonicalize(launcher_of(home)).ok();
     for version in versions(&root).into_iter().skip(1 + KEEP_OLDER) {
         let directory = root.join(version.to_string());
@@ -563,5 +566,20 @@ mod tests {
             .map(|version| version.to_string())
             .collect();
         assert_eq!(kept, ["0.5.0", "0.4.0", "0.3.0"]);
+    }
+
+    #[test]
+    fn pruning_never_removes_an_update_still_staging() {
+        let home = home();
+        install_version(home.path(), "0.1.0", "0.1.0");
+        let root = root_of(home.path());
+        let staging = root.join(".jcode-update-inflight");
+        fs::create_dir(&staging).unwrap();
+        let held = crate::try_idle_lock(&root.join(".update.lock")).unwrap();
+        prune(home.path(), &Version::parse("0.1.0").unwrap());
+        assert!(staging.is_dir(), "cleanup deleted an in-flight update");
+        drop(held);
+        prune(home.path(), &Version::parse("0.1.0").unwrap());
+        assert!(!staging.exists(), "an abandoned staging dir is still removed");
     }
 }

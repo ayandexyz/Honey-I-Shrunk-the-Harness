@@ -125,6 +125,9 @@ impl Portable {
     /// Delete files set aside by earlier updates. A file still in use by a
     /// process from before the update stays until a later launch.
     pub fn cleanup(&self) {
+        let Some(_lock) = crate::try_idle_lock(&self.lock_path()) else {
+            return;
+        };
         let Ok(entries) = fs::read_dir(&self.dir) else {
             return;
         };
